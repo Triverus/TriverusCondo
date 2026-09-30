@@ -1,8 +1,373 @@
+import React, { useEffect, useState, useCallback } from 'react';
+import type { Session } from '@supabase/supabase-js';
+import { supabase, isSupabaseConfigured } from './lib/supabase.ts';
+import LeadsModule from './components/LeadsModule.tsx';
+
+export interface UserProfile {
+  id: string;
+  full_name: string | null;
+  role: string | null;
+}
+
 export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [path, setPath] = useState<string>(() => window.location.pathname);
+
+  // Central state for profile
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState<boolean>(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
+
+  // Form states for login
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Synchronize route navigation
+  const navigate = (newPath: string) => {
+    if (window.location.pathname !== newPath) {
+      window.history.pushState({}, '', newPath);
+    }
+    setPath(newPath);
+  };
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setPath(window.location.pathname);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Fetch profile from public.profiles
+  const fetchProfile = useCallback(async (userId: string) => {
+    setProfileLoading(true);
+    setProfileError(null);
+
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id, full_name, role')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (error) {
+        console.error('Error fetching profile:', error.message);
+        setProfile(null);
+        setProfileError('Perfil de usuário não encontrado.');
+      } else if (!data) {
+        setProfile(null);
+        setProfileError('Perfil de usuário não encontrado.');
+      } else {
+        setProfile({
+          id: data.id,
+          full_name: data.full_name,
+          role: data.role,
+        });
+      }
+    } catch (err) {
+      console.error('Exception fetching profile:', err);
+      setProfile(null);
+      setProfileError('Perfil de usuário não encontrado.');
+    } finally {
+      setProfileLoading(false);
+    }
+  }, []);
+
+  // Initialize and persist session
+  useEffect(() => {
+    let mounted = true;
+
+    async function checkSession() {
+      try {
+        const { data: { session: initialSession }, error } = await supabase.auth.getSession();
+        if (error) {
+          console.error('Error fetching session:', error.message);
+        }
+        if (mounted) {
+          setSession(initialSession);
+          if (initialSession?.user?.id) {
+            await fetchProfile(initialSession.user.id);
+          }
+          setLoading(false);
+        }
+      } catch (err) {
+        console.error('Session verification error:', err);
+        if (mounted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    checkSession();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, currentSession) => {
+      if (mounted) {
+        setSession(currentSession);
+        if (currentSession?.user?.id) {
+          await fetchProfile(currentSession.user.id);
+        } else {
+          setProfile(null);
+          setProfileError(null);
+          setProfileLoading(false);
+        }
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, [fetchProfile]);
+
+  // Route protection and redirection to /app/leads
+  useEffect(() => {
+    if (loading || profileLoading) return;
+
+    if (!session) {
+      if (path !== '/login') {
+        navigate('/login');
+      }
+    } else {
+      if (path === '/login' || path === '/' || path === '/app') {
+        navigate('/app/leads');
+      }
+    }
+  }, [session, loading, profileLoading, path]);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMessage(null);
+
+    if (!email.trim() || !password) {
+      setErrorMessage('Por favor, informe e-mail e senha.');
+      return;
+    }
+
+    setLoginLoading(true);
+
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        if (error.message.includes('Invalid login credentials')) {
+          setErrorMessage('Credenciais inválidas. Verifique seu e-mail e senha.');
+        } else if (error.message.includes('Email not confirmed')) {
+          setErrorMessage('E-mail ainda não confirmado no Supabase.');
+        } else {
+          setErrorMessage(error.message || 'Erro ao realizar login.');
+        }
+      } else if (data.session) {
+        setSession(data.session);
+        if (data.session.user.id) {
+          await fetchProfile(data.session.user.id);
+        }
+        navigate('/app/leads');
+      }
+    } catch (err) {
+      setErrorMessage('Falha na comunicação com o servidor de autenticação.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    setLoading(true);
+    try {
+      await supabase.auth.signOut();
+      setSession(null);
+      setProfile(null);
+      setProfileError(null);
+      navigate('/login');
+    } catch (err) {
+      console.error('Logout error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Exibir loading durante a verificação da sessão ou carregamento do perfil
+  if (loading || (session && profileLoading)) {
+    return (
+      <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6">
+        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-slate-400 text-sm">
+          {session ? 'Carregando perfil e permissões...' : 'Verificando sessão...'}
+        </p>
+      </div>
+    );
+  }
+
+  // Área de Login (/login)
+  if (!session) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 sm:p-6">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl">
+          <div className="text-center mb-8">
+            <h1 className="text-3xl font-extrabold text-white tracking-tight">Triverus</h1>
+            <p className="text-slate-400 text-sm mt-1">CRM e Gestão de Oportunidades</p>
+          </div>
+
+          {!isSupabaseConfigured && (
+            <div className="mb-6 p-3 bg-amber-950/60 border border-amber-600/40 rounded-lg text-amber-200 text-xs">
+              <strong>Atenção:</strong> VITE_SUPABASE_URL ou VITE_SUPABASE_PUBLISHABLE_KEY não foram detectadas no ambiente local.
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="mb-6 p-3.5 bg-red-950/70 border border-red-500/50 rounded-lg text-red-200 text-sm flex items-start gap-2">
+              <span className="font-semibold">Erro:</span>
+              <span>{errorMessage}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} className="space-y-5">
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                E-mail
+              </label>
+              <input
+                type="email"
+                autoComplete="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@triverus.com"
+                className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors text-sm"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                Senha
+              </label>
+              <input
+                type="password"
+                autoComplete="current-password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="••••••••"
+                className="w-full px-4 py-2.5 bg-slate-800 border border-slate-700 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors text-sm"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loginLoading}
+              className="w-full py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 disabled:text-indigo-400 text-white font-medium rounded-lg transition-colors text-sm shadow-md cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              {loginLoading ? (
+                <>
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <span>Entrando...</span>
+                </>
+              ) : (
+                'Entrar'
+              )}
+            </button>
+          </form>
+
+          {/* Não permitir cadastro público */}
+          <div className="mt-8 pt-6 border-t border-slate-800/80 text-center">
+            <p className="text-xs text-slate-500">
+              Cadastros públicos estão desabilitados.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Se existir sessão válida mas não existir profile correspondente
+  if (profileError || !profile) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 sm:p-6">
+        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl text-center">
+          <div className="w-12 h-12 rounded-full bg-red-950/80 border border-red-700/60 flex items-center justify-center mx-auto mb-4 text-red-400 font-bold text-xl">
+            !
+          </div>
+          <h1 className="text-2xl font-bold text-white mb-2">Acesso Bloqueado</h1>
+          <p className="text-red-300 text-sm mb-6">
+            Perfil de usuário não encontrado.
+          </p>
+          <div className="bg-slate-800/60 border border-slate-700/60 rounded-lg p-3 text-xs text-slate-400 mb-6 font-mono text-left space-y-1">
+            <div><span className="text-slate-500">E-mail:</span> {session.user.email}</div>
+            <div><span className="text-slate-500">ID:</span> {session.user.id}</div>
+          </div>
+          <button
+            onClick={handleLogout}
+            className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-lg transition-colors text-sm cursor-pointer"
+          >
+            Encerrar sessão
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Área interna autenticada (/app e /app/leads)
   return (
-    <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6 text-center">
-      <h1 className="text-4xl font-bold mb-4 tracking-tight">Triverus</h1>
-      <p className="text-xl text-slate-300">Deploy funcionando</p>
+    <div className="min-h-screen bg-slate-950 text-white flex flex-col">
+      {/* Top Header */}
+      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-4 sm:px-6 py-3.5 flex items-center justify-between">
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2.5">
+            <span className="text-xl font-bold tracking-tight text-white">Triverus</span>
+            <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700/60 text-indigo-300 font-semibold uppercase">
+              CRM
+            </span>
+          </div>
+
+          <nav className="flex items-center gap-1">
+            <button
+              onClick={() => navigate('/app/leads')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                path.startsWith('/app/leads') || path === '/app'
+                  ? 'bg-slate-800 text-white border border-slate-700'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              }`}
+            >
+              Leads
+            </button>
+          </nav>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <div className="text-right hidden sm:block">
+            <div className="flex items-center justify-end gap-1.5">
+              <span className="text-xs font-medium text-slate-200">
+                {profile.full_name || 'Sem nome'}
+              </span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-700/60 text-emerald-400 font-mono uppercase">
+                {profile.role || 'user'}
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400">
+              {session.user.email}
+            </div>
+          </div>
+
+          <button
+            onClick={handleLogout}
+            title="Sair do sistema"
+            className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-red-950 hover:text-red-300 hover:border-red-800 border border-slate-700 rounded-lg text-slate-300 transition-colors cursor-pointer"
+          >
+            Sair
+          </button>
+        </div>
+      </header>
+
+      {/* Main content: Leads Module */}
+      <main className="flex-1 pb-12">
+        <LeadsModule currentProfile={profile} />
+      </main>
     </div>
   );
 }
