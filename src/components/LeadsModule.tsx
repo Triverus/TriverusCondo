@@ -50,8 +50,77 @@ export interface LeadContactRelation {
   contact_id: string;
 }
 
+export interface Interaction {
+  id: string;
+  lead_id: string;
+  interaction_type: string;
+  occurred_at: string;
+  notes?: string | null;
+  responsible_user_id?: string | null;
+  next_follow_up_date?: string | null;
+  created_at?: string;
+}
+
 interface LeadsModuleProps {
   currentProfile: UserProfile;
+  initialSelectedLeadId?: string | null;
+  onClearInitialLead?: () => void;
+}
+
+export const INTERACTION_TYPES = [
+  'Ligação',
+  'Reunião',
+  'WhatsApp',
+  'E-mail',
+  'Evento BNI',
+] as const;
+
+function getFollowUpStatus(dateStr?: string | null): 'overdue' | 'today' | 'upcoming' | null {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  const now = new Date();
+  const targetDateOnly = new Date(target.getFullYear(), target.getMonth(), target.getDate()).getTime();
+  const todayDateOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+  if (targetDateOnly < todayDateOnly) {
+    return 'overdue';
+  } else if (targetDateOnly === todayDateOnly) {
+    return 'today';
+  } else {
+    return 'upcoming';
+  }
+}
+
+function formatDateTimeBR(dateStr?: string | null): string {
+  if (!dateStr) return '-';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+function formatDateBR(dateStr?: string | null): string {
+  if (!dateStr) return '-';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+  } catch {
+    return dateStr;
+  }
 }
 
 const CONDOMINIUM_TYPES = [
@@ -70,7 +139,11 @@ const LEAD_SOURCES = [
 
 const TEMPERATURE_OPTIONS = ['Quente', 'Morno', 'Frio'];
 
-export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
+export default function LeadsModule({
+  currentProfile,
+  initialSelectedLeadId,
+  onClearInitialLead,
+}: LeadsModuleProps) {
   // Data states
   const [leads, setLeads] = useState<Lead[]>([]);
   const [stages, setStages] = useState<PipelineStage[]>([]);
@@ -79,6 +152,7 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
   const [leadServices, setLeadServices] = useState<LeadServiceRelation[]>([]);
   const [contacts, setContacts] = useState<ContactSummary[]>([]);
   const [leadContacts, setLeadContacts] = useState<LeadContactRelation[]>([]);
+  const [interactions, setInteractions] = useState<Interaction[]>([]);
 
   // Loading and error states
   const [loading, setLoading] = useState<boolean>(true);
@@ -92,7 +166,7 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
   const [modalMode, setModalMode] = useState<'create' | 'edit' | 'view' | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
 
-  // Form field states
+  // Form field states for Lead
   const [formName, setFormName] = useState('');
   const [formCnpj, setFormCnpj] = useState('');
   const [formCondominiumType, setFormCondominiumType] = useState('Residencial');
@@ -108,6 +182,17 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
   const [formSelectedServices, setFormSelectedServices] = useState<string[]>([]);
   const [formSaving, setFormSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  // Interaction Modal States
+  const [interactionModalMode, setInteractionModalMode] = useState<'create' | 'edit' | null>(null);
+  const [selectedInteraction, setSelectedInteraction] = useState<Interaction | null>(null);
+  const [formInteractionType, setFormInteractionType] = useState<string>('Ligação');
+  const [formInteractionOccurredAt, setFormInteractionOccurredAt] = useState<string>('');
+  const [formInteractionResponsibleId, setFormInteractionResponsibleId] = useState<string>('');
+  const [formInteractionNotes, setFormInteractionNotes] = useState<string>('');
+  const [formInteractionNextFollowUpDate, setFormInteractionNextFollowUpDate] = useState<string>('');
+  const [formInteractionSaving, setFormInteractionSaving] = useState<boolean>(false);
+  const [formInteractionError, setFormInteractionError] = useState<string | null>(null);
 
   // Load all necessary initial data
   const loadData = useCallback(async () => {
@@ -159,6 +244,13 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
         .from('lead_contacts')
         .select('lead_id, contact_id');
       setLeadContacts(leadContactsRes.data || []);
+
+      // 7. Load interactions
+      const interactionsRes = await supabase
+        .from('interactions')
+        .select('*')
+        .order('occurred_at', { ascending: false });
+      setInteractions(interactionsRes.data || []);
     } catch (err: any) {
       console.error('Error loading CRM leads data:', err);
       setStatusFeedback({
@@ -173,6 +265,20 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Handle initialSelectedLeadId if passed from Follow-ups
+  useEffect(() => {
+    if (initialSelectedLeadId && leads.length > 0) {
+      const target = leads.find((l) => l.id === initialSelectedLeadId);
+      if (target) {
+        setSelectedLead(target);
+        setModalMode('view');
+      }
+      if (onClearInitialLead) {
+        onClearInitialLead();
+      }
+    }
+  }, [initialSelectedLeadId, leads, onClearInitialLead]);
 
   // Lookup maps for fast and resilient rendering
   const stageMap = useMemo(() => {
@@ -293,6 +399,16 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
     setModalMode('edit');
   };
 
+  // Get interactions for a specific lead
+  const getInteractionsForLead = useCallback(
+    (leadId: string): Interaction[] => {
+      return interactions
+        .filter((i) => i.lead_id === leadId)
+        .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
+    },
+    [interactions]
+  );
+
   // Open modal in view mode
   const handleOpenView = (lead: Lead) => {
     setSelectedLead(lead);
@@ -303,6 +419,144 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
     setModalMode(null);
     setSelectedLead(null);
     setFormError(null);
+  };
+
+  // Interaction handlers
+  const handleOpenCreateInteraction = (lead: Lead) => {
+    setFormInteractionError(null);
+    setSelectedInteraction(null);
+    setFormInteractionType('Ligação');
+    const now = new Date();
+    const tzOffset = now.getTimezoneOffset() * 60000;
+    const localISOTime = new Date(now.getTime() - tzOffset).toISOString().slice(0, 16);
+    setFormInteractionOccurredAt(localISOTime);
+    setFormInteractionResponsibleId(currentProfile.id);
+    setFormInteractionNotes('');
+    setFormInteractionNextFollowUpDate('');
+    setInteractionModalMode('create');
+  };
+
+  const handleOpenEditInteraction = (interaction: Interaction) => {
+    setFormInteractionError(null);
+    setSelectedInteraction(interaction);
+    setFormInteractionType(interaction.interaction_type || 'Ligação');
+    let dateStr = '';
+    if (interaction.occurred_at) {
+      const d = new Date(interaction.occurred_at);
+      const tzOffset = d.getTimezoneOffset() * 60000;
+      dateStr = new Date(d.getTime() - tzOffset).toISOString().slice(0, 16);
+    }
+    setFormInteractionOccurredAt(dateStr);
+    setFormInteractionResponsibleId(interaction.responsible_user_id || currentProfile.id);
+    setFormInteractionNotes(interaction.notes || '');
+    setFormInteractionNextFollowUpDate(
+      interaction.next_follow_up_date ? interaction.next_follow_up_date.slice(0, 10) : ''
+    );
+    setInteractionModalMode('edit');
+  };
+
+  const handleCloseInteractionModal = () => {
+    setInteractionModalMode(null);
+    setSelectedInteraction(null);
+    setFormInteractionError(null);
+  };
+
+  const handleSubmitInteraction = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedLead) return;
+    setFormInteractionError(null);
+    setFormInteractionSaving(true);
+
+    try {
+      const occurredAtIso = formInteractionOccurredAt
+        ? new Date(formInteractionOccurredAt).toISOString()
+        : new Date().toISOString();
+
+      const payload = {
+        lead_id: selectedLead.id,
+        interaction_type: formInteractionType,
+        occurred_at: occurredAtIso,
+        responsible_user_id: formInteractionResponsibleId || currentProfile.id,
+        notes: formInteractionNotes.trim() || null,
+        next_follow_up_date: formInteractionNextFollowUpDate ? formInteractionNextFollowUpDate : null,
+      };
+
+      if (interactionModalMode === 'create') {
+        const { data, error } = await supabase
+          .from('interactions')
+          .insert([payload])
+          .select()
+          .single();
+        if (error) throw error;
+        if (data) {
+          setInteractions((prev) => [data, ...prev]);
+        }
+        setStatusFeedback({
+          type: 'success',
+          message: 'Interação registrada com sucesso!',
+        });
+      } else if (interactionModalMode === 'edit' && selectedInteraction) {
+        const { data, error } = await supabase
+          .from('interactions')
+          .update(payload)
+          .eq('id', selectedInteraction.id)
+          .select()
+          .single();
+        if (error) throw error;
+        if (data) {
+          setInteractions((prev) =>
+            prev.map((item) => (item.id === selectedInteraction.id ? data : item))
+          );
+        }
+        setStatusFeedback({
+          type: 'success',
+          message: 'Interação atualizada com sucesso!',
+        });
+      }
+
+      handleCloseInteractionModal();
+    } catch (err: any) {
+      console.error('Error saving interaction:', err);
+      setFormInteractionError(err.message || 'Erro ao salvar interação no Supabase.');
+    } finally {
+      setFormInteractionSaving(false);
+    }
+  };
+
+  const getInteractionTypeBadge = (type: string) => {
+    switch (type) {
+      case 'WhatsApp':
+        return (
+          <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 font-medium">
+            WhatsApp
+          </span>
+        );
+      case 'Reunião':
+        return (
+          <span className="text-[10px] px-2 py-0.5 rounded bg-purple-950/80 border border-purple-700/60 text-purple-300 font-medium">
+            Reunião
+          </span>
+        );
+      case 'E-mail':
+        return (
+          <span className="text-[10px] px-2 py-0.5 rounded bg-sky-950/80 border border-sky-700/60 text-sky-300 font-medium">
+            E-mail
+          </span>
+        );
+      case 'Evento BNI':
+        return (
+          <span className="text-[10px] px-2 py-0.5 rounded bg-amber-950/80 border border-amber-700/60 text-amber-300 font-medium">
+            Evento BNI
+          </span>
+        );
+      case 'Ligação':
+      default:
+        return (
+          <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 font-medium">
+            Ligação
+          </span>
+        );
+    }
   };
 
   // Toggle service selection in form
@@ -1251,6 +1505,152 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
                   );
                 })()}
               </div>
+
+              {/* HISTÓRICO DE INTERAÇÕES */}
+              <div className="pt-2 border-t border-slate-800/80">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-xs uppercase tracking-wider font-bold text-indigo-300">
+                      Histórico de Interações
+                    </h4>
+                    {(() => {
+                      const leadInteractions = getInteractionsForLead(selectedLead.id);
+                      return (
+                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">
+                          {leadInteractions.length} {leadInteractions.length === 1 ? 'registro' : 'registros'}
+                        </span>
+                      );
+                    })()}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCreateInteraction(selectedLead)}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+                  >
+                    <svg
+                      className="w-3.5 h-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 4v16m8-8H4"
+                      />
+                    </svg>
+                    Registrar interação
+                  </button>
+                </div>
+
+                {(() => {
+                  const leadInteractions = getInteractionsForLead(selectedLead.id);
+                  if (leadInteractions.length === 0) {
+                    return (
+                      <div className="p-4 bg-slate-950/40 rounded-xl border border-slate-800/80 text-center">
+                        <p className="text-xs text-slate-400 mb-2">
+                          Nenhuma interação registrada ainda para este condomínio.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenCreateInteraction(selectedLead)}
+                          className="text-xs text-indigo-400 hover:text-indigo-300 underline font-medium cursor-pointer"
+                        >
+                          Clique aqui para registrar a primeira interação
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="space-y-3">
+                      {leadInteractions.map((item) => {
+                        const respName = item.responsible_user_id
+                          ? profileMap.get(item.responsible_user_id) || 'Não atribuído'
+                          : 'Não atribuído';
+                        const followUpStatus = getFollowUpStatus(item.next_follow_up_date);
+
+                        return (
+                          <div
+                            key={item.id}
+                            className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl hover:border-slate-700/80 transition-colors"
+                          >
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/60 pb-2.5 mb-2.5">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {getInteractionTypeBadge(item.interaction_type)}
+                                <span className="text-xs text-white font-medium">
+                                  {formatDateTimeBR(item.occurred_at)}
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-3">
+                                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                                  <span className="w-4 h-4 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[9px] text-slate-300 uppercase font-semibold">
+                                    {respName.charAt(0)}
+                                  </span>
+                                  <span className="text-[11px] truncate max-w-[120px]">
+                                    {respName}
+                                  </span>
+                                </div>
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditInteraction(item)}
+                                  title="Editar interação"
+                                  className="text-[11px] px-2 py-0.5 rounded text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/60 transition-colors cursor-pointer border border-transparent hover:border-indigo-800/40"
+                                >
+                                  Editar
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Notes */}
+                            {item.notes ? (
+                              <p className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed mb-2.5">
+                                {item.notes}
+                              </p>
+                            ) : (
+                              <p className="text-xs text-slate-500 italic mb-2.5">
+                                Sem observações adicionais.
+                              </p>
+                            )}
+
+                            {/* Próximo Follow-up */}
+                            {item.next_follow_up_date && (
+                              <div className="pt-2 border-t border-slate-900 flex items-center justify-between text-xs">
+                                <span className="text-slate-400 text-[11px]">
+                                  Próximo Follow-up:
+                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-slate-200">
+                                    {formatDateBR(item.next_follow_up_date)}
+                                  </span>
+                                  {followUpStatus === 'overdue' && (
+                                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-amber-950 border border-amber-800 text-amber-300 font-medium">
+                                      Vencido
+                                    </span>
+                                  )}
+                                  {followUpStatus === 'today' && (
+                                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-indigo-950 border border-indigo-800 text-indigo-300 font-medium">
+                                      Hoje
+                                    </span>
+                                  )}
+                                  {followUpStatus === 'upcoming' && (
+                                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">
+                                      Próximo
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
 
             {/* Footer */}
@@ -1284,6 +1684,174 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
                 Fechar
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal for Interaction Create / Edit */}
+      {interactionModalMode && selectedLead && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-8">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  {interactionModalMode === 'create' ? 'Registrar Interação' : 'Editar Interação'}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Condomínio: <span className="text-indigo-300 font-semibold">{selectedLead.name}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseInteractionModal}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M6 18L18 6M6 6l12 12"
+                  />
+                </svg>
+              </button>
+            </div>
+
+            <form onSubmit={handleSubmitInteraction} className="p-6 space-y-4 text-xs">
+              {formInteractionError && (
+                <div className="p-3 bg-rose-950/80 border border-rose-600/50 rounded-lg text-rose-200 text-xs">
+                  {formInteractionError}
+                </div>
+              )}
+
+              {/* Tipo de Interação (Obrigatório) */}
+              <div>
+                <label className="block text-slate-300 font-medium mb-1.5">
+                  Tipo de Interação <span className="text-rose-400">*</span>
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {INTERACTION_TYPES.map((type) => (
+                    <button
+                      type="button"
+                      key={type}
+                      onClick={() => setFormInteractionType(type)}
+                      className={`py-2 px-3 rounded-lg border text-xs font-medium transition-colors cursor-pointer text-center ${
+                        formInteractionType === type
+                          ? 'bg-indigo-950 border-indigo-500 text-indigo-200 font-semibold'
+                          : 'bg-slate-800/70 border-slate-700 text-slate-300 hover:border-slate-600'
+                      }`}
+                    >
+                      {type}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Data e Hora + Responsável */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">
+                    Data e Hora <span className="text-rose-400">*</span>
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={formInteractionOccurredAt}
+                    onChange={(e) => setFormInteractionOccurredAt(e.target.value)}
+                    required
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-medium mb-1">
+                    Responsável
+                  </label>
+                  <select
+                    value={formInteractionResponsibleId}
+                    onChange={(e) => setFormInteractionResponsibleId(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
+                  >
+                    {profiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.full_name || 'Sem nome'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Observações */}
+              <div>
+                <label className="block text-slate-300 font-medium mb-1">
+                  Observações da Interação
+                </label>
+                <textarea
+                  rows={3}
+                  value={formInteractionNotes}
+                  onChange={(e) => setFormInteractionNotes(e.target.value)}
+                  placeholder="Descreva o que foi tratado, alinhamentos ou próximos passos..."
+                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              {/* Próximo Follow-up */}
+              <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-lg">
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-slate-300 font-medium">
+                    Próximo Follow-up (Opcional)
+                  </label>
+                  {formInteractionNextFollowUpDate && (
+                    <button
+                      type="button"
+                      onClick={() => setFormInteractionNextFollowUpDate('')}
+                      className="text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer"
+                    >
+                      Limpar data
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="date"
+                  value={formInteractionNextFollowUpDate}
+                  onChange={(e) => setFormInteractionNextFollowUpDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                />
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Ao definir uma data aqui, ela será considerada como o próximo retorno prioritário para este condomínio.
+                </p>
+              </div>
+
+              {/* Footer */}
+              <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handleCloseInteractionModal}
+                  disabled={formInteractionSaving}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={formInteractionSaving}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                >
+                  {formInteractionSaving ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Salvando...</span>
+                    </>
+                  ) : (
+                    <span>{interactionModalMode === 'create' ? 'Salvar Interação' : 'Atualizar Interação'}</span>
+                  )}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from './lib/supabase.ts';
 import LeadsModule from './components/LeadsModule.tsx';
 import ContactsModule from './components/ContactsModule.tsx';
+import FollowUpsModule from './components/FollowUpsModule.tsx';
 
 export interface UserProfile {
   id: string;
@@ -31,6 +32,9 @@ export default function App() {
   const [password, setPassword] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Cross-module navigation state (e.g. open lead from followups)
+  const [targetLeadIdForView, setTargetLeadIdForView] = useState<string | null>(null);
 
   // Synchronize route navigation
   const navigate = (newPath: string) => {
@@ -402,10 +406,14 @@ export default function App() {
   }
 
   // Determine active route
+  const isFollowUpsActive = path.startsWith('/app/followups');
   const isContactsActive = path.startsWith('/app/contatos');
-  const isLeadsActive = path.startsWith('/app/leads') || path === '/app' || (!isContactsActive && path.startsWith('/app'));
+  const isLeadsActive =
+    path.startsWith('/app/leads') ||
+    path === '/app' ||
+    (!isContactsActive && !isFollowUpsActive && path.startsWith('/app'));
 
-  // Área interna autenticada (/app/leads e /app/contatos)
+  // Área interna autenticada (/app/leads, /app/contatos e /app/followups)
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
       {/* Top Header */}
@@ -441,6 +449,17 @@ export default function App() {
             >
               Contatos
             </button>
+            <button
+              type="button"
+              onClick={() => navigate('/app/followups')}
+              className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors cursor-pointer ${
+                isFollowUpsActive
+                  ? 'bg-slate-800 text-white border border-slate-700 font-semibold shadow-xs'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50 border border-transparent'
+              }`}
+            >
+              Follow-ups
+            </button>
           </nav>
         </div>
 
@@ -469,12 +488,24 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main content: Leads Module or Contacts Module */}
+      {/* Main content: Leads Module, Contacts Module or Follow-ups Module */}
       <main className="flex-1 pb-12">
-        {isContactsActive ? (
+        {isFollowUpsActive ? (
+          <FollowUpsModule
+            currentProfile={profile}
+            onOpenLead={(leadId) => {
+              setTargetLeadIdForView(leadId);
+              navigate('/app/leads');
+            }}
+          />
+        ) : isContactsActive ? (
           <ContactsModule currentProfile={profile} />
         ) : (
-          <LeadsModule currentProfile={profile} />
+          <LeadsModule
+            currentProfile={profile}
+            initialSelectedLeadId={targetLeadIdForView}
+            onClearInitialLead={() => setTargetLeadIdForView(null)}
+          />
         )}
       </main>
     </div>
