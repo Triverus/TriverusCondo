@@ -1,65 +1,8 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase.ts';
 import type { UserProfile } from '../App.tsx';
-
-export interface Lead {
-  id: string;
-  name: string;
-  cnpj?: string | null;
-  condominium_type?: string | null;
-  administrator?: string | null;
-  unit_count?: number | null;
-  address?: string | null;
-  city?: string | null;
-  lead_source?: string | null;
-  temperature?: string | null;
-  current_stage_id?: string | null;
-  responsible_user_id?: string | null;
-  loss_reason?: string | null;
-  created_at?: string;
-}
-
-export interface PipelineStage {
-  id: string;
-  name: string;
-  position: number;
-  is_lost?: boolean | null;
-}
-
-export interface ServiceItem {
-  id: string;
-  name?: string | null;
-  title?: string | null;
-}
-
-export interface LeadServiceRelation {
-  lead_id: string;
-  service_id: string;
-}
-
-export interface ContactSummary {
-  id: string;
-  name: string;
-  role_title?: string | null;
-  phone?: string | null;
-  email?: string | null;
-}
-
-export interface LeadContactRelation {
-  lead_id: string;
-  contact_id: string;
-}
-
-export interface Interaction {
-  id: string;
-  lead_id: string;
-  interaction_type: string;
-  occurred_at: string;
-  notes?: string | null;
-  responsible_user_id?: string | null;
-  next_follow_up_date?: string | null;
-  created_at?: string;
-}
+import { useCRM, type Lead, type PipelineStage, type ServiceItem, type Contact, type Interaction } from '../lib/crmStore.tsx';
+import { saveDraft, loadDraft, clearDraft, hasDraft } from '../lib/draftStorage.ts';
 
 interface LeadsModuleProps {
   currentProfile: UserProfile;
@@ -139,26 +82,65 @@ const LEAD_SOURCES = [
 
 const TEMPERATURE_OPTIONS = ['Quente', 'Morno', 'Frio'];
 
+const DRAFT_LEAD_CREATE_KEY = 'triverus_draft_lead_create';
+const getLeadEditDraftKey = (id: string) => `triverus_draft_lead_edit_${id}`;
+const getInteractionCreateDraftKey = (leadId: string) => `triverus_draft_interaction_create_${leadId}`;
+const getInteractionEditDraftKey = (interactionId: string) => `triverus_draft_interaction_edit_${interactionId}`;
+
+interface LeadDraftData {
+  quizStep: number;
+  formName: string;
+  formCnpj: string;
+  formCondominiumType: string;
+  formAdministrator: string;
+  formUnitCount: string;
+  formAddress: string;
+  formCity: string;
+  formLeadSource: string;
+  formTemperature: string;
+  formCurrentStageId: string;
+  formResponsibleUserId: string;
+  formLossReason: string;
+  formSelectedServices: string[];
+}
+
+interface InteractionDraftData {
+  interactionQuizStep: number;
+  formInteractionType: string;
+  formInteractionOccurredAt: string;
+  formInteractionResponsibleId: string;
+  formInteractionNotes: string;
+  formInteractionNextFollowUpDate: string;
+}
+
 export default function LeadsModule({
   currentProfile,
   initialSelectedLeadId,
   onClearInitialLead,
 }: LeadsModuleProps) {
-  // Data states
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [stages, setStages] = useState<PipelineStage[]>([]);
-  const [profiles, setProfiles] = useState<UserProfile[]>([]);
-  const [services, setServices] = useState<ServiceItem[]>([]);
-  const [leadServices, setLeadServices] = useState<LeadServiceRelation[]>([]);
-  const [contacts, setContacts] = useState<ContactSummary[]>([]);
-  const [leadContacts, setLeadContacts] = useState<LeadContactRelation[]>([]);
-  const [interactions, setInteractions] = useState<Interaction[]>([]);
+  // Use Centralized In-Memory & Cached CRM store
+  const {
+    leads,
+    stages,
+    profiles,
+    services,
+    isInitialLoading,
+    isRefreshing,
+    stageMap,
+    profileMap,
+    serviceMap,
+    refreshAll,
+    upsertLeadLocally,
+    upsertInteractionLocally,
+    getLeadServices,
+    getContactsForLead,
+    getInteractionsForLead,
+  } = useCRM();
 
   // UI View Mode (Default is Cards)
   const [viewMode, setViewMode] = useState<'cards' | 'list'>('cards');
 
-  // Loading and error states
-  const [loading, setLoading] = useState<boolean>(true);
+  // Search & feedback states
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [statusFeedback, setStatusFeedback] = useState<{
     type: 'success' | 'error';
@@ -168,6 +150,7 @@ export default function LeadsModule({
   // Modal states: 'create' | 'edit' | 'view' | null
   const [modalMode, setModalMode] = useState<'create' | 'edit' | 'view' | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [isRestoredDraft, setIsRestoredDraft] = useState<boolean>(false);
 
   // Dynamic Quiz Step for Lead Create/Edit (1 to 6)
   const [quizStep, setQuizStep] = useState<number>(1);
@@ -194,6 +177,7 @@ export default function LeadsModule({
   const [interactionModalMode, setInteractionModalMode] = useState<'create' | 'edit' | null>(null);
   const [selectedInteraction, setSelectedInteraction] = useState<Interaction | null>(null);
   const [interactionQuizStep, setInteractionQuizStep] = useState<number>(1);
+  const [isInteractionRestoredDraft, setIsInteractionRestoredDraft] = useState<boolean>(false);
   const totalInteractionQuizSteps = 4;
 
   const [formInteractionType, setFormInteractionType] = useState<string>('Ligação');
@@ -204,73 +188,132 @@ export default function LeadsModule({
   const [formInteractionSaving, setFormInteractionSaving] = useState<boolean>(false);
   const [formInteractionError, setFormInteractionError] = useState<string | null>(null);
 
-  // Load all necessary initial data
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      // 1. Pipeline stages
-      const stagesRes = await supabase
-        .from('pipeline_stages')
-        .select('*')
-        .order('position', { ascending: true });
-      setStages(stagesRes.data || []);
+  const initialDraftRestorationChecked = useRef(false);
 
-      // 2. Profiles
-      const profilesRes = await supabase
-        .from('profiles')
-        .select('id, full_name, role');
-      setProfiles(profilesRes.data || []);
-
-      // 3. Services
-      const servicesRes = await supabase
-        .from('services')
-        .select('*');
-      setServices(servicesRes.data || []);
-
-      // 4. Leads
-      const leadsRes = await supabase
-        .from('leads')
-        .select('*')
-        .order('created_at', { ascending: false });
-      setLeads(leadsRes.data || []);
-
-      // 5. Lead services
-      const leadServicesRes = await supabase
-        .from('lead_services')
-        .select('lead_id, service_id');
-      setLeadServices(leadServicesRes.data || []);
-
-      // 6. Contacts and Relations
-      const contactsRes = await supabase
-        .from('contacts')
-        .select('id, name, role_title, phone, email');
-      setContacts(contactsRes.data || []);
-
-      const leadContactsRes = await supabase
-        .from('lead_contacts')
-        .select('lead_id, contact_id');
-      setLeadContacts(leadContactsRes.data || []);
-
-      // 7. Interactions
-      const interactionsRes = await supabase
-        .from('interactions')
-        .select('*')
-        .order('occurred_at', { ascending: false });
-      setInteractions(interactionsRes.data || []);
-    } catch (err: any) {
-      console.error('Error loading CRM leads data:', err);
-      setStatusFeedback({
-        type: 'error',
-        message: 'Erro ao carregar dados do Supabase. Verifique a conexão.',
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Check and restore draft on initial mount
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    if (initialDraftRestorationChecked.current) return;
+    initialDraftRestorationChecked.current = true;
+
+    // Check if there is an active create draft
+    const createDraft = loadDraft<LeadDraftData>(DRAFT_LEAD_CREATE_KEY);
+    if (createDraft && createDraft.formName?.trim()) {
+      setFormName(createDraft.formName || '');
+      setFormCnpj(createDraft.formCnpj || '');
+      setFormCondominiumType(createDraft.formCondominiumType || 'Residencial');
+      setFormAdministrator(createDraft.formAdministrator || '');
+      setFormUnitCount(createDraft.formUnitCount || '');
+      setFormAddress(createDraft.formAddress || '');
+      setFormCity(createDraft.formCity || '');
+      setFormLeadSource(createDraft.formLeadSource || 'Indicação (BNI/rede)');
+      setFormTemperature(createDraft.formTemperature || 'Morno');
+      setFormCurrentStageId(createDraft.formCurrentStageId || '');
+      setFormResponsibleUserId(createDraft.formResponsibleUserId || currentProfile.id);
+      setFormLossReason(createDraft.formLossReason || '');
+      setFormSelectedServices(createDraft.formSelectedServices || []);
+      setQuizStep(createDraft.quizStep || 1);
+      setIsRestoredDraft(true);
+      setModalMode('create');
+    }
+  }, [currentProfile.id]);
+
+  // Save Lead form draft on state changes
+  useEffect(() => {
+    if (modalMode === 'create') {
+      const data: LeadDraftData = {
+        quizStep,
+        formName,
+        formCnpj,
+        formCondominiumType,
+        formAdministrator,
+        formUnitCount,
+        formAddress,
+        formCity,
+        formLeadSource,
+        formTemperature,
+        formCurrentStageId,
+        formResponsibleUserId,
+        formLossReason,
+        formSelectedServices,
+      };
+      // Only save if user has inputted something
+      if (formName.trim() || formCnpj.trim() || formAdministrator.trim() || formUnitCount.trim()) {
+        saveDraft(DRAFT_LEAD_CREATE_KEY, data);
+      }
+    } else if (modalMode === 'edit' && selectedLead) {
+      const data: LeadDraftData = {
+        quizStep,
+        formName,
+        formCnpj,
+        formCondominiumType,
+        formAdministrator,
+        formUnitCount,
+        formAddress,
+        formCity,
+        formLeadSource,
+        formTemperature,
+        formCurrentStageId,
+        formResponsibleUserId,
+        formLossReason,
+        formSelectedServices,
+      };
+      saveDraft(getLeadEditDraftKey(selectedLead.id), data);
+    }
+  }, [
+    modalMode,
+    selectedLead,
+    quizStep,
+    formName,
+    formCnpj,
+    formCondominiumType,
+    formAdministrator,
+    formUnitCount,
+    formAddress,
+    formCity,
+    formLeadSource,
+    formTemperature,
+    formCurrentStageId,
+    formResponsibleUserId,
+    formLossReason,
+    formSelectedServices,
+  ]);
+
+  // Save Interaction draft on state changes
+  useEffect(() => {
+    if (interactionModalMode === 'create' && selectedLead) {
+      const data: InteractionDraftData = {
+        interactionQuizStep,
+        formInteractionType,
+        formInteractionOccurredAt,
+        formInteractionResponsibleId,
+        formInteractionNotes,
+        formInteractionNextFollowUpDate,
+      };
+      if (formInteractionNotes.trim() || formInteractionNextFollowUpDate) {
+        saveDraft(getInteractionCreateDraftKey(selectedLead.id), data);
+      }
+    } else if (interactionModalMode === 'edit' && selectedInteraction) {
+      const data: InteractionDraftData = {
+        interactionQuizStep,
+        formInteractionType,
+        formInteractionOccurredAt,
+        formInteractionResponsibleId,
+        formInteractionNotes,
+        formInteractionNextFollowUpDate,
+      };
+      saveDraft(getInteractionEditDraftKey(selectedInteraction.id), data);
+    }
+  }, [
+    interactionModalMode,
+    selectedLead,
+    selectedInteraction,
+    interactionQuizStep,
+    formInteractionType,
+    formInteractionOccurredAt,
+    formInteractionResponsibleId,
+    formInteractionNotes,
+    formInteractionNextFollowUpDate,
+  ]);
 
   // Handle initialSelectedLeadId if passed from Follow-ups
   useEffect(() => {
@@ -286,54 +329,7 @@ export default function LeadsModule({
     }
   }, [initialSelectedLeadId, leads, onClearInitialLead]);
 
-  // Lookup maps
-  const stageMap = useMemo(() => {
-    const map = new Map<string, string>();
-    stages.forEach((s) => map.set(s.id, s.name));
-    return map;
-  }, [stages]);
-
-  const profileMap = useMemo(() => {
-    const map = new Map<string, string>();
-    profiles.forEach((p) => map.set(p.id, p.full_name || 'Sem nome'));
-    return map;
-  }, [profiles]);
-
-  const serviceMap = useMemo(() => {
-    const map = new Map<string, string>();
-    services.forEach((s) => map.set(s.id, s.name || s.title || 'Serviço'));
-    return map;
-  }, [services]);
-
-  const getLeadServices = useCallback(
-    (leadId: string): string[] => {
-      return leadServices
-        .filter((ls) => ls.lead_id === leadId)
-        .map((ls) => ls.service_id);
-    },
-    [leadServices]
-  );
-
-  const getContactsForLead = useCallback(
-    (leadId: string): ContactSummary[] => {
-      const contactIds = leadContacts
-        .filter((lc) => lc.lead_id === leadId)
-        .map((lc) => lc.contact_id);
-      return contacts.filter((c) => contactIds.includes(c.id));
-    },
-    [leadContacts, contacts]
-  );
-
-  const getInteractionsForLead = useCallback(
-    (leadId: string): Interaction[] => {
-      return interactions
-        .filter((i) => i.lead_id === leadId)
-        .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
-    },
-    [interactions]
-  );
-
-  // Filter leads by search term
+  // Filter leads by search term locally in memory
   const filteredLeads = useMemo(() => {
     if (!searchTerm.trim()) return leads;
     const term = searchTerm.toLowerCase();
@@ -368,45 +364,101 @@ export default function LeadsModule({
   // Open modal in create mode
   const handleOpenCreate = () => {
     setFormError(null);
-    setFormName('');
-    setFormCnpj('');
-    setFormCondominiumType('Residencial');
-    setFormAdministrator('');
-    setFormUnitCount('');
-    setFormAddress('');
-    setFormCity('');
-    setFormLeadSource('Indicação (BNI/rede)');
-    setFormTemperature('Morno');
-    const initialStageId = stages.length > 0 ? stages[0].id : '';
-    setFormCurrentStageId(initialStageId);
-    setFormResponsibleUserId(currentProfile.id);
-    setFormLossReason('');
-    setFormSelectedServices([]);
+    setIsRestoredDraft(false);
+
+    // Check if there is an existing draft
+    const draft = loadDraft<LeadDraftData>(DRAFT_LEAD_CREATE_KEY);
+    if (draft && draft.formName?.trim()) {
+      setFormName(draft.formName || '');
+      setFormCnpj(draft.formCnpj || '');
+      setFormCondominiumType(draft.formCondominiumType || 'Residencial');
+      setFormAdministrator(draft.formAdministrator || '');
+      setFormUnitCount(draft.formUnitCount || '');
+      setFormAddress(draft.formAddress || '');
+      setFormCity(draft.formCity || '');
+      setFormLeadSource(draft.formLeadSource || 'Indicação (BNI/rede)');
+      setFormTemperature(draft.formTemperature || 'Morno');
+      setFormCurrentStageId(draft.formCurrentStageId || (stages.length > 0 ? stages[0].id : ''));
+      setFormResponsibleUserId(draft.formResponsibleUserId || currentProfile.id);
+      setFormLossReason(draft.formLossReason || '');
+      setFormSelectedServices(draft.formSelectedServices || []);
+      setQuizStep(draft.quizStep || 1);
+      setIsRestoredDraft(true);
+    } else {
+      setFormName('');
+      setFormCnpj('');
+      setFormCondominiumType('Residencial');
+      setFormAdministrator('');
+      setFormUnitCount('');
+      setFormAddress('');
+      setFormCity('');
+      setFormLeadSource('Indicação (BNI/rede)');
+      setFormTemperature('Morno');
+      const initialStageId = stages.length > 0 ? stages[0].id : '';
+      setFormCurrentStageId(initialStageId);
+      setFormResponsibleUserId(currentProfile.id);
+      setFormLossReason('');
+      setFormSelectedServices([]);
+      setQuizStep(1);
+    }
+
     setSelectedLead(null);
-    setQuizStep(1);
     setModalMode('create');
+  };
+
+  // Discard draft explicitly
+  const handleDiscardLeadDraft = () => {
+    if (modalMode === 'create') {
+      clearDraft(DRAFT_LEAD_CREATE_KEY);
+    } else if (modalMode === 'edit' && selectedLead) {
+      clearDraft(getLeadEditDraftKey(selectedLead.id));
+    }
+    setIsRestoredDraft(false);
+    handleCloseModal();
   };
 
   // Open modal in edit mode
   const handleOpenEdit = (lead: Lead) => {
     setFormError(null);
-    setFormName(lead.name || '');
-    setFormCnpj(lead.cnpj || '');
-    setFormCondominiumType(lead.condominium_type || 'Residencial');
-    setFormAdministrator(lead.administrator || '');
-    setFormUnitCount(lead.unit_count != null ? String(lead.unit_count) : '');
-    setFormAddress(lead.address || '');
-    setFormCity(lead.city || '');
-    setFormLeadSource(lead.lead_source || 'Indicação (BNI/rede)');
-    setFormTemperature(lead.temperature || 'Morno');
-    const stageId = lead.current_stage_id || (stages.length > 0 ? stages[0].id : '');
-    setFormCurrentStageId(stageId);
-    setFormResponsibleUserId(lead.responsible_user_id || currentProfile.id);
-    const isStageLost = checkIsLostStage(stageId);
-    setFormLossReason(isStageLost ? (lead.loss_reason || '') : '');
-    setFormSelectedServices(getLeadServices(lead.id));
     setSelectedLead(lead);
-    setQuizStep(1);
+
+    const editDraft = loadDraft<LeadDraftData>(getLeadEditDraftKey(lead.id));
+    if (editDraft && editDraft.formName) {
+      setFormName(editDraft.formName);
+      setFormCnpj(editDraft.formCnpj || '');
+      setFormCondominiumType(editDraft.formCondominiumType || 'Residencial');
+      setFormAdministrator(editDraft.formAdministrator || '');
+      setFormUnitCount(editDraft.formUnitCount || '');
+      setFormAddress(editDraft.formAddress || '');
+      setFormCity(editDraft.formCity || '');
+      setFormLeadSource(editDraft.formLeadSource || 'Indicação (BNI/rede)');
+      setFormTemperature(editDraft.formTemperature || 'Morno');
+      setFormCurrentStageId(editDraft.formCurrentStageId || '');
+      setFormResponsibleUserId(editDraft.formResponsibleUserId || currentProfile.id);
+      setFormLossReason(editDraft.formLossReason || '');
+      setFormSelectedServices(editDraft.formSelectedServices || []);
+      setQuizStep(editDraft.quizStep || 1);
+      setIsRestoredDraft(true);
+    } else {
+      setFormName(lead.name || '');
+      setFormCnpj(lead.cnpj || '');
+      setFormCondominiumType(lead.condominium_type || 'Residencial');
+      setFormAdministrator(lead.administrator || '');
+      setFormUnitCount(lead.unit_count != null ? String(lead.unit_count) : '');
+      setFormAddress(lead.address || '');
+      setFormCity(lead.city || '');
+      setFormLeadSource(lead.lead_source || 'Indicação (BNI/rede)');
+      setFormTemperature(lead.temperature || 'Morno');
+      const stageId = lead.current_stage_id || (stages.length > 0 ? stages[0].id : '');
+      setFormCurrentStageId(stageId);
+      setFormResponsibleUserId(lead.responsible_user_id || currentProfile.id);
+      const isStageLost = checkIsLostStage(stageId);
+      setFormLossReason(isStageLost ? (lead.loss_reason || '') : '');
+      setFormSelectedServices(getLeadServices(lead.id));
+      setQuizStep(1);
+      setIsRestoredDraft(false);
+    }
+
     setModalMode('edit');
   };
 
@@ -421,6 +473,7 @@ export default function LeadsModule({
     setSelectedLead(null);
     setFormError(null);
     setQuizStep(1);
+    setIsRestoredDraft(false);
   };
 
   // Toggle service selection in form
@@ -524,7 +577,7 @@ export default function LeadsModule({
         loss_reason: isStageLost ? formLossReason.trim() : null,
       };
 
-      let savedLeadId: string | null = null;
+      let savedLead: Lead | null = null;
 
       if (modalMode === 'create') {
         const { data: createdLead, error: createError } = await supabase
@@ -536,14 +589,14 @@ export default function LeadsModule({
         if (createError) throw createError;
         if (!createdLead) throw new Error('Não foi possível recuperar o lead recém-criado.');
 
-        savedLeadId = createdLead.id;
-        setLeads((prev) => [createdLead, ...prev]);
+        savedLead = createdLead;
+        upsertLeadLocally(createdLead, formSelectedServices);
+        clearDraft(DRAFT_LEAD_CREATE_KEY);
         setStatusFeedback({
           type: 'success',
           message: `Condomínio "${createdLead.name}" cadastrado com sucesso!`,
         });
       } else if (modalMode === 'edit' && selectedLead) {
-        savedLeadId = selectedLead.id;
         const { data: updatedLead, error: updateError } = await supabase
           .from('leads')
           .update(leadPayload)
@@ -554,9 +607,9 @@ export default function LeadsModule({
         if (updateError) throw updateError;
         if (!updatedLead) throw new Error('Falha ao atualizar o lead.');
 
-        setLeads((prev) =>
-          prev.map((item) => (item.id === selectedLead.id ? updatedLead : item))
-        );
+        savedLead = updatedLead;
+        upsertLeadLocally(updatedLead, formSelectedServices);
+        clearDraft(getLeadEditDraftKey(selectedLead.id));
         setStatusFeedback({
           type: 'success',
           message: `Condomínio "${updatedLead.name}" atualizado com sucesso!`,
@@ -564,21 +617,19 @@ export default function LeadsModule({
       }
 
       // Sync lead_services junction
-      if (savedLeadId) {
-        await supabase.from('lead_services').delete().eq('lead_id', savedLeadId);
+      if (savedLead) {
+        await supabase.from('lead_services').delete().eq('lead_id', savedLead.id);
 
         if (formSelectedServices.length > 0) {
           const serviceInserts = formSelectedServices.map((sId) => ({
-            lead_id: savedLeadId!,
+            lead_id: savedLead!.id,
             service_id: sId,
           }));
           await supabase.from('lead_services').insert(serviceInserts);
         }
 
-        const freshLeadServices = await supabase
-          .from('lead_services')
-          .select('lead_id, service_id');
-        setLeadServices(freshLeadServices.data || []);
+        // Silent background sync
+        refreshAll(true);
       }
 
       handleCloseModal();
@@ -595,35 +646,64 @@ export default function LeadsModule({
     setSelectedLead(lead);
     setFormInteractionError(null);
     setSelectedInteraction(null);
-    setFormInteractionType('Ligação');
-    const now = new Date();
-    const tzOffset = now.getTimezoneOffset() * 60000;
-    const localISOTime = new Date(now.getTime() - tzOffset).toISOString().slice(0, 16);
-    setFormInteractionOccurredAt(localISOTime);
-    setFormInteractionResponsibleId(currentProfile.id);
-    setFormInteractionNotes('');
-    setFormInteractionNextFollowUpDate('');
-    setInteractionQuizStep(1);
+    setIsInteractionRestoredDraft(false);
+
+    // Check if interaction draft exists for this lead
+    const draft = loadDraft<InteractionDraftData>(getInteractionCreateDraftKey(lead.id));
+    if (draft && (draft.formInteractionNotes || draft.formInteractionNextFollowUpDate)) {
+      setFormInteractionType(draft.formInteractionType || 'Ligação');
+      setFormInteractionOccurredAt(draft.formInteractionOccurredAt || '');
+      setFormInteractionResponsibleId(draft.formInteractionResponsibleId || currentProfile.id);
+      setFormInteractionNotes(draft.formInteractionNotes || '');
+      setFormInteractionNextFollowUpDate(draft.formInteractionNextFollowUpDate || '');
+      setInteractionQuizStep(draft.interactionQuizStep || 1);
+      setIsInteractionRestoredDraft(true);
+    } else {
+      setFormInteractionType('Ligação');
+      const now = new Date();
+      const tzOffset = now.getTimezoneOffset() * 60000;
+      const localISOTime = new Date(now.getTime() - tzOffset).toISOString().slice(0, 16);
+      setFormInteractionOccurredAt(localISOTime);
+      setFormInteractionResponsibleId(currentProfile.id);
+      setFormInteractionNotes('');
+      setFormInteractionNextFollowUpDate('');
+      setInteractionQuizStep(1);
+    }
+
     setInteractionModalMode('create');
   };
 
   const handleOpenEditInteraction = (interaction: Interaction) => {
     setFormInteractionError(null);
     setSelectedInteraction(interaction);
-    setFormInteractionType(interaction.interaction_type || 'Ligação');
-    let dateStr = '';
-    if (interaction.occurred_at) {
-      const d = new Date(interaction.occurred_at);
-      const tzOffset = d.getTimezoneOffset() * 60000;
-      dateStr = new Date(d.getTime() - tzOffset).toISOString().slice(0, 16);
+    setIsInteractionRestoredDraft(false);
+
+    const draft = loadDraft<InteractionDraftData>(getInteractionEditDraftKey(interaction.id));
+    if (draft && (draft.formInteractionNotes || draft.formInteractionNextFollowUpDate)) {
+      setFormInteractionType(draft.formInteractionType || 'Ligação');
+      setFormInteractionOccurredAt(draft.formInteractionOccurredAt || '');
+      setFormInteractionResponsibleId(draft.formInteractionResponsibleId || currentProfile.id);
+      setFormInteractionNotes(draft.formInteractionNotes || '');
+      setFormInteractionNextFollowUpDate(draft.formInteractionNextFollowUpDate || '');
+      setInteractionQuizStep(draft.interactionQuizStep || 1);
+      setIsInteractionRestoredDraft(true);
+    } else {
+      setFormInteractionType(interaction.interaction_type || 'Ligação');
+      let dateStr = '';
+      if (interaction.occurred_at) {
+        const d = new Date(interaction.occurred_at);
+        const tzOffset = d.getTimezoneOffset() * 60000;
+        dateStr = new Date(d.getTime() - tzOffset).toISOString().slice(0, 16);
+      }
+      setFormInteractionOccurredAt(dateStr);
+      setFormInteractionResponsibleId(interaction.responsible_user_id || currentProfile.id);
+      setFormInteractionNotes(interaction.notes || '');
+      setFormInteractionNextFollowUpDate(
+        interaction.next_follow_up_date ? interaction.next_follow_up_date.slice(0, 10) : ''
+      );
+      setInteractionQuizStep(1);
     }
-    setFormInteractionOccurredAt(dateStr);
-    setFormInteractionResponsibleId(interaction.responsible_user_id || currentProfile.id);
-    setFormInteractionNotes(interaction.notes || '');
-    setFormInteractionNextFollowUpDate(
-      interaction.next_follow_up_date ? interaction.next_follow_up_date.slice(0, 10) : ''
-    );
-    setInteractionQuizStep(1);
+
     setInteractionModalMode('edit');
   };
 
@@ -632,6 +712,16 @@ export default function LeadsModule({
     setSelectedInteraction(null);
     setFormInteractionError(null);
     setInteractionQuizStep(1);
+    setIsInteractionRestoredDraft(false);
+  };
+
+  const handleDiscardInteractionDraft = () => {
+    if (interactionModalMode === 'create' && selectedLead) {
+      clearDraft(getInteractionCreateDraftKey(selectedLead.id));
+    } else if (interactionModalMode === 'edit' && selectedInteraction) {
+      clearDraft(getInteractionEditDraftKey(selectedInteraction.id));
+    }
+    handleCloseInteractionModal();
   };
 
   const handleSubmitInteraction = async (e?: React.FormEvent) => {
@@ -662,7 +752,8 @@ export default function LeadsModule({
           .single();
         if (error) throw error;
         if (data) {
-          setInteractions((prev) => [data, ...prev]);
+          upsertInteractionLocally(data);
+          clearDraft(getInteractionCreateDraftKey(selectedLead.id));
         }
         setStatusFeedback({
           type: 'success',
@@ -677,9 +768,8 @@ export default function LeadsModule({
           .single();
         if (error) throw error;
         if (data) {
-          setInteractions((prev) =>
-            prev.map((item) => (item.id === selectedInteraction.id ? data : item))
-          );
+          upsertInteractionLocally(data);
+          clearDraft(getInteractionEditDraftKey(selectedInteraction.id));
         }
         setStatusFeedback({
           type: 'success',
@@ -687,6 +777,7 @@ export default function LeadsModule({
         });
       }
 
+      refreshAll(true);
       handleCloseInteractionModal();
     } catch (err: any) {
       console.error('Error saving interaction:', err);
@@ -748,74 +839,114 @@ export default function LeadsModule({
             <span>CRM</span>
             <span aria-hidden="true">·</span>
             <span>Oportunidades</span>
-            <span aria-hidden="true">·</span>
-            <span className="text-indigo-400 font-mono tabular-nums">{leads.length} condomínios</span>
+            {isRefreshing && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-indigo-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
+                sincronizando...
+              </span>
+            )}
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            Leads & Condomínios
+            Condomínios & Leads
           </h1>
+          <p className="text-xs sm:text-sm text-slate-400 mt-1">
+            Gestão de oportunidades comerciais, contas e histórico de relacionamentos.
+          </p>
         </div>
 
+        {/* Action Controls */}
         <div className="flex items-center gap-3">
-          {/* Segmented View Mode Toggle */}
-          <div className="flex items-center p-1 bg-slate-900 border border-slate-800 rounded-xl">
+          {/* View Mode Toggle: Cards vs List */}
+          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1 shadow-inner">
             <button
               type="button"
               onClick={() => setViewMode('cards')}
               title="Visualização em Cards"
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
                 viewMode === 'cards'
-                  ? 'bg-indigo-600 text-white shadow-sm'
+                  ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
               </svg>
-              <span>Cards</span>
+              <span className="hidden sm:inline">Cards</span>
             </button>
             <button
               type="button"
               onClick={() => setViewMode('list')}
               title="Visualização em Lista"
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
                 viewMode === 'list'
-                  ? 'bg-indigo-600 text-white shadow-sm'
+                  ? 'bg-indigo-600 text-white shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
               </svg>
-              <span>Lista</span>
+              <span className="hidden sm:inline">Lista</span>
             </button>
           </div>
 
+          {/* New Lead Button */}
           <button
+            type="button"
             onClick={handleOpenCreate}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold rounded-xl shadow-md transition-colors flex items-center gap-2 cursor-pointer"
+            className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer flex items-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
             </svg>
-            Novo lead
+            <span>Novo Condomínio</span>
           </button>
         </div>
       </div>
 
-      {/* Feedback Alert */}
+      {/* Draft banner if create draft exists and modal closed */}
+      {modalMode === null && hasDraft(DRAFT_LEAD_CREATE_KEY) && (
+        <div className="mt-4 p-3.5 bg-indigo-950/40 border border-indigo-500/30 rounded-2xl flex items-center justify-between text-xs text-indigo-200">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+            <span>Existe um rascunho salvo para criação de condomínio.</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleOpenCreate}
+              className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium cursor-pointer"
+            >
+              Continuar preenchendo
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                clearDraft(DRAFT_LEAD_CREATE_KEY);
+                setStatusFeedback({ type: 'success', message: 'Rascunho descartado.' });
+              }}
+              className="px-2.5 py-1 text-slate-400 hover:text-rose-300 transition-colors cursor-pointer"
+            >
+              Descartar
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Feedback Messages */}
       {statusFeedback && (
         <div
-          className={`mt-4 p-4 rounded-xl flex items-center justify-between text-xs sm:text-sm ${
+          className={`mt-4 p-4 rounded-xl text-xs sm:text-sm flex items-center justify-between transition-all ${
             statusFeedback.type === 'success'
-              ? 'bg-emerald-950/70 border border-emerald-500/40 text-emerald-200'
-              : 'bg-rose-950/70 border border-rose-500/40 text-rose-200'
+              ? 'bg-emerald-950/80 border border-emerald-600/60 text-emerald-200'
+              : 'bg-rose-950/80 border border-rose-600/60 text-rose-200'
           }`}
         >
           <span>{statusFeedback.message}</span>
           <button
+            type="button"
             onClick={() => setStatusFeedback(null)}
-            className="text-xs opacity-70 hover:opacity-100 cursor-pointer ml-4"
+            className="text-xs underline opacity-80 hover:opacity-100 cursor-pointer ml-3"
           >
             Fechar
           </button>
@@ -823,66 +954,78 @@ export default function LeadsModule({
       )}
 
       {/* Search Bar */}
-      <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <div className="mt-6 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
         <div className="relative flex-1 max-w-md">
-          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-          </div>
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar condomínio por nome, cidade ou administradora..."
-            className="w-full pl-10 pr-4 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+            placeholder="Buscar por condomínio, cidade ou administradora..."
+            className="w-full pl-10 pr-4 py-2.5 bg-slate-900/90 border border-slate-800 rounded-xl text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
           />
+          <svg
+            className="w-4 h-4 text-slate-500 absolute left-3.5 top-3"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+            />
+          </svg>
           {searchTerm && (
             <button
+              type="button"
               onClick={() => setSearchTerm('')}
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 hover:text-white cursor-pointer"
+              className="absolute right-3 top-3 text-slate-500 hover:text-white text-xs cursor-pointer"
             >
               Limpar
             </button>
           )}
         </div>
 
-        <div className="flex items-center gap-2 text-xs text-slate-400">
-          <span>Mostrando:</span>
-          <span className="font-semibold text-white px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 font-mono tabular-nums">
-            {filteredLeads.length} {filteredLeads.length === 1 ? 'registro' : 'registros'}
-          </span>
+        <div className="text-xs text-slate-400 flex items-center gap-2">
+          <span>Total: <strong>{filteredLeads.length}</strong> {filteredLeads.length === 1 ? 'registro' : 'registros'}</span>
         </div>
       </div>
 
-      {/* Content: Cards or List View */}
-      {loading ? (
-        <div className="py-20 flex flex-col items-center justify-center text-slate-400">
-          <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
-          <p className="text-xs sm:text-sm">Carregando carteira de condomínios...</p>
+      {/* Main Content: Cards or List */}
+      {isInitialLoading && leads.length === 0 ? (
+        <div className="mt-12 text-center py-16 bg-slate-900/40 border border-slate-800/60 rounded-2xl">
+          <div className="inline-block animate-spin w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full mb-3" />
+          <p className="text-sm text-slate-400">Carregando condomínios...</p>
         </div>
       ) : filteredLeads.length === 0 ? (
-        <div className="mt-8 py-16 px-4 bg-slate-900/40 border border-slate-800/80 rounded-2xl text-center">
+        <div className="mt-8 text-center py-16 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-4">
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+            </svg>
+          </div>
           <h3 className="text-base font-semibold text-white mb-1">
-            {searchTerm ? 'Nenhum lead encontrado' : 'Nenhum condomínio cadastrado'}
+            {searchTerm ? 'Nenhum resultado encontrado' : 'Nenhum condomínio cadastrado'}
           </h3>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
+          <p className="text-xs text-slate-400 max-w-sm mx-auto mb-6">
             {searchTerm
-              ? 'Ajuste os termos da sua pesquisa para localizar o condomínio.'
-              : 'Comece adicionando seu primeiro lead comercial no CRM.'}
+              ? 'Tente ajustar os termos de busca para encontrar o condomínio.'
+              : 'Cadastre o primeiro lead de condomínio para iniciar o pipeline comercial.'}
           </p>
           {!searchTerm && (
             <button
+              type="button"
               onClick={handleOpenCreate}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-all cursor-pointer"
             >
-              Cadastrar primeiro condomínio
+              + Criar primeiro condomínio
             </button>
           )}
         </div>
       ) : viewMode === 'cards' ? (
         /* CARDS VIEW (DEFAULT) */
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4.5">
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
           {filteredLeads.map((lead) => {
             const stageName = lead.current_stage_id
               ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
@@ -890,103 +1033,147 @@ export default function LeadsModule({
             const responsibleName = lead.responsible_user_id
               ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
               : 'Não atribuído';
+            const leadServicesIds = getLeadServices(lead.id);
             const leadInteractions = getInteractionsForLead(lead.id);
             const latestInteraction = leadInteractions[0];
+            const leadContactsList = getContactsForLead(lead.id);
 
             return (
               <div
                 key={lead.id}
-                className="bg-slate-900/80 border border-slate-800/90 hover:border-slate-700 rounded-2xl p-5 shadow-lg transition-all flex flex-col justify-between group"
+                className="bg-slate-900/80 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-5 shadow-lg flex flex-col justify-between transition-all group hover:shadow-xl hover:shadow-indigo-950/20"
               >
                 <div>
-                  {/* Card Header */}
+                  {/* Card Header: Condominium Name + Temperature */}
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div>
-                      <button
-                        type="button"
+                      <h3
                         onClick={() => handleOpenView(lead)}
-                        className="text-left font-bold text-base text-white group-hover:text-indigo-400 transition-colors cursor-pointer leading-tight"
+                        className="font-bold text-base text-white hover:text-indigo-400 transition-colors cursor-pointer leading-snug line-clamp-1"
                       >
                         {lead.name}
-                      </button>
-                      <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-1">
-                        <span>{lead.city || 'Cidade não informada'}</span>
-                        {lead.administrator && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="truncate max-w-[140px]">Adm: {lead.administrator}</span>
-                          </>
-                        )}
+                      </h3>
+                      <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
+                        {lead.city && <span>{lead.city}</span>}
+                        {lead.city && lead.condominium_type && <span>·</span>}
+                        <span>{lead.condominium_type || 'Residencial'}</span>
                       </div>
                     </div>
-
-                    <div className="shrink-0">
-                      {getTemperatureBadge(lead.temperature)}
-                    </div>
+                    {getTemperatureBadge(lead.temperature)}
                   </div>
 
-                  {/* Metadata Row */}
-                  <div className="grid grid-cols-2 gap-2 py-3 border-y border-slate-800/60 my-3 text-xs">
+                  {/* Stage & Units Stats */}
+                  <div className="grid grid-cols-2 gap-2 my-3 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/60 text-xs">
                     <div>
-                      <span className="text-slate-500 block text-[11px]">Porte / Tipo</span>
-                      <span className="text-slate-200 font-medium">
-                        <span className="font-mono tabular-nums">{lead.unit_count || '-'}</span> un. · {lead.condominium_type || 'Residencial'}
+                      <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-0.5">
+                        Estágio
                       </span>
-                    </div>
-
-                    <div>
-                      <span className="text-slate-500 block text-[11px]">Estágio Funil</span>
-                      <span className="text-indigo-300 font-medium truncate block">
+                      <span className="font-semibold text-indigo-300 truncate block">
                         {stageName}
                       </span>
                     </div>
+                    <div>
+                      <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-0.5">
+                        Unidades
+                      </span>
+                      <span className="font-semibold text-slate-200 block">
+                        {lead.unit_count != null ? `${lead.unit_count} un.` : '-'}
+                      </span>
+                    </div>
                   </div>
 
-                  {/* Latest Interaction Snapshot */}
-                  <div className="mb-4 text-xs">
-                    <span className="text-slate-500 block text-[11px] mb-1">Última Interação</span>
-                    {latestInteraction ? (
-                      <div className="text-slate-300 flex items-center justify-between gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-800/60">
-                        <div className="flex items-center gap-1.5 truncate">
-                          {getInteractionTypeBadge(latestInteraction.interaction_type)}
-                          <span className="text-slate-400 text-[11px] truncate">
-                            {latestInteraction.notes || 'Sem observações'}
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-slate-500 shrink-0 font-mono">
-                          {formatDateBR(latestInteraction.occurred_at)}
-                        </span>
+                  {/* Contact preview or Administrator */}
+                  <div className="space-y-1.5 text-xs text-slate-300 mb-3">
+                    {lead.administrator && (
+                      <div className="flex items-center gap-1.5 text-slate-400 truncate">
+                        <span className="text-slate-500">Adm:</span>
+                        <span className="truncate">{lead.administrator}</span>
                       </div>
-                    ) : (
-                      <span className="text-slate-500 italic text-[11px]">
-                        Nenhuma interação registrada ainda.
-                      </span>
+                    )}
+                    {leadContactsList.length > 0 && (
+                      <div className="flex items-center gap-1.5 text-slate-300 truncate">
+                        <span className="text-slate-500">Contato:</span>
+                        <span className="truncate font-medium">{leadContactsList[0].name}</span>
+                        {leadContactsList[0].role_title && (
+                          <span className="text-slate-400 text-[11px]">
+                            ({leadContactsList[0].role_title})
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
+
+                  {/* Services tags */}
+                  {leadServicesIds.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mb-4">
+                      {leadServicesIds.slice(0, 3).map((sId) => (
+                        <span
+                          key={sId}
+                          className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700/60 text-[10px] text-slate-300 font-medium"
+                        >
+                          {serviceMap.get(sId) || 'Serviço'}
+                        </span>
+                      ))}
+                      {leadServicesIds.length > 3 && (
+                        <span className="px-1.5 py-0.5 rounded-md bg-slate-800/50 text-[10px] text-slate-400">
+                          +{leadServicesIds.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Latest Interaction preview if available */}
+                  {latestInteraction && (
+                    <div className="mt-3 pt-3 border-t border-slate-800/60 text-xs">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
+                        <span className="flex items-center gap-1">
+                          Última interação: {getInteractionTypeBadge(latestInteraction.interaction_type)}
+                        </span>
+                        <span>{formatDateBR(latestInteraction.occurred_at)}</span>
+                      </div>
+                      {latestInteraction.next_follow_up_date && (
+                        <div className="flex items-center justify-between text-[11px]">
+                          <span className="text-slate-400">Próximo follow-up:</span>
+                          <span
+                            className={`font-semibold ${
+                              getFollowUpStatus(latestInteraction.next_follow_up_date) === 'overdue'
+                                ? 'text-amber-400'
+                                : getFollowUpStatus(latestInteraction.next_follow_up_date) === 'today'
+                                ? 'text-indigo-400'
+                                : 'text-slate-300'
+                            }`}
+                          >
+                            {formatDateBR(latestInteraction.next_follow_up_date)}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Card Footer: Responsible & Action Buttons */}
-                <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 text-xs text-slate-400 min-w-0">
-                    <span className="w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] text-slate-300 uppercase font-semibold shrink-0">
+                <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] font-semibold text-slate-300 uppercase">
                       {responsibleName.charAt(0)}
-                    </span>
-                    <span className="text-xs truncate max-w-[90px] text-slate-300">
+                    </div>
+                    <span className="text-xs text-slate-400 truncate max-w-[110px]">
                       {responsibleName}
                     </span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-1">
+                    {/* Direct Quick Interaction Button */}
                     <button
                       type="button"
                       onClick={() => handleOpenCreateInteraction(lead)}
                       title="Registrar interação"
-                      className="px-2.5 py-1.5 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+                      aria-label="Registrar interação"
+                      className="p-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/60 transition-colors cursor-pointer flex items-center gap-1"
                     >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                       </svg>
-                      <span>Interação</span>
                     </button>
 
                     <button
@@ -1138,16 +1325,32 @@ export default function LeadsModule({
                   <span className="text-xs text-slate-400">
                     {modalMode === 'create' ? 'Novo Condomínio' : 'Editar Condomínio'}
                   </span>
+                  {isRestoredDraft && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/60 text-amber-300">
+                      Rascunho recuperado
+                    </span>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  onClick={handleCloseModal}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                <div className="flex items-center gap-2">
+                  {isRestoredDraft && (
+                    <button
+                      type="button"
+                      onClick={handleDiscardLeadDraft}
+                      className="text-xs text-rose-400 hover:text-rose-300 mr-2 cursor-pointer"
+                    >
+                      Descartar rascunho
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleCloseModal}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
               </div>
 
               {/* Visual Progress Bar */}
@@ -1201,91 +1404,28 @@ export default function LeadsModule({
 
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      CNPJ (Opcional)
+                      CNPJ (opcional)
                     </label>
                     <input
                       type="text"
                       value={formCnpj}
                       onChange={(e) => setFormCnpj(e.target.value)}
-                      placeholder="00.000.000/0001-00"
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors font-mono"
+                      placeholder="00.000.000/0000-00"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none transition-colors"
                     />
                   </div>
                 </div>
               )}
 
-              {/* STEP 2: Localização & Unidades */}
+              {/* STEP 2: Perfil do Condomínio */}
               {quizStep === 2 && (
                 <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1">
-                      Onde está localizado e qual o porte?
+                      Características do condomínio
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Informe a cidade e a quantidade de unidades autônomas.
-                    </p>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                        Cidade
-                      </label>
-                      <input
-                        type="text"
-                        autoFocus
-                        value={formCity}
-                        onChange={(e) => setFormCity(e.target.value)}
-                        placeholder="Ex: São Paulo"
-                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                        Número de Unidades <span className="text-rose-400">*</span>
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={formUnitCount}
-                        onChange={(e) => setFormUnitCount(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleNextQuizStep();
-                          }
-                        }}
-                        placeholder="Ex: 84"
-                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none font-mono"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Endereço Completo (Opcional)
-                    </label>
-                    <input
-                      type="text"
-                      value={formAddress}
-                      onChange={(e) => setFormAddress(e.target.value)}
-                      placeholder="Ex: Av. Paulista, 1000 - Bela Vista"
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* STEP 3: Tipo & Gestão */}
-              {quizStep === 3 && (
-                <div className="space-y-5 animate-in fade-in duration-200">
-                  <div>
-                    <h3 className="text-lg font-bold text-white mb-1">
-                      Qual a tipologia e a administradora?
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      Selecione a categoria do empreendimento e informe se possui administradora.
+                      Selecione o tipo e a quantidade total de unidades/apartamentos.
                     </p>
                   </div>
 
@@ -1296,17 +1436,16 @@ export default function LeadsModule({
                     <div className="grid grid-cols-2 gap-2.5">
                       {CONDOMINIUM_TYPES.map((type) => (
                         <button
-                          type="button"
                           key={type}
+                          type="button"
                           onClick={() => setFormCondominiumType(type)}
-                          className={`p-3 rounded-xl border text-xs font-medium transition-all text-left flex items-center justify-between cursor-pointer ${
+                          className={`p-3 rounded-xl border text-left text-xs font-medium transition-all cursor-pointer ${
                             formCondominiumType === type
-                              ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200 font-semibold'
+                              ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
                               : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
                           }`}
                         >
-                          <span>{type}</span>
-                          {formCondominiumType === type && <span className="text-indigo-400">✓</span>}
+                          {type}
                         </button>
                       ))}
                     </div>
@@ -1314,64 +1453,91 @@ export default function LeadsModule({
 
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Administradora de Condomínio
+                      Número de Unidades <span className="text-rose-400">*</span>
                     </label>
                     <input
-                      type="text"
-                      value={formAdministrator}
-                      onChange={(e) => setFormAdministrator(e.target.value)}
-                      placeholder="Ex: Lello, Hub, GK, etc."
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none"
+                      type="number"
+                      autoFocus
+                      min="1"
+                      value={formUnitCount}
+                      onChange={(e) => setFormUnitCount(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleNextQuizStep();
+                        }
+                      }}
+                      placeholder="Ex: 80"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none transition-colors"
                     />
                   </div>
                 </div>
               )}
 
-              {/* STEP 4: Origem & Temperatura */}
-              {quizStep === 4 && (
+              {/* STEP 3: Localização & Administradora */}
+              {quizStep === 3 && (
                 <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1">
-                      Origem e Temperatura Comercial
+                      Onde fica e quem administra?
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Qual a temperatura da oportunidade e como o lead foi originado?
+                      Preencha o endereço e os dados da administradora contratada.
                     </p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-2">
-                      Temperatura da Oportunidade
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Cidade
                     </label>
-                    <div className="grid grid-cols-3 gap-3">
-                      {TEMPERATURE_OPTIONS.map((temp) => (
-                        <button
-                          type="button"
-                          key={temp}
-                          onClick={() => setFormTemperature(temp)}
-                          className={`p-3 rounded-xl border text-xs font-medium transition-all text-center cursor-pointer flex flex-col items-center gap-1.5 ${
-                            formTemperature === temp
-                              ? temp === 'Quente'
-                                ? 'bg-rose-950/80 border-rose-500 text-rose-200 font-bold'
-                                : temp === 'Morno'
-                                ? 'bg-amber-950/80 border-amber-500 text-amber-200 font-bold'
-                                : 'bg-sky-950/80 border-sky-500 text-sky-200 font-bold'
-                              : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                          }`}
-                        >
-                          <span
-                            className={`w-3 h-3 rounded-full ${
-                              temp === 'Quente'
-                                ? 'bg-rose-500'
-                                : temp === 'Morno'
-                                ? 'bg-amber-500'
-                                : 'bg-sky-500'
-                            }`}
-                          />
-                          <span>{temp}</span>
-                        </button>
-                      ))}
-                    </div>
+                    <input
+                      type="text"
+                      autoFocus
+                      value={formCity}
+                      onChange={(e) => setFormCity(e.target.value)}
+                      placeholder="Ex: São Paulo, Rio de Janeiro..."
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Endereço Completo
+                    </label>
+                    <input
+                      type="text"
+                      value={formAddress}
+                      onChange={(e) => setFormAddress(e.target.value)}
+                      placeholder="Ex: Av. Paulista, 1000 - Bela Vista"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Administradora Responsável
+                    </label>
+                    <input
+                      type="text"
+                      value={formAdministrator}
+                      onChange={(e) => setFormAdministrator(e.target.value)}
+                      placeholder="Ex: Lello, Hub, CIPA..."
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none transition-colors"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 4: Origem & Serviços de Interesse */}
+              {quizStep === 4 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Origem & Serviços de Interesse
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Como conheceu a Triverus e quais soluções têm demanda?
+                    </p>
                   </div>
 
                   <div>
@@ -1379,81 +1545,139 @@ export default function LeadsModule({
                       Origem do Lead
                     </label>
                     <div className="grid grid-cols-2 gap-2">
-                      {LEAD_SOURCES.map((source) => (
+                      {LEAD_SOURCES.map((src) => (
                         <button
+                          key={src}
                           type="button"
-                          key={source}
-                          onClick={() => setFormLeadSource(source)}
-                          className={`p-2.5 rounded-xl border text-xs font-medium transition-all text-left cursor-pointer ${
-                            formLeadSource === source
-                              ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200'
+                          onClick={() => setFormLeadSource(src)}
+                          className={`p-2.5 rounded-xl border text-left text-xs font-medium transition-all cursor-pointer ${
+                            formLeadSource === src
+                              ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
                               : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
                           }`}
                         >
-                          {source}
+                          {src}
                         </button>
                       ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-2">
+                      Serviços / Oportunidades
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                      {services.map((srv) => {
+                        const isChecked = formSelectedServices.includes(srv.id);
+                        return (
+                          <button
+                            key={srv.id}
+                            type="button"
+                            onClick={() => toggleService(srv.id)}
+                            className={`p-2.5 rounded-xl border text-left text-xs font-medium transition-all cursor-pointer flex items-center justify-between ${
+                              isChecked
+                                ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                            }`}
+                          >
+                            <span className="truncate">{srv.name || srv.title || 'Serviço'}</span>
+                            <span
+                              className={`w-4 h-4 rounded flex items-center justify-center text-[10px] ${
+                                isChecked ? 'bg-indigo-600 text-white' : 'border border-slate-700'
+                              }`}
+                            >
+                              {isChecked ? '✓' : ''}
+                            </span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 </div>
               )}
 
-              {/* STEP 5: Funil & Responsável */}
+              {/* STEP 5: Pipeline, Temperatura & Responsável */}
               {quizStep === 5 && (
                 <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1">
-                      Estágio no Funil e Responsável
+                      Pipeline Comercial
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Vincule ao pipeline de vendas e atribua ao consultor responsável.
+                      Defina a temperatura, o estágio atual do funil e o responsável interno.
                     </p>
                   </div>
 
                   <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-2">
+                      Temperatura
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {TEMPERATURE_OPTIONS.map((temp) => (
+                        <button
+                          key={temp}
+                          type="button"
+                          onClick={() => setFormTemperature(temp)}
+                          className={`p-2.5 rounded-xl border text-center text-xs font-semibold transition-all cursor-pointer ${
+                            formTemperature === temp
+                              ? temp === 'Quente'
+                                ? 'bg-rose-950/60 border-rose-500 text-rose-300'
+                                : temp === 'Frio'
+                                ? 'bg-sky-950/60 border-sky-500 text-sky-300'
+                                : 'bg-amber-950/60 border-amber-500 text-amber-300'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          {temp}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Estágio no Funil
+                      Estágio do Funil
                     </label>
                     <select
                       value={formCurrentStageId}
                       onChange={(e) => handleStageChange(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-sm focus:outline-none cursor-pointer"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-sm focus:outline-none transition-colors"
                     >
-                      {stages.map((stage) => (
-                        <option key={stage.id} value={stage.id}>
-                          {stage.name}
+                      {stages.map((stg) => (
+                        <option key={stg.id} value={stg.id}>
+                          {stg.name}
                         </option>
                       ))}
                     </select>
                   </div>
 
                   {checkIsLostStage(formCurrentStageId) && (
-                    <div className="p-3.5 bg-amber-950/40 border border-amber-800/40 rounded-xl">
-                      <label className="block text-xs font-medium text-amber-300 mb-1.5">
-                        Motivo de Perda <span className="text-rose-400">*</span>
+                    <div className="animate-in fade-in duration-150">
+                      <label className="block text-xs font-medium text-rose-400 mb-1.5">
+                        Motivo da Perda <span className="text-rose-400">*</span>
                       </label>
-                      <input
-                        type="text"
+                      <textarea
+                        rows={2}
                         value={formLossReason}
                         onChange={(e) => setFormLossReason(e.target.value)}
-                        placeholder="Ex: Optou por concorrente por valor de taxa"
-                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none"
+                        placeholder="Explique o motivo do descarte ou recusa..."
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-rose-900/60 focus:border-rose-500 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none transition-colors"
                       />
                     </div>
                   )}
 
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Responsável Comercial
+                      Responsável Interno
                     </label>
                     <select
                       value={formResponsibleUserId}
                       onChange={(e) => setFormResponsibleUserId(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-sm focus:outline-none cursor-pointer"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-sm focus:outline-none transition-colors"
                     >
                       {profiles.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.full_name || 'Sem nome'}
+                          {p.full_name || 'Sem nome'} {p.id === currentProfile.id ? '(Você)' : ''}
                         </option>
                       ))}
                     </select>
@@ -1461,68 +1685,48 @@ export default function LeadsModule({
                 </div>
               )}
 
-              {/* STEP 6: Serviços & Revisão */}
+              {/* STEP 6: Resumo & Confirmação */}
               {quizStep === 6 && (
-                <div className="space-y-5 animate-in fade-in duration-200">
+                <div className="space-y-4 animate-in fade-in duration-200">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1">
-                      Serviços de Interesse e Confirmação
+                      Revisão do Condomínio
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Selecione os serviços que o condomínio busca e finalize o cadastro.
+                      Confira todos os dados antes de finalizar o cadastro.
                     </p>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-2">
-                      Serviços
-                    </label>
-                    {services.length === 0 ? (
-                      <p className="text-xs text-slate-500 italic">Nenhum serviço cadastrado.</p>
-                    ) : (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {services.map((service) => {
-                          const isSelected = formSelectedServices.includes(service.id);
-                          const title = service.name || service.title || 'Serviço';
-
-                          return (
-                            <button
-                              type="button"
-                              key={service.id}
-                              onClick={() => toggleService(service.id)}
-                              className={`p-3 rounded-xl border text-xs font-medium transition-all flex items-center justify-between text-left cursor-pointer ${
-                                isSelected
-                                  ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200'
-                                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
-                              }`}
-                            >
-                              <span className="truncate mr-2">{title}</span>
-                              <span className="text-xs font-bold text-indigo-400">
-                                {isSelected ? '✓' : '+'}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Review Box */}
-                  <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl space-y-1.5 text-xs text-slate-300">
-                    <div className="font-semibold text-white text-sm pb-1 border-b border-slate-800">
-                      Resumo do Lead: {formName}
+                  <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3 text-xs">
+                    <div className="flex justify-between border-b border-slate-800/80 pb-2">
+                      <span className="text-slate-400">Nome:</span>
+                      <span className="font-semibold text-white">{formName || '-'}</span>
+                    </div>
+                    <div className="flex justify-between border-b border-slate-800/80 pb-2">
+                      <span className="text-slate-400">Tipo / Unidades:</span>
+                      <span className="font-semibold text-white">
+                        {formCondominiumType} ({formUnitCount} un.)
+                      </span>
+                    </div>
+                    <div className="flex justify-between border-b border-slate-800/80 pb-2">
+                      <span className="text-slate-400">Cidade:</span>
+                      <span className="font-semibold text-white">{formCity || '-'}</span>
+                    </div>
+                    <div className="flex justify-between border-b border-slate-800/80 pb-2">
+                      <span className="text-slate-400">Administradora:</span>
+                      <span className="font-semibold text-white">{formAdministrator || '-'}</span>
+                    </div>
+                    <div className="flex justify-between border-b border-slate-800/80 pb-2">
+                      <span className="text-slate-400">Temperatura / Estágio:</span>
+                      <span className="font-semibold text-indigo-300">
+                        {formTemperature} · {stageMap.get(formCurrentStageId) || 'Estágio inicial'}
+                      </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-slate-500">Porte / Tipo:</span>
-                      <span>{formUnitCount} un. · {formCondominiumType}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Localização:</span>
-                      <span>{formCity || 'Não informada'}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Temperatura:</span>
-                      <span>{formTemperature}</span>
+                      <span className="text-slate-400">Responsável:</span>
+                      <span className="font-semibold text-white">
+                        {profileMap.get(formResponsibleUserId) || currentProfile.full_name || 'Você'}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1531,39 +1735,48 @@ export default function LeadsModule({
 
             {/* Quiz Navigation Footer */}
             <div className="px-6 py-4 border-t border-slate-800/80 bg-slate-950/60 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={quizStep === 1 ? handleCloseModal : handlePrevQuizStep}
-                className="px-4 py-2 bg-slate-800/80 hover:bg-slate-800 text-slate-300 text-xs font-medium rounded-xl transition-colors cursor-pointer"
-              >
-                {quizStep === 1 ? 'Cancelar' : '← Voltar'}
-              </button>
+              <div>
+                {quizStep > 1 && (
+                  <button
+                    type="button"
+                    onClick={handlePrevQuizStep}
+                    disabled={formSaving}
+                    className="px-4 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    ← Voltar
+                  </button>
+                )}
+              </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleCloseModal}
+                  disabled={formSaving}
+                  className="px-4 py-2 text-slate-400 hover:text-white text-xs font-medium transition-colors cursor-pointer"
+                >
+                  Cancelar
+                </button>
+
                 {quizStep < totalQuizSteps ? (
                   <button
                     type="button"
                     onClick={handleNextQuizStep}
-                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-md"
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-all cursor-pointer flex items-center gap-1.5"
                   >
                     <span>Avançar</span>
-                    <span>→</span>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 5l7 7-7 7" />
+                    </svg>
                   </button>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => handleSubmitLead()}
+                    onClick={handleSubmitLead}
                     disabled={formSaving}
-                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-2 shadow-md disabled:opacity-50"
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 active:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-lg shadow-emerald-600/20 transition-all cursor-pointer disabled:opacity-50"
                   >
-                    {formSaving ? (
-                      <>
-                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        <span>Salvando...</span>
-                      </>
-                    ) : (
-                      <span>{modalMode === 'create' ? 'Concluir Cadastro' : 'Salvar Alterações'}</span>
-                    )}
+                    {formSaving ? 'Salvando...' : modalMode === 'create' ? 'Concluir Cadastro' : 'Salvar Alterações'}
                   </button>
                 )}
               </div>
@@ -1572,473 +1785,420 @@ export default function LeadsModule({
         </div>
       )}
 
-      {/* VIEW LEAD DETAILS MODAL */}
+      {/* VIEW DETAILS MODAL */}
       {modalMode === 'view' && selectedLead && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="relative w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 max-h-[90vh] flex flex-col">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
+          <div className="relative w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]">
+            <div className="px-6 py-5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
               <div>
-                <span className="text-[11px] font-mono text-slate-400">
-                  ID: {selectedLead.id.slice(0, 8)}...
+                <span className="text-xs text-indigo-400 font-semibold uppercase tracking-wider block">
+                  Detalhes da Conta
                 </span>
-                <h3 className="text-xl font-bold text-white mt-0.5">
-                  {selectedLead.name}
-                </h3>
+                <h2 className="text-xl font-bold text-white">{selectedLead.name}</h2>
               </div>
-              <button
-                onClick={handleCloseModal}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            {/* Content */}
-            <div className="p-6 overflow-y-auto space-y-6 text-xs">
-              {/* Badges strip */}
-              <div className="flex flex-wrap items-center gap-3">
-                {getTemperatureBadge(selectedLead.temperature)}
-                <span className="text-xs text-indigo-300 font-medium">
-                  {selectedLead.current_stage_id
-                    ? stageMap.get(selectedLead.current_stage_id) || 'Estágio inicial'
-                    : 'Estágio inicial'}
-                </span>
-                <span className="text-xs text-slate-400">
-                  {selectedLead.condominium_type || 'Residencial'}
-                </span>
-              </div>
-
-              {/* Grid with info */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950/60 p-4.5 rounded-2xl border border-slate-800/80">
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">CNPJ</span>
-                  <span className="text-slate-200 font-mono font-medium">
-                    {selectedLead.cnpj || 'Não informado'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">Administradora</span>
-                  <span className="text-slate-200 font-medium">
-                    {selectedLead.administrator || 'Não informada'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">Cidade</span>
-                  <span className="text-slate-200 font-medium">
-                    {selectedLead.city || 'Não informada'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">Endereço</span>
-                  <span className="text-slate-200 font-medium">
-                    {selectedLead.address || 'Não informado'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">Unidades</span>
-                  <span className="text-slate-200 font-medium font-mono tabular-nums">
-                    {selectedLead.unit_count != null ? `${selectedLead.unit_count} unidades` : 'Não informado'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">Origem do Lead</span>
-                  <span className="text-slate-200 font-medium">
-                    {selectedLead.lead_source || 'Não informada'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">Responsável Comercial</span>
-                  <span className="text-slate-200 font-medium">
-                    {selectedLead.responsible_user_id
-                      ? profileMap.get(selectedLead.responsible_user_id) || 'Não atribuído'
-                      : 'Não atribuído'}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500 block mb-0.5 text-[11px]">Cadastrado em</span>
-                  <span className="text-slate-200 font-medium font-mono">
-                    {selectedLead.created_at
-                      ? new Date(selectedLead.created_at).toLocaleString('pt-BR')
-                      : '-'}
-                  </span>
-                </div>
-              </div>
-
-              {/* HISTÓRICO DE INTERAÇÕES */}
-              <div className="pt-2 border-t border-slate-800/80">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <h4 className="text-xs uppercase tracking-wider font-bold text-white">
-                      Histórico de Interações
-                    </h4>
-                    {(() => {
-                      const leadInteractions = getInteractionsForLead(selectedLead.id);
-                      return (
-                        <span className="text-[11px] font-mono text-slate-400">
-                          ({leadInteractions.length})
-                        </span>
-                      );
-                    })()}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleOpenCreateInteraction(selectedLead)}
-                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                    </svg>
-                    Registrar interação
-                  </button>
-                </div>
-
-                {(() => {
-                  const leadInteractions = getInteractionsForLead(selectedLead.id);
-                  if (leadInteractions.length === 0) {
-                    return (
-                      <div className="p-4 bg-slate-950/40 rounded-2xl border border-slate-800/80 text-center">
-                        <p className="text-xs text-slate-400 mb-2">
-                          Nenhuma interação registrada ainda para este condomínio.
-                        </p>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenCreateInteraction(selectedLead)}
-                          className="text-xs text-indigo-400 hover:text-indigo-300 underline font-medium cursor-pointer"
-                        >
-                          Clique aqui para registrar a primeira interação
-                        </button>
-                      </div>
-                    );
-                  }
-
-                  return (
-                    <div className="space-y-3">
-                      {leadInteractions.map((item) => {
-                        const respName = item.responsible_user_id
-                          ? profileMap.get(item.responsible_user_id) || 'Não atribuído'
-                          : 'Não atribuído';
-                        const followUpStatus = getFollowUpStatus(item.next_follow_up_date);
-
-                        return (
-                          <div
-                            key={item.id}
-                            className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-2xl hover:border-slate-700/80 transition-colors"
-                          >
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/60 pb-2.5 mb-2.5">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                {getInteractionTypeBadge(item.interaction_type)}
-                                <span className="text-xs text-white font-medium">
-                                  {formatDateTimeBR(item.occurred_at)}
-                                </span>
-                              </div>
-
-                              <div className="flex items-center gap-3">
-                                <span className="text-[11px] text-slate-400">
-                                  Por: {respName}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenEditInteraction(item)}
-                                  className="text-[11px] text-indigo-400 hover:text-indigo-300 cursor-pointer font-medium"
-                                >
-                                  Editar
-                                </button>
-                              </div>
-                            </div>
-
-                            {item.notes && (
-                              <p className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed mb-2">
-                                {item.notes}
-                              </p>
-                            )}
-
-                            {item.next_follow_up_date && (
-                              <div className="pt-2 border-t border-slate-900 flex items-center justify-between text-xs">
-                                <span className="text-slate-500 text-[11px]">
-                                  Próximo Follow-up:
-                                </span>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-slate-200 font-mono">
-                                    {formatDateBR(item.next_follow_up_date)}
-                                  </span>
-                                  {followUpStatus === 'overdue' && (
-                                    <span className="text-[10px] text-amber-400 font-semibold">
-                                      (Vencido)
-                                    </span>
-                                  )}
-                                  {followUpStatus === 'today' && (
-                                    <span className="text-[10px] text-indigo-400 font-semibold">
-                                      (Hoje)
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-4 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
-              <button
-                onClick={() => {
-                  handleCloseModal();
-                  handleOpenEdit(selectedLead);
-                }}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
-                Editar condomínio
-              </button>
-              <button
-                onClick={handleCloseModal}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition-colors cursor-pointer"
-              >
-                Fechar
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* DYNAMIC QUIZ-STYLE MODAL FOR INTERACTION REGISTRATION */}
-      {interactionModalMode && selectedLead && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]">
-            {/* Header */}
-            <div className="px-6 pt-5 pb-4 border-b border-slate-800/80 bg-slate-950/60">
-              <div className="flex items-center justify-between mb-2.5">
-                <div>
-                  <h3 className="text-base font-bold text-white">
-                    {interactionModalMode === 'create' ? 'Registrar Interação' : 'Editar Interação'}
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    Condomínio: <span className="text-indigo-300 font-semibold">{selectedLead.name}</span>
-                  </p>
-                </div>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleCloseInteractionModal}
-                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  onClick={() => {
+                    handleCloseModal();
+                    handleOpenEdit(selectedLead);
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:text-white hover:bg-slate-700 transition-colors cursor-pointer"
+                >
+                  Editar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCloseModal}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
+            </div>
 
-              {/* Progress */}
+            <div className="p-6 sm:p-8 overflow-y-auto space-y-6 text-sm">
+              {/* Key details */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+                    Temperatura
+                  </span>
+                  {getTemperatureBadge(selectedLead.temperature)}
+                </div>
+                <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+                    Estágio
+                  </span>
+                  <span className="text-xs font-semibold text-indigo-300 block truncate">
+                    {stageMap.get(selectedLead.current_stage_id || '') || 'Inicial'}
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+                    Unidades
+                  </span>
+                  <span className="text-xs font-semibold text-white block">
+                    {selectedLead.unit_count != null ? `${selectedLead.unit_count} un.` : '-'}
+                  </span>
+                </div>
+                <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl">
+                  <span className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
+                    Responsável
+                  </span>
+                  <span className="text-xs font-semibold text-white block truncate">
+                    {profileMap.get(selectedLead.responsible_user_id || '') || 'Não atribuído'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Informações Gerais */}
+              <div className="p-4 bg-slate-950/50 border border-slate-800 rounded-2xl space-y-2 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <span className="text-slate-400 block mb-0.5">CNPJ:</span>
+                    <span className="text-slate-200 font-mono">{selectedLead.cnpj || 'Não informado'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block mb-0.5">Administradora:</span>
+                    <span className="text-slate-200 font-medium">{selectedLead.administrator || 'Não informada'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block mb-0.5">Cidade:</span>
+                    <span className="text-slate-200">{selectedLead.city || 'Não informada'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block mb-0.5">Endereço:</span>
+                    <span className="text-slate-200">{selectedLead.address || 'Não informado'}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* HISTÓRICO DE INTERAÇÕES */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      Histórico de Interações
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] text-slate-400 font-semibold">
+                      {getInteractionsForLead(selectedLead.id).length}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenCreateInteraction(selectedLead)}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
+                    </svg>
+                    <span>Registrar interação</span>
+                  </button>
+                </div>
+
+                {getInteractionsForLead(selectedLead.id).length === 0 ? (
+                  <div className="p-6 rounded-2xl bg-slate-950/40 border border-slate-800 text-center text-xs text-slate-400">
+                    Nenhuma interação registrada para este condomínio.
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+                    {getInteractionsForLead(selectedLead.id).map((interaction) => (
+                      <div
+                        key={interaction.id}
+                        className="p-4 rounded-2xl bg-slate-950 border border-slate-800/80 flex flex-col gap-2"
+                      >
+                        <div className="flex items-center justify-between text-xs">
+                          <div className="flex items-center gap-2">
+                            {getInteractionTypeBadge(interaction.interaction_type)}
+                            <span className="text-slate-400 text-[11px]">
+                              {formatDateTimeBR(interaction.occurred_at)}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[11px] text-slate-400">
+                              Por: <strong>{profileMap.get(interaction.responsible_user_id || '') || 'Equipe'}</strong>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditInteraction(interaction)}
+                              className="text-[11px] text-indigo-400 hover:text-indigo-300 underline cursor-pointer ml-1"
+                            >
+                              Editar
+                            </button>
+                          </div>
+                        </div>
+
+                        {interaction.notes && (
+                          <p className="text-xs text-slate-300 bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/60 whitespace-pre-wrap">
+                            {interaction.notes}
+                          </p>
+                        )}
+
+                        {interaction.next_follow_up_date && (
+                          <div className="flex items-center justify-between text-[11px] pt-2 border-t border-slate-800/60">
+                            <span className="text-slate-400">Próximo follow-up agendado:</span>
+                            <span
+                              className={`font-semibold ${
+                                getFollowUpStatus(interaction.next_follow_up_date) === 'overdue'
+                                  ? 'text-amber-400'
+                                  : getFollowUpStatus(interaction.next_follow_up_date) === 'today'
+                                  ? 'text-indigo-400'
+                                  : 'text-slate-300'
+                              }`}
+                            >
+                              {formatDateBR(interaction.next_follow_up_date)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QUICK DYNAMIC QUIZ MODAL FOR INTERACTIONS */}
+      {interactionModalMode && selectedLead && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="relative w-full max-w-xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]">
+            <div className="px-6 pt-5 pb-4 border-b border-slate-800/80 bg-slate-950/60">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-emerald-950 border border-emerald-700/60 text-emerald-300">
+                    Passo {interactionQuizStep} de {totalInteractionQuizSteps}
+                  </span>
+                  <span className="text-xs text-slate-300 truncate max-w-[200px]">
+                    {selectedLead.name}
+                  </span>
+                  {isInteractionRestoredDraft && (
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-950/80 border border-amber-600/60 text-amber-300">
+                      Rascunho
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  {isInteractionRestoredDraft && (
+                    <button
+                      type="button"
+                      onClick={handleDiscardInteractionDraft}
+                      className="text-xs text-rose-400 hover:text-rose-300 mr-2 cursor-pointer"
+                    >
+                      Descartar
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleCloseInteractionModal}
+                    className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+
               <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
                 <div
-                  className="bg-indigo-500 h-full transition-all duration-300 rounded-full"
+                  className="bg-emerald-500 h-full transition-all duration-300 ease-out rounded-full"
                   style={{ width: `${(interactionQuizStep / totalInteractionQuizSteps) * 100}%` }}
                 />
               </div>
             </div>
 
-            {/* Quiz Body */}
-            <div className="p-6 overflow-y-auto flex-1 text-xs">
+            <div className="p-6 sm:p-8 overflow-y-auto flex-1 text-sm">
               {formInteractionError && (
-                <div className="mb-4 p-3 bg-rose-950/80 border border-rose-600/50 rounded-xl text-rose-200">
+                <div className="mb-5 p-3.5 bg-rose-950/80 border border-rose-600/50 rounded-xl text-rose-200 text-xs">
                   {formInteractionError}
                 </div>
               )}
 
-              {/* Step 1: Tipo */}
+              {/* STEP 1: Tipo & Data */}
               {interactionQuizStep === 1 && (
-                <div className="space-y-4 animate-in fade-in duration-200">
+                <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
-                    <h4 className="text-base font-bold text-white mb-1">
-                      Qual foi o tipo de contato realizado?
-                    </h4>
-                    <p className="text-slate-400 text-xs">
-                      Selecione o canal ou formato da interação:
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Qual tipo de interação foi realizada?
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Escolha o canal utilizado para o contato com o condomínio.
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                     {INTERACTION_TYPES.map((type) => (
                       <button
-                        type="button"
                         key={type}
-                        onClick={() => {
-                          setFormInteractionType(type);
-                          setInteractionQuizStep(2);
-                        }}
-                        className={`p-3.5 rounded-xl border text-xs font-semibold transition-all text-left flex items-center justify-between cursor-pointer ${
+                        type="button"
+                        onClick={() => setFormInteractionType(type)}
+                        className={`p-3 rounded-xl border text-center text-xs font-semibold transition-all cursor-pointer ${
                           formInteractionType === type
-                            ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200 shadow-sm'
-                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                            ? 'bg-emerald-600/20 border-emerald-500 text-emerald-200'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                         }`}
                       >
-                        <span>{type}</span>
-                        <span className="text-slate-500 font-normal">→</span>
+                        {type}
                       </button>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {/* Step 2: Data & Responsável */}
-              {interactionQuizStep === 2 && (
-                <div className="space-y-4 animate-in fade-in duration-200">
-                  <div>
-                    <h4 className="text-base font-bold text-white mb-1">
-                      Quando ocorreu e quem foi o responsável?
-                    </h4>
-                    <p className="text-slate-400 text-xs">
-                      Confirme a data, horário e o consultor que realizou o contato.
-                    </p>
-                  </div>
 
                   <div>
-                    <label className="block text-slate-300 font-medium mb-1">
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
                       Data e Hora da Interação
                     </label>
                     <input
                       type="datetime-local"
                       value={formInteractionOccurredAt}
                       onChange={(e) => setFormInteractionOccurredAt(e.target.value)}
-                      required
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500"
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none transition-colors"
                     />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 2: Observações / Anotações */}
+              {interactionQuizStep === 2 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      O que foi tratado nesta interação?
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Anote os principais pontos discutidos, objeções ou decisões tomadas.
+                    </p>
                   </div>
 
                   <div>
-                    <label className="block text-slate-300 font-medium mb-1">
-                      Responsável
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Observações (opcional)
+                    </label>
+                    <textarea
+                      rows={5}
+                      autoFocus
+                      value={formInteractionNotes}
+                      onChange={(e) => setFormInteractionNotes(e.target.value)}
+                      placeholder="Ex: Falamos com o síndico sobre a proposta de portaria remota. Ele pediu para reavaliar os valores..."
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none transition-colors"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 3: Próximo Follow-up */}
+              {interactionQuizStep === 3 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Agendar próximo follow-up?
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Se necessário, defina a data limite para o próximo contato com este lead.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Data do Próximo Follow-up (opcional)
+                    </label>
+                    <input
+                      type="date"
+                      autoFocus
+                      value={formInteractionNextFollowUpDate}
+                      onChange={(e) => setFormInteractionNextFollowUpDate(e.target.value)}
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none transition-colors"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 4: Responsável & Confirmação */}
+              {interactionQuizStep === 4 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Confirmar registro de interação
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Verifique o responsável e confirme a gravação.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Responsável pelo Registro
                     </label>
                     <select
                       value={formInteractionResponsibleId}
                       onChange={(e) => setFormInteractionResponsibleId(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 cursor-pointer"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none transition-colors"
                     >
                       {profiles.map((p) => (
                         <option key={p.id} value={p.id}>
-                          {p.full_name || 'Sem nome'}
+                          {p.full_name || 'Sem nome'} {p.id === currentProfile.id ? '(Você)' : ''}
                         </option>
                       ))}
                     </select>
                   </div>
-                </div>
-              )}
 
-              {/* Step 3: Observações */}
-              {interactionQuizStep === 3 && (
-                <div className="space-y-4 animate-in fade-in duration-200">
-                  <div>
-                    <h4 className="text-base font-bold text-white mb-1">
-                      Observações da Interação
-                    </h4>
-                    <p className="text-slate-400 text-xs">
-                      Descreva o que foi conversado, expectativas ou alinhamentos:
-                    </p>
-                  </div>
-
-                  <textarea
-                    rows={4}
-                    autoFocus
-                    value={formInteractionNotes}
-                    onChange={(e) => setFormInteractionNotes(e.target.value)}
-                    placeholder="Ex: Conversa com o síndico para apresentar proposta de portaria e agendar vistoria técnica..."
-                    className="w-full px-3.5 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs placeholder-slate-500 focus:outline-none focus:border-indigo-500 leading-relaxed"
-                  />
-                </div>
-              )}
-
-              {/* Step 4: Próximo Follow-up & Conclusão */}
-              {interactionQuizStep === 4 && (
-                <div className="space-y-4 animate-in fade-in duration-200">
-                  <div>
-                    <h4 className="text-base font-bold text-white mb-1">
-                      Agendar Próximo Follow-up?
-                    </h4>
-                    <p className="text-slate-400 text-xs">
-                      Defina uma data de retorno para o sistema priorizar este lead.
-                    </p>
-                  </div>
-
-                  <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-2xl space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-slate-300 font-medium">Data do Retorno</label>
-                      {formInteractionNextFollowUpDate && (
-                        <button
-                          type="button"
-                          onClick={() => setFormInteractionNextFollowUpDate('')}
-                          className="text-[10px] text-slate-400 hover:text-white cursor-pointer"
-                        >
-                          Remover data
-                        </button>
-                      )}
-                    </div>
-                    <input
-                      type="date"
-                      value={formInteractionNextFollowUpDate}
-                      onChange={(e) => setFormInteractionNextFollowUpDate(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700/80 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-
-                  <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-slate-400 space-y-1 text-[11px]">
-                    <div><span className="text-slate-500">Tipo:</span> {formInteractionType}</div>
-                    {formInteractionNotes && (
-                      <div className="truncate"><span className="text-slate-500">Notas:</span> {formInteractionNotes}</div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs space-y-1.5 text-slate-300">
+                    <div>Tipo: <strong>{formInteractionType}</strong></div>
+                    {formInteractionNextFollowUpDate && (
+                      <div>Próximo Follow-up: <strong>{formatDateBR(formInteractionNextFollowUpDate)}</strong></div>
                     )}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Footer */}
             <div className="px-6 py-4 border-t border-slate-800/80 bg-slate-950/60 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={
-                  interactionQuizStep === 1
-                    ? handleCloseInteractionModal
-                    : () => setInteractionQuizStep((p) => p - 1)
-                }
-                className="px-3.5 py-2 bg-slate-800 text-slate-300 text-xs font-medium rounded-xl hover:bg-slate-700 transition-colors cursor-pointer"
-              >
-                {interactionQuizStep === 1 ? 'Cancelar' : '← Voltar'}
-              </button>
+              <div>
+                {interactionQuizStep > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => setInteractionQuizStep((p) => p - 1)}
+                    disabled={formInteractionSaving}
+                    className="px-4 py-2 rounded-xl border border-slate-700 bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
+                  >
+                    ← Voltar
+                  </button>
+                )}
+              </div>
 
-              {interactionQuizStep < totalInteractionQuizSteps ? (
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => setInteractionQuizStep((p) => p + 1)}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
-                >
-                  <span>Próximo</span>
-                  <span>→</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => handleSubmitInteraction()}
+                  onClick={handleCloseInteractionModal}
                   disabled={formInteractionSaving}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  className="px-3 py-2 text-slate-400 hover:text-white text-xs cursor-pointer"
                 >
-                  {formInteractionSaving ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Salvando...</span>
-                    </>
-                  ) : (
-                    <span>Registrar Interação</span>
-                  )}
+                  Cancelar
                 </button>
-              )}
+
+                {interactionQuizStep < totalInteractionQuizSteps ? (
+                  <button
+                    type="button"
+                    onClick={() => setInteractionQuizStep((p) => p + 1)}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                  >
+                    Avançar →
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={handleSubmitInteraction}
+                    disabled={formInteractionSaving}
+                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    {formInteractionSaving ? 'Salvando...' : 'Salvar Interação'}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         </div>
