@@ -154,6 +154,9 @@ export default function LeadsModule({
   const [leadContacts, setLeadContacts] = useState<LeadContactRelation[]>([]);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
 
+  // UI View Mode (Default is Cards)
+  const [viewMode, setViewMode] = useState<'cards' | 'list'>('cards');
+
   // Loading and error states
   const [loading, setLoading] = useState<boolean>(true);
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -165,6 +168,10 @@ export default function LeadsModule({
   // Modal states: 'create' | 'edit' | 'view' | null
   const [modalMode, setModalMode] = useState<'create' | 'edit' | 'view' | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+
+  // Dynamic Quiz Step for Lead Create/Edit (1 to 6)
+  const [quizStep, setQuizStep] = useState<number>(1);
+  const totalQuizSteps = 6;
 
   // Form field states for Lead
   const [formName, setFormName] = useState('');
@@ -183,9 +190,12 @@ export default function LeadsModule({
   const [formSaving, setFormSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Interaction Modal States
+  // Interaction Modal States with Dynamic Quiz Steps (1 to 4)
   const [interactionModalMode, setInteractionModalMode] = useState<'create' | 'edit' | null>(null);
   const [selectedInteraction, setSelectedInteraction] = useState<Interaction | null>(null);
+  const [interactionQuizStep, setInteractionQuizStep] = useState<number>(1);
+  const totalInteractionQuizSteps = 4;
+
   const [formInteractionType, setFormInteractionType] = useState<string>('Ligação');
   const [formInteractionOccurredAt, setFormInteractionOccurredAt] = useState<string>('');
   const [formInteractionResponsibleId, setFormInteractionResponsibleId] = useState<string>('');
@@ -198,43 +208,39 @@ export default function LeadsModule({
   const loadData = useCallback(async () => {
     setLoading(true);
     try {
-      // 1. Load pipeline stages ordered by position
+      // 1. Pipeline stages
       const stagesRes = await supabase
         .from('pipeline_stages')
         .select('*')
         .order('position', { ascending: true });
-      const stagesList = stagesRes.data || [];
-      setStages(stagesList);
+      setStages(stagesRes.data || []);
 
-      // 2. Load profiles
+      // 2. Profiles
       const profilesRes = await supabase
         .from('profiles')
         .select('id, full_name, role');
-      const profilesList = profilesRes.data || [];
-      setProfiles(profilesList);
+      setProfiles(profilesRes.data || []);
 
-      // 3. Load services dynamically
+      // 3. Services
       const servicesRes = await supabase
         .from('services')
         .select('*');
-      const servicesList = servicesRes.data || [];
-      setServices(servicesList);
+      setServices(servicesRes.data || []);
 
-      // 4. Load leads
+      // 4. Leads
       const leadsRes = await supabase
         .from('leads')
         .select('*')
         .order('created_at', { ascending: false });
-      const leadsList = leadsRes.data || [];
-      setLeads(leadsList);
+      setLeads(leadsRes.data || []);
 
-      // 5. Load lead_services relations
+      // 5. Lead services
       const leadServicesRes = await supabase
         .from('lead_services')
         .select('lead_id, service_id');
       setLeadServices(leadServicesRes.data || []);
 
-      // 6. Load contacts and lead_contacts relations
+      // 6. Contacts and Relations
       const contactsRes = await supabase
         .from('contacts')
         .select('id, name, role_title, phone, email');
@@ -245,7 +251,7 @@ export default function LeadsModule({
         .select('lead_id, contact_id');
       setLeadContacts(leadContactsRes.data || []);
 
-      // 7. Load interactions
+      // 7. Interactions
       const interactionsRes = await supabase
         .from('interactions')
         .select('*')
@@ -280,7 +286,7 @@ export default function LeadsModule({
     }
   }, [initialSelectedLeadId, leads, onClearInitialLead]);
 
-  // Lookup maps for fast and resilient rendering
+  // Lookup maps
   const stageMap = useMemo(() => {
     const map = new Map<string, string>();
     stages.forEach((s) => map.set(s.id, s.name));
@@ -299,7 +305,6 @@ export default function LeadsModule({
     return map;
   }, [services]);
 
-  // Get services associated with a specific lead
   const getLeadServices = useCallback(
     (leadId: string): string[] => {
       return leadServices
@@ -309,7 +314,6 @@ export default function LeadsModule({
     [leadServices]
   );
 
-  // Get contacts associated with a specific lead
   const getContactsForLead = useCallback(
     (leadId: string): ContactSummary[] => {
       const contactIds = leadContacts
@@ -318,6 +322,15 @@ export default function LeadsModule({
       return contacts.filter((c) => contactIds.includes(c.id));
     },
     [leadContacts, contacts]
+  );
+
+  const getInteractionsForLead = useCallback(
+    (leadId: string): Interaction[] => {
+      return interactions
+        .filter((i) => i.lead_id === leadId)
+        .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
+    },
+    [interactions]
   );
 
   // Filter leads by search term
@@ -332,7 +345,6 @@ export default function LeadsModule({
     );
   }, [leads, searchTerm]);
 
-  // Check if a stage represents "Perdido" using is_lost or fallback to name
   const checkIsLostStage = useCallback(
     (stageId?: string | null): boolean => {
       if (!stageId) return false;
@@ -346,7 +358,6 @@ export default function LeadsModule({
     [stages]
   );
 
-  // Handle stage change in form: if moved away from Lost, clear loss_reason
   const handleStageChange = (newStageId: string) => {
     setFormCurrentStageId(newStageId);
     if (!checkIsLostStage(newStageId)) {
@@ -366,14 +377,13 @@ export default function LeadsModule({
     setFormCity('');
     setFormLeadSource('Indicação (BNI/rede)');
     setFormTemperature('Morno');
-    // If no stage chosen, use first available
     const initialStageId = stages.length > 0 ? stages[0].id : '';
     setFormCurrentStageId(initialStageId);
-    // Default responsible to current profile
     setFormResponsibleUserId(currentProfile.id);
     setFormLossReason('');
     setFormSelectedServices([]);
     setSelectedLead(null);
+    setQuizStep(1);
     setModalMode('create');
   };
 
@@ -396,18 +406,9 @@ export default function LeadsModule({
     setFormLossReason(isStageLost ? (lead.loss_reason || '') : '');
     setFormSelectedServices(getLeadServices(lead.id));
     setSelectedLead(lead);
+    setQuizStep(1);
     setModalMode('edit');
   };
-
-  // Get interactions for a specific lead
-  const getInteractionsForLead = useCallback(
-    (leadId: string): Interaction[] => {
-      return interactions
-        .filter((i) => i.lead_id === leadId)
-        .sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
-    },
-    [interactions]
-  );
 
   // Open modal in view mode
   const handleOpenView = (lead: Lead) => {
@@ -419,9 +420,177 @@ export default function LeadsModule({
     setModalMode(null);
     setSelectedLead(null);
     setFormError(null);
+    setQuizStep(1);
   };
 
-  // Interaction handlers
+  // Toggle service selection in form
+  const toggleService = (serviceId: string) => {
+    setFormSelectedServices((prev) =>
+      prev.includes(serviceId)
+        ? prev.filter((id) => id !== serviceId)
+        : [...prev, serviceId]
+    );
+  };
+
+  // Quiz step validation
+  const handleNextQuizStep = () => {
+    setFormError(null);
+    if (quizStep === 1) {
+      if (!formName.trim()) {
+        setFormError('Informe o nome do condomínio para avançar.');
+        return;
+      }
+    }
+    if (quizStep === 2) {
+      const unitCountTrimmed = formUnitCount.trim();
+      if (!unitCountTrimmed) {
+        setFormError('Informe o número de unidades do condomínio.');
+        return;
+      }
+      const num = parseInt(unitCountTrimmed, 10);
+      if (isNaN(num) || num <= 0) {
+        setFormError('O número de unidades deve ser um número válido maior que zero.');
+        return;
+      }
+    }
+    if (quizStep === 5) {
+      const stageIdToUse = formCurrentStageId || (stages.length > 0 ? stages[0].id : null);
+      if (checkIsLostStage(stageIdToUse) && !formLossReason.trim()) {
+        setFormError('Informe o motivo de perda para este estágio.');
+        return;
+      }
+    }
+
+    if (quizStep < totalQuizSteps) {
+      setQuizStep((prev) => prev + 1);
+    }
+  };
+
+  const handlePrevQuizStep = () => {
+    setFormError(null);
+    if (quizStep > 1) {
+      setQuizStep((prev) => prev - 1);
+    }
+  };
+
+  // Save Lead (Create or Edit)
+  const handleSubmitLead = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setFormError(null);
+
+    if (!formName.trim()) {
+      setQuizStep(1);
+      setFormError('O nome do condomínio é obrigatório.');
+      return;
+    }
+
+    const unitCountTrimmed = formUnitCount.trim();
+    if (!unitCountTrimmed) {
+      setQuizStep(2);
+      setFormError('O número de unidades é obrigatório.');
+      return;
+    }
+    const unitCountNum = parseInt(unitCountTrimmed, 10);
+    if (isNaN(unitCountNum) || unitCountNum <= 0) {
+      setQuizStep(2);
+      setFormError('O número de unidades deve ser um valor numérico válido maior que zero.');
+      return;
+    }
+
+    const stageIdToUse = formCurrentStageId || (stages.length > 0 ? stages[0].id : null);
+    const isStageLost = checkIsLostStage(stageIdToUse);
+
+    if (isStageLost && !formLossReason.trim()) {
+      setQuizStep(5);
+      setFormError('O preenchimento do motivo de perda é obrigatório quando o estágio for Perdido.');
+      return;
+    }
+
+    setFormSaving(true);
+
+    try {
+      const leadPayload = {
+        name: formName.trim(),
+        cnpj: formCnpj.trim() || null,
+        condominium_type: formCondominiumType || 'Residencial',
+        administrator: formAdministrator.trim() || null,
+        unit_count: unitCountNum,
+        address: formAddress.trim() || null,
+        city: formCity.trim() || null,
+        lead_source: formLeadSource || null,
+        temperature: formTemperature || 'Morno',
+        current_stage_id: stageIdToUse,
+        responsible_user_id: formResponsibleUserId || currentProfile.id,
+        loss_reason: isStageLost ? formLossReason.trim() : null,
+      };
+
+      let savedLeadId: string | null = null;
+
+      if (modalMode === 'create') {
+        const { data: createdLead, error: createError } = await supabase
+          .from('leads')
+          .insert([leadPayload])
+          .select()
+          .single();
+
+        if (createError) throw createError;
+        if (!createdLead) throw new Error('Não foi possível recuperar o lead recém-criado.');
+
+        savedLeadId = createdLead.id;
+        setLeads((prev) => [createdLead, ...prev]);
+        setStatusFeedback({
+          type: 'success',
+          message: `Condomínio "${createdLead.name}" cadastrado com sucesso!`,
+        });
+      } else if (modalMode === 'edit' && selectedLead) {
+        savedLeadId = selectedLead.id;
+        const { data: updatedLead, error: updateError } = await supabase
+          .from('leads')
+          .update(leadPayload)
+          .eq('id', selectedLead.id)
+          .select()
+          .single();
+
+        if (updateError) throw updateError;
+        if (!updatedLead) throw new Error('Falha ao atualizar o lead.');
+
+        setLeads((prev) =>
+          prev.map((item) => (item.id === selectedLead.id ? updatedLead : item))
+        );
+        setStatusFeedback({
+          type: 'success',
+          message: `Condomínio "${updatedLead.name}" atualizado com sucesso!`,
+        });
+      }
+
+      // Sync lead_services junction
+      if (savedLeadId) {
+        await supabase.from('lead_services').delete().eq('lead_id', savedLeadId);
+
+        if (formSelectedServices.length > 0) {
+          const serviceInserts = formSelectedServices.map((sId) => ({
+            lead_id: savedLeadId!,
+            service_id: sId,
+          }));
+          await supabase.from('lead_services').insert(serviceInserts);
+        }
+
+        const freshLeadServices = await supabase
+          .from('lead_services')
+          .select('lead_id, service_id');
+        setLeadServices(freshLeadServices.data || []);
+      }
+
+      handleCloseModal();
+    } catch (err: any) {
+      console.error('Error saving lead:', err);
+      setFormError(err.message || 'Erro ao salvar o lead. Tente novamente.');
+    } finally {
+      setFormSaving(false);
+    }
+  };
+
+  // Direct Interaction Handlers
   const handleOpenCreateInteraction = (lead: Lead) => {
     setSelectedLead(lead);
     setFormInteractionError(null);
@@ -434,6 +603,7 @@ export default function LeadsModule({
     setFormInteractionResponsibleId(currentProfile.id);
     setFormInteractionNotes('');
     setFormInteractionNextFollowUpDate('');
+    setInteractionQuizStep(1);
     setInteractionModalMode('create');
   };
 
@@ -453,6 +623,7 @@ export default function LeadsModule({
     setFormInteractionNextFollowUpDate(
       interaction.next_follow_up_date ? interaction.next_follow_up_date.slice(0, 10) : ''
     );
+    setInteractionQuizStep(1);
     setInteractionModalMode('edit');
   };
 
@@ -460,10 +631,11 @@ export default function LeadsModule({
     setInteractionModalMode(null);
     setSelectedInteraction(null);
     setFormInteractionError(null);
+    setInteractionQuizStep(1);
   };
 
-  const handleSubmitInteraction = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmitInteraction = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!selectedLead) return;
     setFormInteractionError(null);
     setFormInteractionSaving(true);
@@ -524,249 +696,117 @@ export default function LeadsModule({
     }
   };
 
-  const getInteractionTypeBadge = (type: string) => {
-    switch (type) {
-      case 'WhatsApp':
-        return (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950/80 border border-emerald-700/60 text-emerald-300 font-medium">
-            WhatsApp
-          </span>
-        );
-      case 'Reunião':
-        return (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-purple-950/80 border border-purple-700/60 text-purple-300 font-medium">
-            Reunião
-          </span>
-        );
-      case 'E-mail':
-        return (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-sky-950/80 border border-sky-700/60 text-sky-300 font-medium">
-            E-mail
-          </span>
-        );
-      case 'Evento BNI':
-        return (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-amber-950/80 border border-amber-700/60 text-amber-300 font-medium">
-            Evento BNI
-          </span>
-        );
-      case 'Ligação':
-      default:
-        return (
-          <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-950/80 border border-indigo-700/60 text-indigo-300 font-medium">
-            Ligação
-          </span>
-        );
-    }
-  };
-
-  // Toggle service selection in form
-  const toggleService = (serviceId: string) => {
-    setFormSelectedServices((prev) =>
-      prev.includes(serviceId)
-        ? prev.filter((id) => id !== serviceId)
-        : [...prev, serviceId]
-    );
-  };
-
-  // Save Lead (Create or Edit)
-  const handleSubmitLead = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-
-    // 1. Validate mandatory field: name
-    if (!formName.trim()) {
-      setFormError('O nome do condomínio é obrigatório.');
-      return;
-    }
-
-    // 1. Validate mandatory field: unit_count
-    const unitCountTrimmed = formUnitCount.trim();
-    if (!unitCountTrimmed) {
-      setFormError('O número de unidades é obrigatório.');
-      return;
-    }
-    const unitCountNum = parseInt(unitCountTrimmed, 10);
-    if (isNaN(unitCountNum) || unitCountNum <= 0) {
-      setFormError('O número de unidades deve ser um valor numérico válido maior que zero.');
-      return;
-    }
-
-    const stageIdToUse = formCurrentStageId || (stages.length > 0 ? stages[0].id : null);
-    const isStageLost = checkIsLostStage(stageIdToUse);
-
-    // 2. Validate mandatory loss_reason if stage is Lost
-    if (isStageLost && !formLossReason.trim()) {
-      setFormError('O preenchimento do motivo de perda é obrigatório quando o estágio for Perdido.');
-      return;
-    }
-
-    setFormSaving(true);
-
-    try {
-      const leadPayload = {
-        name: formName.trim(),
-        cnpj: formCnpj.trim() || null,
-        condominium_type: formCondominiumType || null,
-        administrator: formAdministrator.trim() || null,
-        unit_count: unitCountNum,
-        address: formAddress.trim() || null,
-        city: formCity.trim() || null,
-        lead_source: formLeadSource || null,
-        temperature: formTemperature || null,
-        current_stage_id: stageIdToUse,
-        responsible_user_id: formResponsibleUserId || null,
-        loss_reason: isStageLost ? formLossReason.trim() : null,
-      };
-
-      if (modalMode === 'create') {
-        // Insert lead
-        const { data: newLead, error: insertError } = await supabase
-          .from('leads')
-          .insert([leadPayload])
-          .select()
-          .single();
-
-        if (insertError) {
-          throw new Error(insertError.message);
-        }
-
-        // Insert junction rows in lead_services
-        if (newLead?.id && formSelectedServices.length > 0) {
-          const serviceRows = formSelectedServices.map((serviceId) => ({
-            lead_id: newLead.id,
-            service_id: serviceId,
-          }));
-          const { error: relError } = await supabase
-            .from('lead_services')
-            .insert(serviceRows);
-          if (relError) {
-            console.warn('Warning inserting lead_services:', relError.message);
-          }
-        }
-
-        setStatusFeedback({
-          type: 'success',
-          message: `Lead "${leadPayload.name}" cadastrado com sucesso!`,
-        });
-      } else if (modalMode === 'edit' && selectedLead) {
-        // Update lead
-        const { error: updateError } = await supabase
-          .from('leads')
-          .update(leadPayload)
-          .eq('id', selectedLead.id);
-
-        if (updateError) {
-          throw new Error(updateError.message);
-        }
-
-        // Sync lead_services: delete existing then insert new
-        await supabase
-          .from('lead_services')
-          .delete()
-          .eq('lead_id', selectedLead.id);
-
-        if (formSelectedServices.length > 0) {
-          const serviceRows = formSelectedServices.map((serviceId) => ({
-            lead_id: selectedLead.id,
-            service_id: serviceId,
-          }));
-          const { error: relError } = await supabase
-            .from('lead_services')
-            .insert(serviceRows);
-          if (relError) {
-            console.warn('Warning syncing lead_services:', relError.message);
-          }
-        }
-
-        setStatusFeedback({
-          type: 'success',
-          message: `Lead "${leadPayload.name}" atualizado com sucesso!`,
-        });
-      }
-
-      handleCloseModal();
-      await loadData();
-    } catch (err: any) {
-      console.error('Error saving lead:', err);
-      setFormError(err.message || 'Erro ao salvar o lead. Tente novamente.');
-    } finally {
-      setFormSaving(false);
-    }
-  };
-
-  // Temperature color helper
   const getTemperatureBadge = (temp?: string | null) => {
     switch (temp) {
       case 'Quente':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-500/15 text-rose-300 border border-rose-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse" />
+          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-400">
+            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
             Quente
-          </span>
-        );
-      case 'Morno':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-            Morno
           </span>
         );
       case 'Frio':
         return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-sky-500/15 text-sky-300 border border-sky-500/30">
-            <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-400">
+            <span className="w-2 h-2 rounded-full bg-sky-500" />
             Frio
           </span>
         );
+      case 'Morno':
       default:
         return (
-          <span className="text-xs text-slate-400">
-            {temp || 'Não definido'}
+          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400">
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
+            Morno
           </span>
         );
     }
   };
 
+  const getInteractionTypeBadge = (type: string) => {
+    switch (type) {
+      case 'WhatsApp':
+        return <span className="text-[11px] font-medium text-emerald-400">WhatsApp</span>;
+      case 'Reunião':
+        return <span className="text-[11px] font-medium text-purple-400">Reunião</span>;
+      case 'E-mail':
+        return <span className="text-[11px] font-medium text-sky-400">E-mail</span>;
+      case 'Evento BNI':
+        return <span className="text-[11px] font-medium text-amber-400">Evento BNI</span>;
+      case 'Ligação':
+      default:
+        return <span className="text-[11px] font-medium text-indigo-400">Ligação</span>;
+    }
+  };
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      {/* Top Section */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-800">
+    <div className="w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+      {/* Top Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-800/80">
         <div>
+          <div className="flex items-center gap-2 text-xs font-medium text-slate-400 mb-1">
+            <span>CRM</span>
+            <span aria-hidden="true">·</span>
+            <span>Oportunidades</span>
+            <span aria-hidden="true">·</span>
+            <span className="text-indigo-400 font-mono tabular-nums">{leads.length} condomínios</span>
+          </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            Leads
+            Leads & Condomínios
           </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Gestão comercial de condomínios e oportunidades
-          </p>
         </div>
+
         <div className="flex items-center gap-3">
+          {/* Segmented View Mode Toggle */}
+          <div className="flex items-center p-1 bg-slate-900 border border-slate-800 rounded-xl">
+            <button
+              type="button"
+              onClick={() => setViewMode('cards')}
+              title="Visualização em Cards"
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                viewMode === 'cards'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+              </svg>
+              <span>Cards</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('list')}
+              title="Visualização em Lista"
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5 cursor-pointer ${
+                viewMode === 'list'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+              <span>Lista</span>
+            </button>
+          </div>
+
           <button
             onClick={handleOpenCreate}
-            className="inline-flex items-center justify-center px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 text-white text-sm font-medium rounded-lg shadow-sm transition-colors cursor-pointer"
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs sm:text-sm font-semibold rounded-xl shadow-md transition-colors flex items-center gap-2 cursor-pointer"
           >
-            <svg
-              className="w-4 h-4 mr-2"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4v16m8-8H4"
-              />
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
             Novo lead
           </button>
         </div>
       </div>
 
-      {/* Status Feedback banner */}
+      {/* Feedback Alert */}
       {statusFeedback && (
         <div
-          className={`mt-4 p-4 rounded-lg flex items-center justify-between text-sm ${
+          className={`mt-4 p-4 rounded-xl flex items-center justify-between text-xs sm:text-sm ${
             statusFeedback.type === 'success'
               ? 'bg-emerald-950/70 border border-emerald-500/40 text-emerald-200'
               : 'bg-rose-950/70 border border-rose-500/40 text-rose-200'
@@ -782,35 +822,25 @@ export default function LeadsModule({
         </div>
       )}
 
-      {/* Search and stats bar */}
+      {/* Search Bar */}
       <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="relative flex-1 max-w-md">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-              />
+          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </div>
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Buscar condomínio por nome ou cidade..."
-            className="w-full pl-9 pr-4 py-2 bg-slate-900 border border-slate-800 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
+            placeholder="Buscar condomínio por nome, cidade ou administradora..."
+            className="w-full pl-10 pr-4 py-2 bg-slate-900/90 border border-slate-800 rounded-xl text-xs sm:text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-colors"
           />
           {searchTerm && (
             <button
               onClick={() => setSearchTerm('')}
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 hover:text-white"
+              className="absolute inset-y-0 right-0 pr-3 flex items-center text-xs text-slate-400 hover:text-white cursor-pointer"
             >
               Limpar
             </button>
@@ -818,66 +848,188 @@ export default function LeadsModule({
         </div>
 
         <div className="flex items-center gap-2 text-xs text-slate-400">
-          <span>Total:</span>
-          <span className="font-semibold text-white px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
-            {leads.length} {leads.length === 1 ? 'condomínio' : 'condomínios'}
+          <span>Mostrando:</span>
+          <span className="font-semibold text-white px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 font-mono tabular-nums">
+            {filteredLeads.length} {filteredLeads.length === 1 ? 'registro' : 'registros'}
           </span>
         </div>
       </div>
 
-      {/* Main Table / List */}
-      <div className="mt-6 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
-        {loading ? (
-          <div className="py-16 flex flex-col items-center justify-center text-slate-400">
-            <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
-            <p className="text-sm">Carregando lista de condomínios...</p>
-          </div>
-        ) : filteredLeads.length === 0 ? (
-          <div className="py-16 px-4 text-center">
-            <div className="w-12 h-12 mx-auto rounded-full bg-slate-800 flex items-center justify-center text-slate-400 mb-3">
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
+      {/* Content: Cards or List View */}
+      {loading ? (
+        <div className="py-20 flex flex-col items-center justify-center text-slate-400">
+          <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3" />
+          <p className="text-xs sm:text-sm">Carregando carteira de condomínios...</p>
+        </div>
+      ) : filteredLeads.length === 0 ? (
+        <div className="mt-8 py-16 px-4 bg-slate-900/40 border border-slate-800/80 rounded-2xl text-center">
+          <h3 className="text-base font-semibold text-white mb-1">
+            {searchTerm ? 'Nenhum lead encontrado' : 'Nenhum condomínio cadastrado'}
+          </h3>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
+            {searchTerm
+              ? 'Ajuste os termos da sua pesquisa para localizar o condomínio.'
+              : 'Comece adicionando seu primeiro lead comercial no CRM.'}
+          </p>
+          {!searchTerm && (
+            <button
+              onClick={handleOpenCreate}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer"
+            >
+              Cadastrar primeiro condomínio
+            </button>
+          )}
+        </div>
+      ) : viewMode === 'cards' ? (
+        /* CARDS VIEW (DEFAULT) */
+        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4.5">
+          {filteredLeads.map((lead) => {
+            const stageName = lead.current_stage_id
+              ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
+              : 'Estágio inicial';
+            const responsibleName = lead.responsible_user_id
+              ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
+              : 'Não atribuído';
+            const leadInteractions = getInteractionsForLead(lead.id);
+            const latestInteraction = leadInteractions[0];
+
+            return (
+              <div
+                key={lead.id}
+                className="bg-slate-900/80 border border-slate-800/90 hover:border-slate-700 rounded-2xl p-5 shadow-lg transition-all flex flex-col justify-between group"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"
-                />
-              </svg>
-            </div>
-            <h3 className="text-base font-medium text-white mb-1">
-              {searchTerm ? 'Nenhum lead encontrado' : 'Nenhum lead cadastrado ainda'}
-            </h3>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
-              {searchTerm
-                ? 'Tente ajustar os termos da sua pesquisa para encontrar o condomínio.'
-                : 'Cadastre seu primeiro condomínio para iniciar o acompanhamento comercial.'}
-            </p>
-            {!searchTerm && (
-              <button
-                onClick={handleOpenCreate}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer"
-              >
-                Cadastrar primeiro lead
-              </button>
-            )}
-          </div>
-        ) : (
+                <div>
+                  {/* Card Header */}
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenView(lead)}
+                        className="text-left font-bold text-base text-white group-hover:text-indigo-400 transition-colors cursor-pointer leading-tight"
+                      >
+                        {lead.name}
+                      </button>
+                      <div className="flex items-center gap-1.5 text-xs text-slate-400 mt-1">
+                        <span>{lead.city || 'Cidade não informada'}</span>
+                        {lead.administrator && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="truncate max-w-[140px]">Adm: {lead.administrator}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {getTemperatureBadge(lead.temperature)}
+                    </div>
+                  </div>
+
+                  {/* Metadata Row */}
+                  <div className="grid grid-cols-2 gap-2 py-3 border-y border-slate-800/60 my-3 text-xs">
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Porte / Tipo</span>
+                      <span className="text-slate-200 font-medium">
+                        <span className="font-mono tabular-nums">{lead.unit_count || '-'}</span> un. · {lead.condominium_type || 'Residencial'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-slate-500 block text-[11px]">Estágio Funil</span>
+                      <span className="text-indigo-300 font-medium truncate block">
+                        {stageName}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Latest Interaction Snapshot */}
+                  <div className="mb-4 text-xs">
+                    <span className="text-slate-500 block text-[11px] mb-1">Última Interação</span>
+                    {latestInteraction ? (
+                      <div className="text-slate-300 flex items-center justify-between gap-2 bg-slate-950/60 p-2 rounded-lg border border-slate-800/60">
+                        <div className="flex items-center gap-1.5 truncate">
+                          {getInteractionTypeBadge(latestInteraction.interaction_type)}
+                          <span className="text-slate-400 text-[11px] truncate">
+                            {latestInteraction.notes || 'Sem observações'}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-500 shrink-0 font-mono">
+                          {formatDateBR(latestInteraction.occurred_at)}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-slate-500 italic text-[11px]">
+                        Nenhuma interação registrada ainda.
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Card Footer: Responsible & Action Buttons */}
+                <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400 min-w-0">
+                    <span className="w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] text-slate-300 uppercase font-semibold shrink-0">
+                      {responsibleName.charAt(0)}
+                    </span>
+                    <span className="text-xs truncate max-w-[90px] text-slate-300">
+                      {responsibleName}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleOpenCreateInteraction(lead)}
+                      title="Registrar interação"
+                      className="px-2.5 py-1.5 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                      </svg>
+                      <span>Interação</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenView(lead)}
+                      title="Ver detalhes"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEdit(lead)}
+                      title="Editar condomínio"
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* LIST VIEW */
+        <div className="mt-6 bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
-                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 text-xs uppercase tracking-wider font-semibold">
+                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 text-xs font-semibold uppercase tracking-wider">
                   <th className="py-3.5 px-4 sm:px-6">Condomínio</th>
                   <th className="py-3.5 px-4 hidden md:table-cell">Cidade</th>
                   <th className="py-3.5 px-4 hidden lg:table-cell">Tipo</th>
                   <th className="py-3.5 px-4">Temperatura</th>
                   <th className="py-3.5 px-4">Estágio</th>
                   <th className="py-3.5 px-4 hidden sm:table-cell">Responsável</th>
-                  <th className="py-3.5 px-4 hidden xl:table-cell">Criação</th>
                   <th className="py-3.5 px-4 text-right">Ações</th>
                 </tr>
               </thead>
@@ -889,38 +1041,34 @@ export default function LeadsModule({
                   const responsibleName = lead.responsible_user_id
                     ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
                     : 'Não atribuído';
-                  const createdDate = lead.created_at
-                    ? new Date(lead.created_at).toLocaleDateString('pt-BR')
-                    : '-';
 
                   return (
-                    <tr
-                      key={lead.id}
-                      className="hover:bg-slate-800/40 transition-colors"
-                    >
+                    <tr key={lead.id} className="hover:bg-slate-800/40 transition-colors">
                       <td className="py-3.5 px-4 sm:px-6 font-medium text-white">
-                        <div className="flex flex-col">
-                          <span>{lead.name}</span>
-                          {lead.administrator && (
-                            <span className="text-[11px] text-slate-400">
-                              Adm: {lead.administrator}
-                            </span>
-                          )}
-                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenView(lead)}
+                          className="text-left font-semibold text-white hover:text-indigo-400 transition-colors cursor-pointer"
+                        >
+                          {lead.name}
+                        </button>
+                        {lead.administrator && (
+                          <span className="text-[11px] text-slate-400 block">
+                            Adm: {lead.administrator}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 text-slate-300 hidden md:table-cell">
                         {lead.city || '-'}
                       </td>
                       <td className="py-3.5 px-4 text-slate-300 hidden lg:table-cell">
-                        <span className="text-xs px-2 py-0.5 rounded bg-slate-800 border border-slate-700/60">
-                          {lead.condominium_type || 'Residencial'}
-                        </span>
+                        {lead.condominium_type || 'Residencial'}
                       </td>
                       <td className="py-3.5 px-4">
                         {getTemperatureBadge(lead.temperature)}
                       </td>
                       <td className="py-3.5 px-4">
-                        <span className="text-xs font-medium text-indigo-300 bg-indigo-950/60 border border-indigo-800/50 px-2 py-0.5 rounded">
+                        <span className="text-xs font-medium text-indigo-300">
                           {stageName}
                         </span>
                       </td>
@@ -934,9 +1082,6 @@ export default function LeadsModule({
                           </span>
                         </div>
                       </td>
-                      <td className="py-3.5 px-4 text-slate-400 text-xs hidden xl:table-cell">
-                        {createdDate}
-                      </td>
                       <td className="py-3.5 px-4 text-right">
                         <div className="inline-flex items-center gap-1">
                           <button
@@ -945,18 +1090,8 @@ export default function LeadsModule({
                             aria-label="Registrar interação"
                             className="p-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/60 transition-colors cursor-pointer"
                           >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-                              />
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
                             </svg>
                           </button>
                           <button
@@ -964,24 +1099,9 @@ export default function LeadsModule({
                             title="Visualizar detalhes"
                             className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
                           >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-                              />
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-                              />
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                             </svg>
                           </button>
                           <button
@@ -989,18 +1109,8 @@ export default function LeadsModule({
                             title="Editar lead"
                             className="p-1.5 rounded-lg text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/60 transition-colors cursor-pointer"
                           >
-                            <svg
-                              className="w-4 h-4"
-                              fill="none"
-                              stroke="currentColor"
-                              viewBox="0 0 24 24"
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                strokeWidth={2}
-                                d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                              />
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                             </svg>
                           </button>
                         </div>
@@ -1011,347 +1121,465 @@ export default function LeadsModule({
               </tbody>
             </table>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* Modal / Drawer for Create & Edit */}
+      {/* DYNAMIC QUIZ-STYLE MODAL FOR LEAD CREATE / EDIT */}
       {(modalMode === 'create' || modalMode === 'edit') && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="relative w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-8">
-            {/* Header */}
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
-              <div>
-                <h3 className="text-lg font-bold text-white">
-                  {modalMode === 'create' ? 'Novo Condomínio (Lead)' : 'Editar Condomínio'}
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Preencha as informações cadastrais e comerciais
-                </p>
-              </div>
-              <button
-                onClick={handleCloseModal}
-                disabled={formSaving}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]">
+            {/* Quiz Header & Progress Bar */}
+            <div className="px-6 pt-5 pb-4 border-b border-slate-800/80 bg-slate-950/60">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-indigo-950 border border-indigo-700/60 text-indigo-300">
+                    Etapa {quizStep} de {totalQuizSteps}
+                  </span>
+                  <span className="text-xs text-slate-400">
+                    {modalMode === 'create' ? 'Novo Condomínio' : 'Editar Condomínio'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseModal}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Visual Progress Bar */}
+              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                <div
+                  className="bg-indigo-500 h-full transition-all duration-300 ease-out rounded-full"
+                  style={{ width: `${(quizStep / totalQuizSteps) * 100}%` }}
+                />
+              </div>
             </div>
 
-            {/* Error Message */}
-            {formError && (
-              <div className="mx-6 mt-4 p-3 bg-rose-950/80 border border-rose-500/50 rounded-lg text-rose-200 text-xs flex items-center gap-2">
-                <span className="font-bold">Erro:</span>
-                <span>{formError}</span>
-              </div>
-            )}
+            {/* Quiz Body: Step by Step */}
+            <div className="p-6 sm:p-8 overflow-y-auto flex-1 text-sm">
+              {formError && (
+                <div className="mb-5 p-3.5 bg-rose-950/80 border border-rose-600/50 rounded-xl text-rose-200 text-xs">
+                  {formError}
+                </div>
+              )}
 
-            {/* Form */}
-            <form onSubmit={handleSubmitLead} className="p-6 space-y-6">
-              {/* Section 1: Dados do Condomínio */}
-              <div>
-                <h4 className="text-xs uppercase tracking-wider font-semibold text-indigo-400 mb-3">
-                  1. Dados do Condomínio
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="md:col-span-2">
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
+              {/* STEP 1: Identificação */}
+              {quizStep === 1 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Qual é o nome do condomínio?
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Informe o nome comercial ou identificador principal.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
                       Nome do Condomínio <span className="text-rose-400">*</span>
                     </label>
                     <input
                       type="text"
-                      required
+                      autoFocus
                       value={formName}
                       onChange={(e) => setFormName(e.target.value)}
-                      placeholder="Ex: Condomínio Edifício Solar das Flores"
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleNextQuizStep();
+                        }
+                      }}
+                      placeholder="Ex: Condomínio Edifício Solar das Palmeiras"
+                      className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      CNPJ
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      CNPJ (Opcional)
                     </label>
                     <input
                       type="text"
                       value={formCnpj}
                       onChange={(e) => setFormCnpj(e.target.value)}
-                      placeholder="00.000.000/0000-00"
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      placeholder="00.000.000/0001-00"
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 transition-colors font-mono"
                     />
                   </div>
+                </div>
+              )}
 
+              {/* STEP 2: Localização & Unidades */}
+              {quizStep === 2 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Tipo de Condomínio
-                    </label>
-                    <select
-                      value={formCondominiumType}
-                      onChange={(e) => setFormCondominiumType(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    >
-                      {CONDOMINIUM_TYPES.map((type) => (
-                        <option key={type} value={type}>
-                          {type}
-                        </option>
-                      ))}
-                    </select>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Onde está localizado e qual o porte?
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Informe a cidade e a quantidade de unidades autônomas.
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                        Cidade
+                      </label>
+                      <input
+                        type="text"
+                        autoFocus
+                        value={formCity}
+                        onChange={(e) => setFormCity(e.target.value)}
+                        placeholder="Ex: São Paulo"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                        Número de Unidades <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={formUnitCount}
+                        onChange={(e) => setFormUnitCount(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleNextQuizStep();
+                          }
+                        }}
+                        placeholder="Ex: 84"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none font-mono"
+                      />
+                    </div>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Administradora
-                    </label>
-                    <input
-                      type="text"
-                      value={formAdministrator}
-                      onChange={(e) => setFormAdministrator(e.target.value)}
-                      placeholder="Ex: Lello, Hub, etc."
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Quantidade de Unidades <span className="text-rose-400">*</span>
-                    </label>
-                    <input
-                      type="number"
-                      required
-                      min="1"
-                      value={formUnitCount}
-                      onChange={(e) => setFormUnitCount(e.target.value)}
-                      placeholder="Ex: 84"
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Cidade
-                    </label>
-                    <input
-                      type="text"
-                      value={formCity}
-                      onChange={(e) => setFormCity(e.target.value)}
-                      placeholder="Ex: São Paulo"
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Endereço
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Endereço Completo (Opcional)
                     </label>
                     <input
                       type="text"
                       value={formAddress}
                       onChange={(e) => setFormAddress(e.target.value)}
-                      placeholder="Rua, número, bairro"
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      placeholder="Ex: Av. Paulista, 1000 - Bela Vista"
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none"
                     />
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Section 2: Qualificação Comercial */}
-              <div className="pt-4 border-t border-slate-800">
-                <h4 className="text-xs uppercase tracking-wider font-semibold text-indigo-400 mb-3">
-                  2. Qualificação Comercial
-                </h4>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* STEP 3: Tipo & Gestão */}
+              {quizStep === 3 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Qual a tipologia e a administradora?
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Selecione a categoria do empreendimento e informe se possui administradora.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-2">
+                      Tipo de Condomínio
+                    </label>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      {CONDOMINIUM_TYPES.map((type) => (
+                        <button
+                          type="button"
+                          key={type}
+                          onClick={() => setFormCondominiumType(type)}
+                          className={`p-3 rounded-xl border text-xs font-medium transition-all text-left flex items-center justify-between cursor-pointer ${
+                            formCondominiumType === type
+                              ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200 font-semibold'
+                              : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                          }`}
+                        >
+                          <span>{type}</span>
+                          {formCondominiumType === type && <span className="text-indigo-400">✓</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Administradora de Condomínio
+                    </label>
+                    <input
+                      type="text"
+                      value={formAdministrator}
+                      onChange={(e) => setFormAdministrator(e.target.value)}
+                      placeholder="Ex: Lello, Hub, GK, etc."
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 4: Origem & Temperatura */}
+              {quizStep === 4 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Origem e Temperatura Comercial
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Qual a temperatura da oportunidade e como o lead foi originado?
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-2">
+                      Temperatura da Oportunidade
+                    </label>
+                    <div className="grid grid-cols-3 gap-3">
+                      {TEMPERATURE_OPTIONS.map((temp) => (
+                        <button
+                          type="button"
+                          key={temp}
+                          onClick={() => setFormTemperature(temp)}
+                          className={`p-3 rounded-xl border text-xs font-medium transition-all text-center cursor-pointer flex flex-col items-center gap-1.5 ${
+                            formTemperature === temp
+                              ? temp === 'Quente'
+                                ? 'bg-rose-950/80 border-rose-500 text-rose-200 font-bold'
+                                : temp === 'Morno'
+                                ? 'bg-amber-950/80 border-amber-500 text-amber-200 font-bold'
+                                : 'bg-sky-950/80 border-sky-500 text-sky-200 font-bold'
+                              : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                          }`}
+                        >
+                          <span
+                            className={`w-3 h-3 rounded-full ${
+                              temp === 'Quente'
+                                ? 'bg-rose-500'
+                                : temp === 'Morno'
+                                ? 'bg-amber-500'
+                                : 'bg-sky-500'
+                            }`}
+                          />
+                          <span>{temp}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-2">
                       Origem do Lead
                     </label>
-                    <select
-                      value={formLeadSource}
-                      onChange={(e) => setFormLeadSource(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    >
+                    <div className="grid grid-cols-2 gap-2">
                       {LEAD_SOURCES.map((source) => (
-                        <option key={source} value={source}>
+                        <button
+                          type="button"
+                          key={source}
+                          onClick={() => setFormLeadSource(source)}
+                          className={`p-2.5 rounded-xl border text-xs font-medium transition-all text-left cursor-pointer ${
+                            formLeadSource === source
+                              ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200'
+                              : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                          }`}
+                        >
                           {source}
-                        </option>
+                        </button>
                       ))}
-                    </select>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* STEP 5: Funil & Responsável */}
+              {quizStep === 5 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Estágio no Funil e Responsável
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Vincule ao pipeline de vendas e atribua ao consultor responsável.
+                    </p>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Temperatura
-                    </label>
-                    <select
-                      value={formTemperature}
-                      onChange={(e) => setFormTemperature(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    >
-                      {TEMPERATURE_OPTIONS.map((temp) => (
-                        <option key={temp} value={temp}>
-                          {temp}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Estágio do Pipeline
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                      Estágio no Funil
                     </label>
                     <select
                       value={formCurrentStageId}
                       onChange={(e) => handleStageChange(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-sm focus:outline-none cursor-pointer"
                     >
                       {stages.map((stage) => (
                         <option key={stage.id} value={stage.id}>
                           {stage.name}
                         </option>
                       ))}
-                      {stages.length === 0 && (
-                        <option value="">Carregando estágios...</option>
-                      )}
                     </select>
                   </div>
 
+                  {checkIsLostStage(formCurrentStageId) && (
+                    <div className="p-3.5 bg-amber-950/40 border border-amber-800/40 rounded-xl">
+                      <label className="block text-xs font-medium text-amber-300 mb-1.5">
+                        Motivo de Perda <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={formLossReason}
+                        onChange={(e) => setFormLossReason(e.target.value)}
+                        placeholder="Ex: Optou por concorrente por valor de taxa"
+                        className="w-full px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white text-xs focus:outline-none"
+                      />
+                    </div>
+                  )}
+
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                    <label className="block text-xs font-medium text-slate-300 mb-1.5">
                       Responsável Comercial
                     </label>
                     <select
                       value={formResponsibleUserId}
                       onChange={(e) => setFormResponsibleUserId(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-sm focus:outline-none cursor-pointer"
                     >
-                      {profiles.map((prof) => (
-                        <option key={prof.id} value={prof.id}>
-                          {prof.full_name || 'Sem nome'} ({prof.role || 'user'})
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.full_name || 'Sem nome'}
                         </option>
                       ))}
-                      {profiles.length === 0 && (
-                        <option value={currentProfile.id}>
-                          {currentProfile.full_name || 'Meu usuário'}
-                        </option>
-                      )}
                     </select>
                   </div>
-
-                  {checkIsLostStage(formCurrentStageId) && (
-                    <div className="md:col-span-2">
-                      <label className="block text-xs font-medium text-rose-300 mb-1">
-                        Motivo de Perda <span className="text-rose-400">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={formLossReason}
-                        onChange={(e) => setFormLossReason(e.target.value)}
-                        placeholder="Informe o motivo pelo qual o lead foi perdido..."
-                        className="w-full px-3 py-2 bg-slate-800 border border-rose-500/50 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 focus:ring-1 focus:ring-rose-500"
-                      />
-                    </div>
-                  )}
                 </div>
-              </div>
+              )}
 
-              {/* Section 3: Tipos de Trabalho / Serviços (múltipla seleção) */}
-              <div className="pt-4 border-t border-slate-800">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="text-xs uppercase tracking-wider font-semibold text-indigo-400">
-                    3. Tipos de Trabalho / Serviços de Interesse
-                  </h4>
-                  <span className="text-[11px] text-slate-400">
-                    {formSelectedServices.length} selecionado(s)
-                  </span>
-                </div>
-
-                {services.length === 0 ? (
-                  <p className="text-xs text-slate-500 italic">
-                    Nenhum serviço disponível em public.services.
-                  </p>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                    {services.map((service) => {
-                      const isSelected = formSelectedServices.includes(service.id);
-                      const serviceTitle = service.name || service.title || 'Serviço';
-
-                      return (
-                        <button
-                          type="button"
-                          key={service.id}
-                          onClick={() => toggleService(service.id)}
-                          className={`p-2.5 rounded-lg border text-left text-xs font-medium transition-all flex items-center justify-between cursor-pointer ${
-                            isSelected
-                              ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200'
-                              : 'bg-slate-800/60 border-slate-700/60 text-slate-300 hover:border-slate-600'
-                          }`}
-                        >
-                          <span className="truncate mr-2">{serviceTitle}</span>
-                          <span
-                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 text-[10px] ${
-                              isSelected
-                                ? 'bg-indigo-600 border-indigo-500 text-white'
-                                : 'border-slate-600 bg-slate-800'
-                            }`}
-                          >
-                            {isSelected && '✓'}
-                          </span>
-                        </button>
-                      );
-                    })}
+              {/* STEP 6: Serviços & Revisão */}
+              {quizStep === 6 && (
+                <div className="space-y-5 animate-in fade-in duration-200">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-1">
+                      Serviços de Interesse e Confirmação
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      Selecione os serviços que o condomínio busca e finalize o cadastro.
+                    </p>
                   </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-2">
+                      Serviços
+                    </label>
+                    {services.length === 0 ? (
+                      <p className="text-xs text-slate-500 italic">Nenhum serviço cadastrado.</p>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {services.map((service) => {
+                          const isSelected = formSelectedServices.includes(service.id);
+                          const title = service.name || service.title || 'Serviço';
+
+                          return (
+                            <button
+                              type="button"
+                              key={service.id}
+                              onClick={() => toggleService(service.id)}
+                              className={`p-3 rounded-xl border text-xs font-medium transition-all flex items-center justify-between text-left cursor-pointer ${
+                                isSelected
+                                  ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200'
+                                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                              }`}
+                            >
+                              <span className="truncate mr-2">{title}</span>
+                              <span className="text-xs font-bold text-indigo-400">
+                                {isSelected ? '✓' : '+'}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Review Box */}
+                  <div className="bg-slate-950/70 border border-slate-800 p-4 rounded-xl space-y-1.5 text-xs text-slate-300">
+                    <div className="font-semibold text-white text-sm pb-1 border-b border-slate-800">
+                      Resumo do Lead: {formName}
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Porte / Tipo:</span>
+                      <span>{formUnitCount} un. · {formCondominiumType}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Localização:</span>
+                      <span>{formCity || 'Não informada'}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">Temperatura:</span>
+                      <span>{formTemperature}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Quiz Navigation Footer */}
+            <div className="px-6 py-4 border-t border-slate-800/80 bg-slate-950/60 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={quizStep === 1 ? handleCloseModal : handlePrevQuizStep}
+                className="px-4 py-2 bg-slate-800/80 hover:bg-slate-800 text-slate-300 text-xs font-medium rounded-xl transition-colors cursor-pointer"
+              >
+                {quizStep === 1 ? 'Cancelar' : '← Voltar'}
+              </button>
+
+              <div className="flex items-center gap-2">
+                {quizStep < totalQuizSteps ? (
+                  <button
+                    type="button"
+                    onClick={handleNextQuizStep}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5 shadow-md"
+                  >
+                    <span>Avançar</span>
+                    <span>→</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => handleSubmitLead()}
+                    disabled={formSaving}
+                    className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-2 shadow-md disabled:opacity-50"
+                  >
+                    {formSaving ? (
+                      <>
+                        <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Salvando...</span>
+                      </>
+                    ) : (
+                      <span>{modalMode === 'create' ? 'Concluir Cadastro' : 'Salvar Alterações'}</span>
+                    )}
+                  </button>
                 )}
               </div>
-
-              {/* Footer Buttons */}
-              <div className="pt-4 border-t border-slate-800 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={handleCloseModal}
-                  disabled={formSaving}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={formSaving}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 disabled:text-indigo-400 text-white text-xs font-medium rounded-lg shadow-sm transition-colors flex items-center gap-2 cursor-pointer disabled:cursor-not-allowed"
-                >
-                  {formSaving ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                      <span>Salvando...</span>
-                    </>
-                  ) : (
-                    <span>{modalMode === 'create' ? 'Cadastrar Lead' : 'Salvar Alterações'}</span>
-                  )}
-                </button>
-              </div>
-            </form>
+            </div>
           </div>
         </div>
       )}
 
-      {/* Modal for View Details */}
+      {/* VIEW LEAD DETAILS MODAL */}
       {modalMode === 'view' && selectedLead && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-8">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="relative w-full max-w-3xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 max-h-[90vh] flex flex-col">
             {/* Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
               <div>
-                <span className="text-xs font-mono text-slate-400">
+                <span className="text-[11px] font-mono text-slate-400">
                   ID: {selectedLead.id.slice(0, 8)}...
                 </span>
                 <h3 className="text-xl font-bold text-white mt-0.5">
@@ -1362,77 +1590,67 @@ export default function LeadsModule({
                 onClick={handleCloseModal}
                 className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
               >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
 
             {/* Content */}
-            <div className="p-6 space-y-6">
+            <div className="p-6 overflow-y-auto space-y-6 text-xs">
               {/* Badges strip */}
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-3">
                 {getTemperatureBadge(selectedLead.temperature)}
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-950 border border-indigo-800/60 text-indigo-300 font-medium">
+                <span className="text-xs text-indigo-300 font-medium">
                   {selectedLead.current_stage_id
                     ? stageMap.get(selectedLead.current_stage_id) || 'Estágio inicial'
                     : 'Estágio inicial'}
                 </span>
-                <span className="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-300">
+                <span className="text-xs text-slate-400">
                   {selectedLead.condominium_type || 'Residencial'}
                 </span>
               </div>
 
               {/* Grid with info */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs bg-slate-950/50 p-4 rounded-xl border border-slate-800">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950/60 p-4.5 rounded-2xl border border-slate-800/80">
                 <div>
-                  <span className="text-slate-400 block mb-0.5">CNPJ:</span>
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">CNPJ</span>
                   <span className="text-slate-200 font-mono font-medium">
                     {selectedLead.cnpj || 'Não informado'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block mb-0.5">Administradora:</span>
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">Administradora</span>
                   <span className="text-slate-200 font-medium">
                     {selectedLead.administrator || 'Não informada'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block mb-0.5">Cidade:</span>
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">Cidade</span>
                   <span className="text-slate-200 font-medium">
                     {selectedLead.city || 'Não informada'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block mb-0.5">Endereço:</span>
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">Endereço</span>
                   <span className="text-slate-200 font-medium">
                     {selectedLead.address || 'Não informado'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block mb-0.5">Unidades:</span>
-                  <span className="text-slate-200 font-medium">
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">Unidades</span>
+                  <span className="text-slate-200 font-medium font-mono tabular-nums">
                     {selectedLead.unit_count != null ? `${selectedLead.unit_count} unidades` : 'Não informado'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block mb-0.5">Origem do Lead:</span>
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">Origem do Lead</span>
                   <span className="text-slate-200 font-medium">
                     {selectedLead.lead_source || 'Não informada'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block mb-0.5">Responsável Comercial:</span>
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">Responsável Comercial</span>
                   <span className="text-slate-200 font-medium">
                     {selectedLead.responsible_user_id
                       ? profileMap.get(selectedLead.responsible_user_id) || 'Não atribuído'
@@ -1440,8 +1658,8 @@ export default function LeadsModule({
                   </span>
                 </div>
                 <div>
-                  <span className="text-slate-400 block mb-0.5">Cadastrado em:</span>
-                  <span className="text-slate-200 font-medium">
+                  <span className="text-slate-500 block mb-0.5 text-[11px]">Cadastrado em</span>
+                  <span className="text-slate-200 font-medium font-mono">
                     {selectedLead.created_at
                       ? new Date(selectedLead.created_at).toLocaleString('pt-BR')
                       : '-'}
@@ -1449,96 +1667,18 @@ export default function LeadsModule({
                 </div>
               </div>
 
-              {checkIsLostStage(selectedLead.current_stage_id) && selectedLead.loss_reason && (
-                <div className="p-3 bg-amber-950/40 border border-amber-800/40 rounded-lg text-xs">
-                  <span className="text-amber-400 font-semibold block mb-0.5">
-                    Motivo de perda:
-                  </span>
-                  <span className="text-amber-200">{selectedLead.loss_reason}</span>
-                </div>
-              )}
-
-              {/* Associated Services */}
-              <div>
-                <h4 className="text-xs uppercase tracking-wider font-semibold text-slate-400 mb-2">
-                  Serviços de Interesse
-                </h4>
-                {(() => {
-                  const leadServiceIds = getLeadServices(selectedLead.id);
-                  if (leadServiceIds.length === 0) {
-                    return (
-                      <p className="text-xs text-slate-500 italic">
-                        Nenhum serviço vinculado a este condomínio.
-                      </p>
-                    );
-                  }
-                  return (
-                    <div className="flex flex-wrap gap-2">
-                      {leadServiceIds.map((sId) => (
-                        <span
-                          key={sId}
-                          className="px-2.5 py-1 rounded-lg text-xs font-medium bg-indigo-950/80 border border-indigo-800 text-indigo-300"
-                        >
-                          {serviceMap.get(sId) || 'Serviço'}
-                        </span>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Contatos Vinculados */}
-              <div>
-                <h4 className="text-xs uppercase tracking-wider font-semibold text-slate-400 mb-2">
-                  Contatos Vinculados
-                </h4>
-                {(() => {
-                  const linkedContacts = getContactsForLead(selectedLead.id);
-                  if (linkedContacts.length === 0) {
-                    return (
-                      <p className="text-xs text-slate-500 italic p-3 bg-slate-950/40 rounded-lg border border-slate-800/60">
-                        Nenhum contato vinculado a este condomínio.
-                      </p>
-                    );
-                  }
-                  return (
-                    <div className="space-y-2">
-                      {linkedContacts.map((contact) => (
-                        <div
-                          key={contact.id}
-                          className="p-3 bg-slate-950/60 border border-slate-800 rounded-lg flex items-center justify-between text-xs"
-                        >
-                          <div>
-                            <div className="font-semibold text-white flex items-center gap-2">
-                              <span>{contact.name}</span>
-                              <span className="text-[10px] font-normal px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
-                                {contact.role_title || 'Contato'}
-                              </span>
-                            </div>
-                            <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-4 gap-y-0.5 font-mono">
-                              {contact.phone && <span>Tel: {contact.phone}</span>}
-                              {contact.email && <span>Email: {contact.email}</span>}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-
               {/* HISTÓRICO DE INTERAÇÕES */}
               <div className="pt-2 border-t border-slate-800/80">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-2">
-                    <h4 className="text-xs uppercase tracking-wider font-bold text-indigo-300">
+                    <h4 className="text-xs uppercase tracking-wider font-bold text-white">
                       Histórico de Interações
                     </h4>
                     {(() => {
                       const leadInteractions = getInteractionsForLead(selectedLead.id);
                       return (
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">
-                          {leadInteractions.length} {leadInteractions.length === 1 ? 'registro' : 'registros'}
+                        <span className="text-[11px] font-mono text-slate-400">
+                          ({leadInteractions.length})
                         </span>
                       );
                     })()}
@@ -1546,20 +1686,10 @@ export default function LeadsModule({
                   <button
                     type="button"
                     onClick={() => handleOpenCreateInteraction(selectedLead)}
-                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
                   >
-                    <svg
-                      className="w-3.5 h-3.5"
-                      fill="none"
-                      stroke="currentColor"
-                      viewBox="0 0 24 24"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M12 4v16m8-8H4"
-                      />
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                     </svg>
                     Registrar interação
                   </button>
@@ -1569,7 +1699,7 @@ export default function LeadsModule({
                   const leadInteractions = getInteractionsForLead(selectedLead.id);
                   if (leadInteractions.length === 0) {
                     return (
-                      <div className="p-4 bg-slate-950/40 rounded-xl border border-slate-800/80 text-center">
+                      <div className="p-4 bg-slate-950/40 rounded-2xl border border-slate-800/80 text-center">
                         <p className="text-xs text-slate-400 mb-2">
                           Nenhuma interação registrada ainda para este condomínio.
                         </p>
@@ -1595,7 +1725,7 @@ export default function LeadsModule({
                         return (
                           <div
                             key={item.id}
-                            className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl hover:border-slate-700/80 transition-colors"
+                            className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-2xl hover:border-slate-700/80 transition-colors"
                           >
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/60 pb-2.5 mb-2.5">
                               <div className="flex items-center gap-2 flex-wrap">
@@ -1606,60 +1736,42 @@ export default function LeadsModule({
                               </div>
 
                               <div className="flex items-center gap-3">
-                                <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                                  <span className="w-4 h-4 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[9px] text-slate-300 uppercase font-semibold">
-                                    {respName.charAt(0)}
-                                  </span>
-                                  <span className="text-[11px] truncate max-w-[120px]">
-                                    {respName}
-                                  </span>
-                                </div>
-
+                                <span className="text-[11px] text-slate-400">
+                                  Por: {respName}
+                                </span>
                                 <button
                                   type="button"
                                   onClick={() => handleOpenEditInteraction(item)}
-                                  title="Editar interação"
-                                  className="text-[11px] px-2 py-0.5 rounded text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/60 transition-colors cursor-pointer border border-transparent hover:border-indigo-800/40"
+                                  className="text-[11px] text-indigo-400 hover:text-indigo-300 cursor-pointer font-medium"
                                 >
                                   Editar
                                 </button>
                               </div>
                             </div>
 
-                            {/* Notes */}
-                            {item.notes ? (
-                              <p className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed mb-2.5">
+                            {item.notes && (
+                              <p className="text-xs text-slate-300 whitespace-pre-wrap leading-relaxed mb-2">
                                 {item.notes}
-                              </p>
-                            ) : (
-                              <p className="text-xs text-slate-500 italic mb-2.5">
-                                Sem observações adicionais.
                               </p>
                             )}
 
-                            {/* Próximo Follow-up */}
                             {item.next_follow_up_date && (
                               <div className="pt-2 border-t border-slate-900 flex items-center justify-between text-xs">
-                                <span className="text-slate-400 text-[11px]">
+                                <span className="text-slate-500 text-[11px]">
                                   Próximo Follow-up:
                                 </span>
                                 <div className="flex items-center gap-2">
-                                  <span className="font-semibold text-slate-200">
+                                  <span className="font-semibold text-slate-200 font-mono">
                                     {formatDateBR(item.next_follow_up_date)}
                                   </span>
                                   {followUpStatus === 'overdue' && (
-                                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-amber-950 border border-amber-800 text-amber-300 font-medium">
-                                      Vencido
+                                    <span className="text-[10px] text-amber-400 font-semibold">
+                                      (Vencido)
                                     </span>
                                   )}
                                   {followUpStatus === 'today' && (
-                                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-indigo-950 border border-indigo-800 text-indigo-300 font-medium">
-                                      Hoje
-                                    </span>
-                                  )}
-                                  {followUpStatus === 'upcoming' && (
-                                    <span className="text-[10px] px-2 py-0.2 rounded-full bg-slate-800 border border-slate-700 text-slate-300 font-medium">
-                                      Próximo
+                                    <span className="text-[10px] text-indigo-400 font-semibold">
+                                      (Hoje)
                                     </span>
                                   )}
                                 </div>
@@ -1681,26 +1793,16 @@ export default function LeadsModule({
                   handleCloseModal();
                   handleOpenEdit(selectedLead);
                 }}
-                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
               >
-                <svg
-                  className="w-3.5 h-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"
-                  />
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
-                Editar este lead
+                Editar condomínio
               </button>
               <button
                 onClick={handleCloseModal}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition-colors cursor-pointer"
               >
                 Fechar
               </button>
@@ -1709,158 +1811,223 @@ export default function LeadsModule({
         </div>
       )}
 
-      {/* Modal for Interaction Create / Edit */}
+      {/* DYNAMIC QUIZ-STYLE MODAL FOR INTERACTION REGISTRATION */}
       {interactionModalMode && selectedLead && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-8">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
-              <div>
-                <h3 className="text-base font-bold text-white">
-                  {interactionModalMode === 'create' ? 'Registrar Interação' : 'Editar Interação'}
-                </h3>
-                <p className="text-xs text-slate-400">
-                  Condomínio: <span className="text-indigo-300 font-semibold">{selectedLead.name}</span>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleCloseInteractionModal}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <svg
-                  className="w-5 h-5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="px-6 pt-5 pb-4 border-b border-slate-800/80 bg-slate-950/60">
+              <div className="flex items-center justify-between mb-2.5">
+                <div>
+                  <h3 className="text-base font-bold text-white">
+                    {interactionModalMode === 'create' ? 'Registrar Interação' : 'Editar Interação'}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Condomínio: <span className="text-indigo-300 font-semibold">{selectedLead.name}</span>
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCloseInteractionModal}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              </button>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+
+              {/* Progress */}
+              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                <div
+                  className="bg-indigo-500 h-full transition-all duration-300 rounded-full"
+                  style={{ width: `${(interactionQuizStep / totalInteractionQuizSteps) * 100}%` }}
+                />
+              </div>
             </div>
 
-            <form onSubmit={handleSubmitInteraction} className="p-6 space-y-4 text-xs">
+            {/* Quiz Body */}
+            <div className="p-6 overflow-y-auto flex-1 text-xs">
               {formInteractionError && (
-                <div className="p-3 bg-rose-950/80 border border-rose-600/50 rounded-lg text-rose-200 text-xs">
+                <div className="mb-4 p-3 bg-rose-950/80 border border-rose-600/50 rounded-xl text-rose-200">
                   {formInteractionError}
                 </div>
               )}
 
-              {/* Tipo de Interação (Obrigatório) */}
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5">
-                  Tipo de Interação <span className="text-rose-400">*</span>
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {INTERACTION_TYPES.map((type) => (
-                    <button
-                      type="button"
-                      key={type}
-                      onClick={() => setFormInteractionType(type)}
-                      className={`py-2 px-3 rounded-lg border text-xs font-medium transition-colors cursor-pointer text-center ${
-                        formInteractionType === type
-                          ? 'bg-indigo-950 border-indigo-500 text-indigo-200 font-semibold'
-                          : 'bg-slate-800/70 border-slate-700 text-slate-300 hover:border-slate-600'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              {/* Step 1: Tipo */}
+              {interactionQuizStep === 1 && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  <div>
+                    <h4 className="text-base font-bold text-white mb-1">
+                      Qual foi o tipo de contato realizado?
+                    </h4>
+                    <p className="text-slate-400 text-xs">
+                      Selecione o canal ou formato da interação:
+                    </p>
+                  </div>
 
-              {/* Data e Hora + Responsável */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-slate-300 font-medium mb-1">
-                    Data e Hora <span className="text-rose-400">*</span>
-                  </label>
-                  <input
-                    type="datetime-local"
-                    value={formInteractionOccurredAt}
-                    onChange={(e) => setFormInteractionOccurredAt(e.target.value)}
-                    required
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {INTERACTION_TYPES.map((type) => (
+                      <button
+                        type="button"
+                        key={type}
+                        onClick={() => {
+                          setFormInteractionType(type);
+                          setInteractionQuizStep(2);
+                        }}
+                        className={`p-3.5 rounded-xl border text-xs font-semibold transition-all text-left flex items-center justify-between cursor-pointer ${
+                          formInteractionType === type
+                            ? 'bg-indigo-950/80 border-indigo-500 text-indigo-200 shadow-sm'
+                            : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <span>{type}</span>
+                        <span className="text-slate-500 font-normal">→</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Step 2: Data & Responsável */}
+              {interactionQuizStep === 2 && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  <div>
+                    <h4 className="text-base font-bold text-white mb-1">
+                      Quando ocorreu e quem foi o responsável?
+                    </h4>
+                    <p className="text-slate-400 text-xs">
+                      Confirme a data, horário e o consultor que realizou o contato.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-medium mb-1">
+                      Data e Hora da Interação
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={formInteractionOccurredAt}
+                      onChange={(e) => setFormInteractionOccurredAt(e.target.value)}
+                      required
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-medium mb-1">
+                      Responsável
+                    </label>
+                    <select
+                      value={formInteractionResponsibleId}
+                      onChange={(e) => setFormInteractionResponsibleId(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500 cursor-pointer"
+                    >
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.full_name || 'Sem nome'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              {/* Step 3: Observações */}
+              {interactionQuizStep === 3 && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  <div>
+                    <h4 className="text-base font-bold text-white mb-1">
+                      Observações da Interação
+                    </h4>
+                    <p className="text-slate-400 text-xs">
+                      Descreva o que foi conversado, expectativas ou alinhamentos:
+                    </p>
+                  </div>
+
+                  <textarea
+                    rows={4}
+                    autoFocus
+                    value={formInteractionNotes}
+                    onChange={(e) => setFormInteractionNotes(e.target.value)}
+                    placeholder="Ex: Conversa com o síndico para apresentar proposta de portaria e agendar vistoria técnica..."
+                    className="w-full px-3.5 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs placeholder-slate-500 focus:outline-none focus:border-indigo-500 leading-relaxed"
                   />
                 </div>
+              )}
 
-                <div>
-                  <label className="block text-slate-300 font-medium mb-1">
-                    Responsável
-                  </label>
-                  <select
-                    value={formInteractionResponsibleId}
-                    onChange={(e) => setFormInteractionResponsibleId(e.target.value)}
-                    className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
-                  >
-                    {profiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.full_name || 'Sem nome'}
-                      </option>
-                    ))}
-                  </select>
+              {/* Step 4: Próximo Follow-up & Conclusão */}
+              {interactionQuizStep === 4 && (
+                <div className="space-y-4 animate-in fade-in duration-200">
+                  <div>
+                    <h4 className="text-base font-bold text-white mb-1">
+                      Agendar Próximo Follow-up?
+                    </h4>
+                    <p className="text-slate-400 text-xs">
+                      Defina uma data de retorno para o sistema priorizar este lead.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-950 border border-slate-800 rounded-2xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <label className="text-slate-300 font-medium">Data do Retorno</label>
+                      {formInteractionNextFollowUpDate && (
+                        <button
+                          type="button"
+                          onClick={() => setFormInteractionNextFollowUpDate('')}
+                          className="text-[10px] text-slate-400 hover:text-white cursor-pointer"
+                        >
+                          Remover data
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="date"
+                      value={formInteractionNextFollowUpDate}
+                      onChange={(e) => setFormInteractionNextFollowUpDate(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-900 border border-slate-700/80 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div className="bg-slate-950/60 p-3 rounded-xl border border-slate-800 text-slate-400 space-y-1 text-[11px]">
+                    <div><span className="text-slate-500">Tipo:</span> {formInteractionType}</div>
+                    {formInteractionNotes && (
+                      <div className="truncate"><span className="text-slate-500">Notas:</span> {formInteractionNotes}</div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
+            </div>
 
-              {/* Observações */}
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">
-                  Observações da Interação
-                </label>
-                <textarea
-                  rows={3}
-                  value={formInteractionNotes}
-                  onChange={(e) => setFormInteractionNotes(e.target.value)}
-                  placeholder="Descreva o que foi tratado, alinhamentos ou próximos passos..."
-                  className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-slate-800/80 bg-slate-950/60 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={
+                  interactionQuizStep === 1
+                    ? handleCloseInteractionModal
+                    : () => setInteractionQuizStep((p) => p - 1)
+                }
+                className="px-3.5 py-2 bg-slate-800 text-slate-300 text-xs font-medium rounded-xl hover:bg-slate-700 transition-colors cursor-pointer"
+              >
+                {interactionQuizStep === 1 ? 'Cancelar' : '← Voltar'}
+              </button>
 
-              {/* Próximo Follow-up */}
-              <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-lg">
-                <div className="flex items-center justify-between mb-1.5">
-                  <label className="text-slate-300 font-medium">
-                    Próximo Follow-up (Opcional)
-                  </label>
-                  {formInteractionNextFollowUpDate && (
-                    <button
-                      type="button"
-                      onClick={() => setFormInteractionNextFollowUpDate('')}
-                      className="text-[10px] text-slate-400 hover:text-slate-200 cursor-pointer"
-                    >
-                      Limpar data
-                    </button>
-                  )}
-                </div>
-                <input
-                  type="date"
-                  value={formInteractionNextFollowUpDate}
-                  onChange={(e) => setFormInteractionNextFollowUpDate(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-900 border border-slate-700/80 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-                />
-                <p className="text-[10px] text-slate-500 mt-1">
-                  Ao definir uma data aqui, ela será considerada como o próximo retorno prioritário para este condomínio.
-                </p>
-              </div>
-
-              {/* Footer */}
-              <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
+              {interactionQuizStep < totalInteractionQuizSteps ? (
                 <button
                   type="button"
-                  onClick={handleCloseInteractionModal}
-                  disabled={formInteractionSaving}
-                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg transition-colors cursor-pointer"
+                  onClick={() => setInteractionQuizStep((p) => p + 1)}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
                 >
-                  Cancelar
+                  <span>Próximo</span>
+                  <span>→</span>
                 </button>
+              ) : (
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={() => handleSubmitInteraction()}
                   disabled={formInteractionSaving}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-medium rounded-lg transition-colors cursor-pointer flex items-center gap-1.5"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
                 >
                   {formInteractionSaving ? (
                     <>
@@ -1868,11 +2035,11 @@ export default function LeadsModule({
                       <span>Salvando...</span>
                     </>
                   ) : (
-                    <span>{interactionModalMode === 'create' ? 'Salvar Interação' : 'Atualizar Interação'}</span>
+                    <span>Registrar Interação</span>
                   )}
                 </button>
-              </div>
-            </form>
+              )}
+            </div>
           </div>
         </div>
       )}
