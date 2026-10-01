@@ -18,6 +18,15 @@ export const INTERACTION_TYPES = [
   'Evento BNI',
 ] as const;
 
+export const PRESET_ROLES = [
+  'Síndico',
+  'Subsíndico',
+  'Conselheiro',
+  'Representante da administradora',
+  'Gerente Predial',
+  'Outro',
+];
+
 function getFollowUpStatus(dateStr?: string | null): 'overdue' | 'today' | 'upcoming' | null {
   if (!dateStr) return null;
   const target = new Date(dateStr);
@@ -80,7 +89,7 @@ const LEAD_SOURCES = [
   'Outro',
 ];
 
-const TEMPERATURE_OPTIONS = ['Quente', 'Morno', 'Frio'];
+const TEMPERATURE_OPTIONS = ['Frio', 'Morno', 'Quente'] as const;
 
 const DRAFT_LEAD_CREATE_KEY = 'triverus_draft_lead_create';
 const getLeadEditDraftKey = (id: string) => `triverus_draft_lead_edit_${id}`;
@@ -118,7 +127,7 @@ export default function LeadsModule({
   initialSelectedLeadId,
   onClearInitialLead,
 }: LeadsModuleProps) {
-  // Use Centralized In-Memory & Cached CRM store
+  // Centralized In-Memory & Cached CRM store
   const {
     leads,
     stages,
@@ -131,26 +140,52 @@ export default function LeadsModule({
     serviceMap,
     refreshAll,
     upsertLeadLocally,
+    upsertContactLocally,
     upsertInteractionLocally,
     getLeadServices,
     getContactsForLead,
     getInteractionsForLead,
   } = useCRM();
 
-  // UI View Mode (Default is Cards)
-  const [viewMode, setViewMode] = useState<'cards' | 'list'>('cards');
-
-  // Search & feedback states
+  // Search & Filter states
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [responsibleFilter, setResponsibleFilter] = useState<string>('all');
+  const [stageFilter, setStageFilter] = useState<string>('all');
   const [statusFeedback, setStatusFeedback] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
 
+  // Copied feedback helper
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   // Modal states: 'create' | 'edit' | 'view' | null
   const [modalMode, setModalMode] = useState<'create' | 'edit' | 'view' | null>(null);
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isRestoredDraft, setIsRestoredDraft] = useState<boolean>(false);
+
+  // Contact Popup State (WhatsApp or Email modal)
+  const [contactPopup, setContactPopup] = useState<{
+    open: boolean;
+    lead: Lead | null;
+    type: 'whatsapp' | 'email';
+    mode: 'list' | 'add';
+  }>({
+    open: false,
+    lead: null,
+    type: 'whatsapp',
+    mode: 'list',
+  });
+
+  // Contact Add Form inside Popup
+  const [newContactName, setNewContactName] = useState('');
+  const [newContactRolePreset, setNewContactRolePreset] = useState('Síndico');
+  const [newContactCustomRole, setNewContactCustomRole] = useState('');
+  const [newContactPhone, setNewContactPhone] = useState('');
+  const [newContactEmail, setNewContactEmail] = useState('');
+  const [newContactNotes, setNewContactNotes] = useState('');
+  const [savingNewContact, setSavingNewContact] = useState(false);
+  const [contactFormError, setContactFormError] = useState<string | null>(null);
 
   // Dynamic Quiz Step for Lead Create/Edit (1 to 6)
   const [quizStep, setQuizStep] = useState<number>(1);
@@ -165,7 +200,7 @@ export default function LeadsModule({
   const [formAddress, setFormAddress] = useState('');
   const [formCity, setFormCity] = useState('');
   const [formLeadSource, setFormLeadSource] = useState('Indicação (BNI/rede)');
-  const [formTemperature, setFormTemperature] = useState('Morno');
+  const [formTemperature, setFormTemperature] = useState<'Frio' | 'Morno' | 'Quente'>('Morno');
   const [formCurrentStageId, setFormCurrentStageId] = useState('');
   const [formResponsibleUserId, setFormResponsibleUserId] = useState('');
   const [formLossReason, setFormLossReason] = useState('');
@@ -195,7 +230,6 @@ export default function LeadsModule({
     if (initialDraftRestorationChecked.current) return;
     initialDraftRestorationChecked.current = true;
 
-    // Check if there is an active create draft
     const createDraft = loadDraft<LeadDraftData>(DRAFT_LEAD_CREATE_KEY);
     if (createDraft && createDraft.formName?.trim()) {
       setFormName(createDraft.formName || '');
@@ -206,7 +240,7 @@ export default function LeadsModule({
       setFormAddress(createDraft.formAddress || '');
       setFormCity(createDraft.formCity || '');
       setFormLeadSource(createDraft.formLeadSource || 'Indicação (BNI/rede)');
-      setFormTemperature(createDraft.formTemperature || 'Morno');
+      setFormTemperature((createDraft.formTemperature as 'Frio' | 'Morno' | 'Quente') || 'Morno');
       setFormCurrentStageId(createDraft.formCurrentStageId || '');
       setFormResponsibleUserId(createDraft.formResponsibleUserId || currentProfile.id);
       setFormLossReason(createDraft.formLossReason || '');
@@ -236,7 +270,6 @@ export default function LeadsModule({
         formLossReason,
         formSelectedServices,
       };
-      // Only save if user has inputted something
       if (formName.trim() || formCnpj.trim() || formAdministrator.trim() || formUnitCount.trim()) {
         saveDraft(DRAFT_LEAD_CREATE_KEY, data);
       }
@@ -329,17 +362,73 @@ export default function LeadsModule({
     }
   }, [initialSelectedLeadId, leads, onClearInitialLead]);
 
-  // Filter leads by search term locally in memory
+  // Filter leads by search and filters in memory
   const filteredLeads = useMemo(() => {
-    if (!searchTerm.trim()) return leads;
-    const term = searchTerm.toLowerCase();
-    return leads.filter(
-      (l) =>
-        l.name.toLowerCase().includes(term) ||
-        (l.city && l.city.toLowerCase().includes(term)) ||
-        (l.administrator && l.administrator.toLowerCase().includes(term))
-    );
-  }, [leads, searchTerm]);
+    return leads.filter((l) => {
+      if (responsibleFilter !== 'all' && l.responsible_user_id !== responsibleFilter) {
+        return false;
+      }
+      if (stageFilter !== 'all' && l.current_stage_id !== stageFilter) {
+        return false;
+      }
+      if (searchTerm.trim()) {
+        const term = searchTerm.toLowerCase();
+        const matchName = l.name.toLowerCase().includes(term);
+        const matchCity = l.city ? l.city.toLowerCase().includes(term) : false;
+        const matchAdm = l.administrator ? l.administrator.toLowerCase().includes(term) : false;
+        if (!matchName && !matchCity && !matchAdm) return false;
+      }
+      return true;
+    });
+  }, [leads, searchTerm, responsibleFilter, stageFilter]);
+
+  // Pipeline Columns: Frio, Morno, Quente
+  const pipelineColumns = useMemo(() => {
+    const cold: Lead[] = [];
+    const warm: Lead[] = [];
+    const hot: Lead[] = [];
+
+    filteredLeads.forEach((lead) => {
+      const temp = (lead.temperature || 'Morno').toLowerCase();
+      if (temp === 'quente') {
+        hot.push(lead);
+      } else if (temp === 'frio') {
+        cold.push(lead);
+      } else {
+        warm.push(lead);
+      }
+    });
+
+    return [
+      {
+        id: 'Frio',
+        label: 'Frio',
+        subtitle: 'Prospecções iniciais ou sem resposta recente',
+        leads: cold,
+        accentColor: 'border-sky-500/40 text-sky-400 bg-sky-500/10',
+        headerBadgeColor: 'bg-sky-950/80 text-sky-300 border-sky-600/40',
+        dotColor: 'bg-sky-400',
+      },
+      {
+        id: 'Morno',
+        label: 'Morno',
+        subtitle: 'Em contato ativo ou aguardando decisão/reunião',
+        leads: warm,
+        accentColor: 'border-amber-500/40 text-amber-400 bg-amber-500/10',
+        headerBadgeColor: 'bg-amber-950/80 text-amber-300 border-amber-600/40',
+        dotColor: 'bg-amber-400',
+      },
+      {
+        id: 'Quente',
+        label: 'Quente',
+        subtitle: 'Negociação avançada, proposta em análise ou fechamento',
+        leads: hot,
+        accentColor: 'border-rose-500/40 text-rose-400 bg-rose-500/10',
+        headerBadgeColor: 'bg-rose-950/80 text-rose-300 border-rose-600/40',
+        dotColor: 'bg-rose-400 animate-pulse',
+      },
+    ];
+  }, [filteredLeads]);
 
   const checkIsLostStage = useCallback(
     (stageId?: string | null): boolean => {
@@ -366,7 +455,6 @@ export default function LeadsModule({
     setFormError(null);
     setIsRestoredDraft(false);
 
-    // Check if there is an existing draft
     const draft = loadDraft<LeadDraftData>(DRAFT_LEAD_CREATE_KEY);
     if (draft && draft.formName?.trim()) {
       setFormName(draft.formName || '');
@@ -377,7 +465,7 @@ export default function LeadsModule({
       setFormAddress(draft.formAddress || '');
       setFormCity(draft.formCity || '');
       setFormLeadSource(draft.formLeadSource || 'Indicação (BNI/rede)');
-      setFormTemperature(draft.formTemperature || 'Morno');
+      setFormTemperature((draft.formTemperature as 'Frio' | 'Morno' | 'Quente') || 'Morno');
       setFormCurrentStageId(draft.formCurrentStageId || (stages.length > 0 ? stages[0].id : ''));
       setFormResponsibleUserId(draft.formResponsibleUserId || currentProfile.id);
       setFormLossReason(draft.formLossReason || '');
@@ -406,7 +494,6 @@ export default function LeadsModule({
     setModalMode('create');
   };
 
-  // Discard draft explicitly
   const handleDiscardLeadDraft = () => {
     if (modalMode === 'create') {
       clearDraft(DRAFT_LEAD_CREATE_KEY);
@@ -432,7 +519,7 @@ export default function LeadsModule({
       setFormAddress(editDraft.formAddress || '');
       setFormCity(editDraft.formCity || '');
       setFormLeadSource(editDraft.formLeadSource || 'Indicação (BNI/rede)');
-      setFormTemperature(editDraft.formTemperature || 'Morno');
+      setFormTemperature((editDraft.formTemperature as 'Frio' | 'Morno' | 'Quente') || 'Morno');
       setFormCurrentStageId(editDraft.formCurrentStageId || '');
       setFormResponsibleUserId(editDraft.formResponsibleUserId || currentProfile.id);
       setFormLossReason(editDraft.formLossReason || '');
@@ -448,7 +535,7 @@ export default function LeadsModule({
       setFormAddress(lead.address || '');
       setFormCity(lead.city || '');
       setFormLeadSource(lead.lead_source || 'Indicação (BNI/rede)');
-      setFormTemperature(lead.temperature || 'Morno');
+      setFormTemperature((lead.temperature as 'Frio' | 'Morno' | 'Quente') || 'Morno');
       const stageId = lead.current_stage_id || (stages.length > 0 ? stages[0].id : '');
       setFormCurrentStageId(stageId);
       setFormResponsibleUserId(lead.responsible_user_id || currentProfile.id);
@@ -476,7 +563,6 @@ export default function LeadsModule({
     setIsRestoredDraft(false);
   };
 
-  // Toggle service selection in form
   const toggleService = (serviceId: string) => {
     setFormSelectedServices((prev) =>
       prev.includes(serviceId)
@@ -485,7 +571,6 @@ export default function LeadsModule({
     );
   };
 
-  // Quiz step validation
   const handleNextQuizStep = () => {
     setFormError(null);
     if (quizStep === 1) {
@@ -496,14 +581,12 @@ export default function LeadsModule({
     }
     if (quizStep === 2) {
       const unitCountTrimmed = formUnitCount.trim();
-      if (!unitCountTrimmed) {
-        setFormError('Informe o número de unidades do condomínio.');
-        return;
-      }
-      const num = parseInt(unitCountTrimmed, 10);
-      if (isNaN(num) || num <= 0) {
-        setFormError('O número de unidades deve ser um número válido maior que zero.');
-        return;
+      if (unitCountTrimmed) {
+        const num = parseInt(unitCountTrimmed, 10);
+        if (isNaN(num) || num <= 0) {
+          setFormError('O número de unidades deve ser um número válido maior que zero.');
+          return;
+        }
       }
     }
     if (quizStep === 5) {
@@ -526,7 +609,7 @@ export default function LeadsModule({
     }
   };
 
-  // Save Lead (Create or Edit)
+  // Save Lead (Supports saving from ANY current step without navigating to step 6!)
   const handleSubmitLead = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setFormError(null);
@@ -537,23 +620,24 @@ export default function LeadsModule({
       return;
     }
 
+    let unitCountNum: number | null = null;
     const unitCountTrimmed = formUnitCount.trim();
-    if (!unitCountTrimmed) {
-      setQuizStep(2);
-      setFormError('O número de unidades é obrigatório.');
-      return;
-    }
-    const unitCountNum = parseInt(unitCountTrimmed, 10);
-    if (isNaN(unitCountNum) || unitCountNum <= 0) {
-      setQuizStep(2);
-      setFormError('O número de unidades deve ser um valor numérico válido maior que zero.');
-      return;
+    if (unitCountTrimmed) {
+      const parsed = parseInt(unitCountTrimmed, 10);
+      if (isNaN(parsed) || parsed <= 0) {
+        setQuizStep(2);
+        setFormError('O número de unidades deve ser um valor numérico válido.');
+        return;
+      }
+      unitCountNum = parsed;
+    } else if (modalMode === 'edit' && selectedLead?.unit_count != null) {
+      unitCountNum = selectedLead.unit_count;
     }
 
     const stageIdToUse = formCurrentStageId || (stages.length > 0 ? stages[0].id : null);
     const isStageLost = checkIsLostStage(stageIdToUse);
 
-    if (isStageLost && !formLossReason.trim()) {
+    if (isStageLost && !formLossReason.trim() && quizStep === 5) {
       setQuizStep(5);
       setFormError('O preenchimento do motivo de perda é obrigatório quando o estágio for Perdido.');
       return;
@@ -616,7 +700,7 @@ export default function LeadsModule({
         });
       }
 
-      // Sync lead_services junction
+      // Sync lead_services junction if present
       if (savedLead) {
         await supabase.from('lead_services').delete().eq('lead_id', savedLead.id);
 
@@ -628,7 +712,6 @@ export default function LeadsModule({
           await supabase.from('lead_services').insert(serviceInserts);
         }
 
-        // Silent background sync
         refreshAll(true);
       }
 
@@ -648,7 +731,6 @@ export default function LeadsModule({
     setSelectedInteraction(null);
     setIsInteractionRestoredDraft(false);
 
-    // Check if interaction draft exists for this lead
     const draft = loadDraft<InteractionDraftData>(getInteractionCreateDraftKey(lead.id));
     if (draft && (draft.formInteractionNotes || draft.formInteractionNextFollowUpDate)) {
       setFormInteractionType(draft.formInteractionType || 'Ligação');
@@ -787,46 +869,105 @@ export default function LeadsModule({
     }
   };
 
-  const getTemperatureBadge = (temp?: string | null) => {
-    switch (temp) {
-      case 'Quente':
-        return (
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-400">
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
-            Quente
-          </span>
-        );
-      case 'Frio':
-        return (
-          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-400">
-            <span className="w-2 h-2 rounded-full bg-sky-500" />
-            Frio
-          </span>
-        );
-      case 'Morno':
-      default:
-        return (
-          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-400">
-            <span className="w-2 h-2 rounded-full bg-amber-500" />
-            Morno
-          </span>
-        );
-    }
+  // Contacts Popup Helpers
+  const handleOpenContactPopup = (lead: Lead, type: 'whatsapp' | 'email') => {
+    setContactPopup({
+      open: true,
+      lead,
+      type,
+      mode: 'list',
+    });
+    setContactFormError(null);
+    setNewContactName('');
+    setNewContactRolePreset('Síndico');
+    setNewContactCustomRole('');
+    setNewContactPhone('');
+    setNewContactEmail('');
+    setNewContactNotes('');
   };
 
-  const getInteractionTypeBadge = (type: string) => {
-    switch (type) {
-      case 'WhatsApp':
-        return <span className="text-[11px] font-medium text-emerald-400">WhatsApp</span>;
-      case 'Reunião':
-        return <span className="text-[11px] font-medium text-purple-400">Reunião</span>;
-      case 'E-mail':
-        return <span className="text-[11px] font-medium text-sky-400">E-mail</span>;
-      case 'Evento BNI':
-        return <span className="text-[11px] font-medium text-amber-400">Evento BNI</span>;
-      case 'Ligação':
-      default:
-        return <span className="text-[11px] font-medium text-indigo-400">Ligação</span>;
+  const handleCloseContactPopup = () => {
+    setContactPopup({
+      open: false,
+      lead: null,
+      type: 'whatsapp',
+      mode: 'list',
+    });
+    setContactFormError(null);
+  };
+
+  // Copy text helper
+  const handleCopy = (text: string, id: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  // Clean phone number for WhatsApp link
+  const getWhatsAppLink = (phone?: string | null) => {
+    if (!phone) return '#';
+    const digits = phone.replace(/\D/g, '');
+    const cleanNumber = digits.startsWith('55') ? digits : `55${digits}`;
+    return `https://wa.me/${cleanNumber}`;
+  };
+
+  // Save new contact from popup and link to current lead
+  const handleSaveContactFromPopup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!contactPopup.lead) return;
+    setContactFormError(null);
+
+    if (!newContactName.trim()) {
+      setContactFormError('O nome do contato é obrigatório.');
+      return;
+    }
+
+    const finalRole =
+      newContactRolePreset === 'Outro'
+        ? newContactCustomRole.trim() || null
+        : newContactRolePreset || null;
+
+    setSavingNewContact(true);
+
+    try {
+      const contactPayload = {
+        name: newContactName.trim(),
+        role_title: finalRole,
+        phone: newContactPhone.trim() || null,
+        email: newContactEmail.trim() || null,
+      };
+
+      const { data: createdContact, error: createError } = await supabase
+        .from('contacts')
+        .insert([contactPayload])
+        .select()
+        .single();
+
+      if (createError) throw createError;
+      if (!createdContact) throw new Error('Falha ao salvar contato.');
+
+      // Link to current lead
+      const { error: linkError } = await supabase
+        .from('lead_contacts')
+        .insert([{ lead_id: contactPopup.lead.id, contact_id: createdContact.id }]);
+
+      if (linkError) throw linkError;
+
+      // Update local store
+      upsertContactLocally(createdContact, [contactPopup.lead.id]);
+      refreshAll(true);
+
+      // Return to contact list in popup
+      setContactPopup((prev) => ({ ...prev, mode: 'list' }));
+      setStatusFeedback({
+        type: 'success',
+        message: `Contato "${createdContact.name}" vinculado a ${contactPopup.lead.name}!`,
+      });
+    } catch (err: any) {
+      console.error('Error adding contact to lead:', err);
+      setContactFormError(err.message || 'Erro ao vincular contato ao condomínio.');
+    } finally {
+      setSavingNewContact(false);
     }
   };
 
@@ -836,9 +977,9 @@ export default function LeadsModule({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-6 border-b border-slate-800/80">
         <div>
           <div className="flex items-center gap-2 text-xs font-medium text-slate-400 mb-1">
-            <span>CRM</span>
+            <span>CRM Comercial</span>
             <span aria-hidden="true">·</span>
-            <span>Oportunidades</span>
+            <span>Pipeline de Oportunidades</span>
             {isRefreshing && (
               <span className="inline-flex items-center gap-1 text-[11px] text-indigo-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
@@ -847,50 +988,15 @@ export default function LeadsModule({
             )}
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
-            Condomínios & Leads
+            Pipeline de Leads
           </h1>
           <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            Gestão de oportunidades comerciais, contas e histórico de relacionamentos.
+            Gestão visual por temperatura, histórico e contatos diretos por condomínio.
           </p>
         </div>
 
         {/* Action Controls */}
         <div className="flex items-center gap-3">
-          {/* View Mode Toggle: Cards vs List */}
-          <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1 shadow-inner">
-            <button
-              type="button"
-              onClick={() => setViewMode('cards')}
-              title="Visualização em Cards"
-              className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
-                viewMode === 'cards'
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-              </svg>
-              <span className="hidden sm:inline">Cards</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode('list')}
-              title="Visualização em Lista"
-              className={`p-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
-                viewMode === 'list'
-                  ? 'bg-indigo-600 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-              <span className="hidden sm:inline">Lista</span>
-            </button>
-          </div>
-
-          {/* New Lead Button */}
           <button
             type="button"
             onClick={handleOpenCreate}
@@ -909,7 +1015,7 @@ export default function LeadsModule({
         <div className="mt-4 p-3.5 bg-indigo-950/40 border border-indigo-500/30 rounded-2xl flex items-center justify-between text-xs text-indigo-200">
           <div className="flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
-            <span>Existe um rascunho salvo para criação de condomínio.</span>
+            <span>Existe um rascunho de condomínio em andamento.</span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -953,8 +1059,8 @@ export default function LeadsModule({
         </div>
       )}
 
-      {/* Search Bar */}
-      <div className="mt-6 flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+      {/* Search & Filter Bar */}
+      <div className="mt-6 flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
         <div className="relative flex-1 max-w-md">
           <input
             type="text"
@@ -987,16 +1093,42 @@ export default function LeadsModule({
           )}
         </div>
 
-        <div className="text-xs text-slate-400 flex items-center gap-2">
-          <span>Total: <strong>{filteredLeads.length}</strong> {filteredLeads.length === 1 ? 'registro' : 'registros'}</span>
+        <div className="flex items-center gap-3">
+          {/* Filter by Stage */}
+          <select
+            value={stageFilter}
+            onChange={(e) => setStageFilter(e.target.value)}
+            className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="all">Todos os estágios</option>
+            {stages.map((stg) => (
+              <option key={stg.id} value={stg.id}>
+                {stg.name}
+              </option>
+            ))}
+          </select>
+
+          {/* Filter by Responsible */}
+          <select
+            value={responsibleFilter}
+            onChange={(e) => setResponsibleFilter(e.target.value)}
+            className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="all">Todos os responsáveis</option>
+            {profiles.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.full_name || 'Sem nome'}
+              </option>
+            ))}
+          </select>
         </div>
       </div>
 
-      {/* Main Content: Cards or List */}
+      {/* PIPELINE VISUAL (KANBAN COLUMNS BY TEMPERATURE) */}
       {isInitialLoading && leads.length === 0 ? (
         <div className="mt-12 text-center py-16 bg-slate-900/40 border border-slate-800/60 rounded-2xl">
           <div className="inline-block animate-spin w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full mb-3" />
-          <p className="text-sm text-slate-400">Carregando condomínios...</p>
+          <p className="text-sm text-slate-400">Carregando pipeline de condomínios...</p>
         </div>
       ) : filteredLeads.length === 0 ? (
         <div className="mt-8 text-center py-16 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
@@ -1006,312 +1138,488 @@ export default function LeadsModule({
             </svg>
           </div>
           <h3 className="text-base font-semibold text-white mb-1">
-            {searchTerm ? 'Nenhum resultado encontrado' : 'Nenhum condomínio cadastrado'}
+            {searchTerm || responsibleFilter !== 'all' || stageFilter !== 'all'
+              ? 'Nenhum condomínio encontrado com esses filtros'
+              : 'Nenhum condomínio cadastrado'}
           </h3>
           <p className="text-xs text-slate-400 max-w-sm mx-auto mb-6">
-            {searchTerm
-              ? 'Tente ajustar os termos de busca para encontrar o condomínio.'
-              : 'Cadastre o primeiro lead de condomínio para iniciar o pipeline comercial.'}
+            Cadastre novos leads para acompanhar as oportunidades no pipeline visual por temperatura.
           </p>
-          {!searchTerm && (
-            <button
-              type="button"
-              onClick={handleOpenCreate}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-all cursor-pointer"
-            >
-              + Criar primeiro condomínio
-            </button>
-          )}
-        </div>
-      ) : viewMode === 'cards' ? (
-        /* CARDS VIEW (DEFAULT) */
-        <div className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
-          {filteredLeads.map((lead) => {
-            const stageName = lead.current_stage_id
-              ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
-              : 'Estágio inicial';
-            const responsibleName = lead.responsible_user_id
-              ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
-              : 'Não atribuído';
-            const leadServicesIds = getLeadServices(lead.id);
-            const leadInteractions = getInteractionsForLead(lead.id);
-            const latestInteraction = leadInteractions[0];
-            const leadContactsList = getContactsForLead(lead.id);
-
-            return (
-              <div
-                key={lead.id}
-                className="bg-slate-900/80 border border-slate-800 hover:border-slate-700/80 rounded-2xl p-5 shadow-lg flex flex-col justify-between transition-all group hover:shadow-xl hover:shadow-indigo-950/20"
-              >
-                <div>
-                  {/* Card Header: Condominium Name + Temperature */}
-                  <div className="flex items-start justify-between gap-3 mb-3">
-                    <div>
-                      <h3
-                        onClick={() => handleOpenView(lead)}
-                        className="font-bold text-base text-white hover:text-indigo-400 transition-colors cursor-pointer leading-snug line-clamp-1"
-                      >
-                        {lead.name}
-                      </h3>
-                      <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
-                        {lead.city && <span>{lead.city}</span>}
-                        {lead.city && lead.condominium_type && <span>·</span>}
-                        <span>{lead.condominium_type || 'Residencial'}</span>
-                      </div>
-                    </div>
-                    {getTemperatureBadge(lead.temperature)}
-                  </div>
-
-                  {/* Stage & Units Stats */}
-                  <div className="grid grid-cols-2 gap-2 my-3 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/60 text-xs">
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-0.5">
-                        Estágio
-                      </span>
-                      <span className="font-semibold text-indigo-300 truncate block">
-                        {stageName}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block mb-0.5">
-                        Unidades
-                      </span>
-                      <span className="font-semibold text-slate-200 block">
-                        {lead.unit_count != null ? `${lead.unit_count} un.` : '-'}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Contact preview or Administrator */}
-                  <div className="space-y-1.5 text-xs text-slate-300 mb-3">
-                    {lead.administrator && (
-                      <div className="flex items-center gap-1.5 text-slate-400 truncate">
-                        <span className="text-slate-500">Adm:</span>
-                        <span className="truncate">{lead.administrator}</span>
-                      </div>
-                    )}
-                    {leadContactsList.length > 0 && (
-                      <div className="flex items-center gap-1.5 text-slate-300 truncate">
-                        <span className="text-slate-500">Contato:</span>
-                        <span className="truncate font-medium">{leadContactsList[0].name}</span>
-                        {leadContactsList[0].role_title && (
-                          <span className="text-slate-400 text-[11px]">
-                            ({leadContactsList[0].role_title})
-                          </span>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Services tags */}
-                  {leadServicesIds.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 mb-4">
-                      {leadServicesIds.slice(0, 3).map((sId) => (
-                        <span
-                          key={sId}
-                          className="px-2 py-0.5 rounded-md bg-slate-800 border border-slate-700/60 text-[10px] text-slate-300 font-medium"
-                        >
-                          {serviceMap.get(sId) || 'Serviço'}
-                        </span>
-                      ))}
-                      {leadServicesIds.length > 3 && (
-                        <span className="px-1.5 py-0.5 rounded-md bg-slate-800/50 text-[10px] text-slate-400">
-                          +{leadServicesIds.length - 3}
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Latest Interaction preview if available */}
-                  {latestInteraction && (
-                    <div className="mt-3 pt-3 border-t border-slate-800/60 text-xs">
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
-                        <span className="flex items-center gap-1">
-                          Última interação: {getInteractionTypeBadge(latestInteraction.interaction_type)}
-                        </span>
-                        <span>{formatDateBR(latestInteraction.occurred_at)}</span>
-                      </div>
-                      {latestInteraction.next_follow_up_date && (
-                        <div className="flex items-center justify-between text-[11px]">
-                          <span className="text-slate-400">Próximo follow-up:</span>
-                          <span
-                            className={`font-semibold ${
-                              getFollowUpStatus(latestInteraction.next_follow_up_date) === 'overdue'
-                                ? 'text-amber-400'
-                                : getFollowUpStatus(latestInteraction.next_follow_up_date) === 'today'
-                                ? 'text-indigo-400'
-                                : 'text-slate-300'
-                            }`}
-                          >
-                            {formatDateBR(latestInteraction.next_follow_up_date)}
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                {/* Card Footer: Responsible & Action Buttons */}
-                <div className="mt-4 pt-3 border-t border-slate-800/80 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] font-semibold text-slate-300 uppercase">
-                      {responsibleName.charAt(0)}
-                    </div>
-                    <span className="text-xs text-slate-400 truncate max-w-[110px]">
-                      {responsibleName}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-1">
-                    {/* Direct Quick Interaction Button */}
-                    <button
-                      type="button"
-                      onClick={() => handleOpenCreateInteraction(lead)}
-                      title="Registrar interação"
-                      aria-label="Registrar interação"
-                      className="p-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/60 transition-colors cursor-pointer flex items-center gap-1"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                      </svg>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleOpenView(lead)}
-                      title="Ver detalhes"
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                      </svg>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEdit(lead)}
-                      title="Editar condomínio"
-                      className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+          <button
+            type="button"
+            onClick={handleOpenCreate}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md cursor-pointer"
+          >
+            + Criar primeiro condomínio
+          </button>
         </div>
       ) : (
-        /* LIST VIEW */
-        <div className="mt-6 bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 text-xs font-semibold uppercase tracking-wider">
-                  <th className="py-3.5 px-4 sm:px-6">Condomínio</th>
-                  <th className="py-3.5 px-4 hidden md:table-cell">Cidade</th>
-                  <th className="py-3.5 px-4 hidden lg:table-cell">Tipo</th>
-                  <th className="py-3.5 px-4">Temperatura</th>
-                  <th className="py-3.5 px-4">Estágio</th>
-                  <th className="py-3.5 px-4 hidden sm:table-cell">Responsável</th>
-                  <th className="py-3.5 px-4 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/70 text-slate-200">
-                {filteredLeads.map((lead) => {
-                  const stageName = lead.current_stage_id
-                    ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
-                    : 'Estágio inicial';
-                  const responsibleName = lead.responsible_user_id
-                    ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
-                    : 'Não atribuído';
+        <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-5 items-start">
+          {pipelineColumns.map((col) => (
+            <div
+              key={col.id}
+              className="bg-slate-900/60 border border-slate-800/90 rounded-2xl p-4 flex flex-col min-h-[500px]"
+            >
+              {/* Column Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800/80 mb-4">
+                <div className="flex items-center gap-2">
+                  <span className={`w-2.5 h-2.5 rounded-full ${col.dotColor}`} />
+                  <h2 className="font-bold text-sm text-white tracking-tight">{col.label}</h2>
+                </div>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold border tabular-nums ${col.headerBadgeColor}`}
+                >
+                  {col.leads.length}
+                </span>
+              </div>
 
-                  return (
-                    <tr key={lead.id} className="hover:bg-slate-800/40 transition-colors">
-                      <td className="py-3.5 px-4 sm:px-6 font-medium text-white">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenView(lead)}
-                          className="text-left font-semibold text-white hover:text-indigo-400 transition-colors cursor-pointer"
-                        >
-                          {lead.name}
-                        </button>
-                        {lead.administrator && (
-                          <span className="text-[11px] text-slate-400 block">
-                            Adm: {lead.administrator}
-                          </span>
+              {/* Column Cards */}
+              <div className="space-y-3.5 flex-1">
+                {col.leads.length === 0 ? (
+                  <div className="py-10 text-center text-xs text-slate-500 italic border border-dashed border-slate-800/80 rounded-xl bg-slate-950/30">
+                    Nenhum condomínio nesta temperatura
+                  </div>
+                ) : (
+                  col.leads.map((lead) => {
+                    const stageName = lead.current_stage_id
+                      ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
+                      : 'Estágio inicial';
+                    const responsibleName = lead.responsible_user_id
+                      ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
+                      : 'Não atribuído';
+                    const leadContactsList = getContactsForLead(lead.id);
+                    const leadInteractions = getInteractionsForLead(lead.id);
+                    const latestInteraction = leadInteractions[0];
+                    const leadServicesIds = getLeadServices(lead.id);
+
+                    return (
+                      <div
+                        key={lead.id}
+                        className="bg-slate-950/80 hover:bg-slate-900/90 border border-slate-800 hover:border-slate-700 rounded-xl p-4 shadow-md transition-all flex flex-col justify-between group"
+                      >
+                        <div>
+                          {/* Card Title & Stage */}
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <h3
+                              onClick={() => handleOpenView(lead)}
+                              className="font-bold text-sm text-white hover:text-indigo-400 transition-colors cursor-pointer leading-tight line-clamp-2"
+                            >
+                              {lead.name}
+                            </h3>
+                          </div>
+
+                          {/* Location, Type & Units */}
+                          <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-400 mb-2.5">
+                            {lead.city && <span className="text-slate-300">{lead.city}</span>}
+                            {lead.city && <span>·</span>}
+                            <span>{lead.condominium_type || 'Residencial'}</span>
+                            {lead.unit_count != null && (
+                              <>
+                                <span>·</span>
+                                <span className="text-slate-300 font-medium">{lead.unit_count} un.</span>
+                              </>
+                            )}
+                          </div>
+
+                          {/* Pipeline Stage Tag */}
+                          <div className="mb-2.5">
+                            <span className="inline-block px-2.5 py-0.5 rounded-lg bg-indigo-950/60 border border-indigo-700/40 text-[11px] font-medium text-indigo-300">
+                              {stageName}
+                            </span>
+                          </div>
+
+                          {/* Administrator & Contact summary */}
+                          <div className="space-y-1 text-xs text-slate-400 mb-3 bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/60">
+                            {lead.administrator && (
+                              <div className="truncate">
+                                <span className="text-slate-500">Adm:</span>{' '}
+                                <span className="text-slate-300 font-medium">{lead.administrator}</span>
+                              </div>
+                            )}
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="text-slate-500">Contatos:</span>
+                              <span className="text-slate-300 font-semibold">
+                                {leadContactsList.length > 0
+                                  ? `${leadContactsList.length} cadastrado(s)`
+                                  : 'Nenhum'}
+                              </span>
+                            </div>
+                            {latestInteraction && (
+                              <div className="text-[11px] text-slate-400 truncate pt-1 border-t border-slate-800/60">
+                                <span className="text-slate-500">Última:</span>{' '}
+                                {latestInteraction.interaction_type} em {formatDateBR(latestInteraction.occurred_at)}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Services Tags if any */}
+                          {leadServicesIds.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mb-3">
+                              {leadServicesIds.slice(0, 2).map((sId) => (
+                                <span
+                                  key={sId}
+                                  className="px-1.5 py-0.5 rounded bg-slate-800 text-[10px] text-slate-300 font-medium"
+                                >
+                                  {serviceMap.get(sId) || 'Serviço'}
+                                </span>
+                              ))}
+                              {leadServicesIds.length > 2 && (
+                                <span className="text-[10px] text-slate-500 self-center">
+                                  +{leadServicesIds.length - 2}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* CARD FOOTER: Actions & Responsible */}
+                        <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <div className="w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] font-semibold text-slate-300 uppercase">
+                              {responsibleName.charAt(0)}
+                            </div>
+                            <span className="text-[11px] text-slate-400 truncate max-w-[80px]">
+                              {responsibleName}
+                            </span>
+                          </div>
+
+                          {/* Action Icons in Footer */}
+                          <div className="flex items-center gap-1">
+                            {/* WhatsApp Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenContactPopup(lead, 'whatsapp')}
+                              title="Contatos e WhatsApp"
+                              aria-label="Contatos e WhatsApp"
+                              className="p-1.5 rounded-lg bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-400 border border-emerald-700/50 transition-all cursor-pointer"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                              </svg>
+                            </button>
+
+                            {/* Email Button */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenContactPopup(lead, 'email')}
+                              title="Contatos e E-mail"
+                              aria-label="Contatos e E-mail"
+                              className="p-1.5 rounded-lg bg-sky-950/60 hover:bg-sky-900/80 text-sky-400 border border-sky-700/50 transition-all cursor-pointer"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                              </svg>
+                            </button>
+
+                            {/* Direct Interaction Shortcut */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenCreateInteraction(lead)}
+                              title="Registrar interação"
+                              aria-label="Registrar interação"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-300 hover:bg-indigo-950/60 border border-transparent hover:border-indigo-800/50 transition-all cursor-pointer"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                              </svg>
+                            </button>
+
+                            {/* Edit Pencil Icon */}
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEdit(lead)}
+                              title="Editar condomínio"
+                              aria-label="Editar condomínio"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 border border-transparent transition-all cursor-pointer"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* POPUP DE CONTATOS (WHATSAPP E E-MAIL) */}
+      {contactPopup.open && contactPopup.lead && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[85vh]">
+            {/* Popup Header */}
+            <div className="px-6 py-4 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div
+                  className={`w-8 h-8 rounded-xl flex items-center justify-center ${
+                    contactPopup.type === 'whatsapp'
+                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-700/50'
+                      : 'bg-sky-950 text-sky-400 border border-sky-700/50'
+                  }`}
+                >
+                  {contactPopup.type === 'whatsapp' ? (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">
+                    {contactPopup.type === 'whatsapp' ? 'WhatsApp & Telefones' : 'E-mails de Contato'}
+                  </h3>
+                  <p className="text-xs text-slate-400 truncate max-w-[260px]">
+                    {contactPopup.lead.name}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {contactPopup.mode === 'list' && (
+                  <button
+                    type="button"
+                    onClick={() => setContactPopup((prev) => ({ ...prev, mode: 'add' }))}
+                    className="px-2.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold cursor-pointer flex items-center gap-1"
+                  >
+                    + Novo
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleCloseContactPopup}
+                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+
+            {/* Popup Content */}
+            <div className="p-6 overflow-y-auto flex-1 text-sm">
+              {contactPopup.mode === 'list' ? (
+                /* CONTACTS LIST */
+                <div className="space-y-3">
+                  {(() => {
+                    const leadContacts = getContactsForLead(contactPopup.lead.id);
+
+                    if (leadContacts.length === 0) {
+                      return (
+                        <div className="text-center py-8 bg-slate-950/60 rounded-2xl border border-slate-800 p-6">
+                          <p className="text-xs text-slate-400 mb-3">
+                            Nenhum contato cadastrado para este condomínio.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => setContactPopup((prev) => ({ ...prev, mode: 'add' }))}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                          >
+                            + Adicionar contato
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    return leadContacts.map((contact) => (
+                      <div
+                        key={contact.id}
+                        className="p-3.5 bg-slate-950 border border-slate-800 rounded-2xl flex flex-col gap-2.5"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <h4 className="font-bold text-sm text-white">{contact.name}</h4>
+                            <span className="text-xs text-indigo-400 font-medium">
+                              {contact.role_title || 'Contato do Condomínio'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* WhatsApp / Phone Row */}
+                        {contactPopup.type === 'whatsapp' && (
+                          <div className="flex items-center justify-between pt-2 border-t border-slate-800/60">
+                            <span className="text-xs text-slate-300 font-mono">
+                              {contact.phone || 'Sem telefone'}
+                            </span>
+                            {contact.phone ? (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(contact.phone!, contact.id)}
+                                  className="px-2.5 py-1 text-xs text-slate-400 hover:text-white bg-slate-800 rounded-lg cursor-pointer"
+                                >
+                                  {copiedId === contact.id ? 'Copiado!' : 'Copiar'}
+                                </button>
+                                <a
+                                  href={getWhatsAppLink(contact.phone)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-lg transition-colors inline-flex items-center gap-1.5"
+                                >
+                                  <span>Conversar no WhatsApp</span>
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                  </svg>
+                                </a>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-slate-500">Telefone não informado</span>
+                            )}
+                          </div>
                         )}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-300 hidden md:table-cell">
-                        {lead.city || '-'}
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-300 hidden lg:table-cell">
-                        {lead.condominium_type || 'Residencial'}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        {getTemperatureBadge(lead.temperature)}
-                      </td>
-                      <td className="py-3.5 px-4">
-                        <span className="text-xs font-medium text-indigo-300">
-                          {stageName}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-4 text-slate-300 hidden sm:table-cell">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-5 h-5 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] text-slate-300 uppercase font-semibold">
-                            {responsibleName.charAt(0)}
-                          </span>
-                          <span className="text-xs truncate max-w-[130px]">
-                            {responsibleName}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            onClick={() => handleOpenCreateInteraction(lead)}
-                            title="Registrar interação"
-                            aria-label="Registrar interação"
-                            className="p-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/60 transition-colors cursor-pointer"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={() => handleOpenView(lead)}
-                            title="Visualizar detalhes"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                            </svg>
-                          </button>
-                          <button
-                            onClick={() => handleOpenEdit(lead)}
-                            title="Editar lead"
-                            className="p-1.5 rounded-lg text-indigo-400 hover:text-indigo-300 hover:bg-indigo-950/60 transition-colors cursor-pointer"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                            </svg>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+
+                        {/* Email Row */}
+                        {contactPopup.type === 'email' && (
+                          <div className="flex items-center justify-between pt-2 border-t border-slate-800/60">
+                            <span className="text-xs text-slate-300 truncate max-w-[200px]">
+                              {contact.email || 'Sem e-mail'}
+                            </span>
+                            {contact.email ? (
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(contact.email!, contact.id)}
+                                  className="px-2.5 py-1 text-xs text-slate-400 hover:text-white bg-slate-800 rounded-lg cursor-pointer"
+                                >
+                                  {copiedId === contact.id ? 'Copiado!' : 'Copiar'}
+                                </button>
+                                <a
+                                  href={`mailto:${contact.email}`}
+                                  className="px-3 py-1 bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold rounded-lg transition-colors inline-flex items-center gap-1.5"
+                                >
+                                  <span>Enviar E-mail</span>
+                                </a>
+                              </div>
+                            ) : (
+                              <span className="text-[11px] text-slate-500">E-mail não informado</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    ));
+                  })()}
+                </div>
+              ) : (
+                /* ADD CONTACT FORM IN POPUP */
+                <form onSubmit={handleSaveContactFromPopup} className="space-y-4">
+                  {contactFormError && (
+                    <div className="p-3 bg-rose-950 border border-rose-600/50 rounded-xl text-xs text-rose-200">
+                      {contactFormError}
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      Nome Completo <span className="text-rose-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      autoFocus
+                      value={newContactName}
+                      onChange={(e) => setNewContactName(e.target.value)}
+                      placeholder="Ex: Carlos Síndico"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      Vínculo / Cargo
+                    </label>
+                    <select
+                      value={newContactRolePreset}
+                      onChange={(e) => setNewContactRolePreset(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                    >
+                      {PRESET_ROLES.map((role) => (
+                        <option key={role} value={role}>
+                          {role}
+                        </option>
+                      ))}
+                    </select>
+                    {newContactRolePreset === 'Outro' && (
+                      <input
+                        type="text"
+                        value={newContactCustomRole}
+                        onChange={(e) => setNewContactCustomRole(e.target.value)}
+                        placeholder="Especifique o cargo..."
+                        className="mt-2 w-full px-3.5 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                      />
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      WhatsApp / Telefone {contactPopup.type === 'whatsapp' && <span className="text-emerald-400 font-normal">(Principal)</span>}
+                    </label>
+                    <input
+                      type="text"
+                      value={newContactPhone}
+                      onChange={(e) => setNewContactPhone(e.target.value)}
+                      placeholder="(11) 99999-9999"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      E-mail {contactPopup.type === 'email' && <span className="text-sky-400 font-normal">(Principal)</span>}
+                    </label>
+                    <input
+                      type="email"
+                      value={newContactEmail}
+                      onChange={(e) => setNewContactEmail(e.target.value)}
+                      placeholder="contato@condominio.com"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-white text-xs focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-300 mb-1">
+                      Observação (opcional)
+                    </label>
+                    <input
+                      type="text"
+                      value={newContactNotes}
+                      onChange={(e) => setNewContactNotes(e.target.value)}
+                      placeholder="Ex: Melhor horário para contato: após as 18h"
+                      className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="pt-2 flex items-center justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setContactPopup((prev) => ({ ...prev, mode: 'list' }))}
+                      disabled={savingNewContact}
+                      className="px-3 py-2 text-xs text-slate-400 hover:text-white cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={savingNewContact}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      {savingNewContact ? 'Salvando...' : 'Salvar Contato'}
+                    </button>
+                  </div>
+                </form>
+              )}
+            </div>
           </div>
         </div>
       )}
 
-      {/* DYNAMIC QUIZ-STYLE MODAL FOR LEAD CREATE / EDIT */}
+      {/* DYNAMIC QUIZ-STYLE MODAL FOR LEAD CREATE / EDIT WITH INSTANT SAVE BUTTON */}
       {(modalMode === 'create' || modalMode === 'edit') && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="relative w-full max-w-2xl bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col max-h-[90vh]">
@@ -1331,14 +1639,29 @@ export default function LeadsModule({
                     </span>
                   )}
                 </div>
+
                 <div className="flex items-center gap-2">
+                  {/* DIRECT SAVE BUTTON AVAILABLE IN ALL STEPS */}
+                  <button
+                    type="button"
+                    onClick={handleSubmitLead}
+                    disabled={formSaving || !formName.trim()}
+                    className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-xl text-xs font-bold shadow-md transition-all cursor-pointer flex items-center gap-1.5"
+                    title="Gravar alterações agora sem precisar navegar todos os passos"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span>{formSaving ? 'Salvando...' : 'Salvar agora'}</span>
+                  </button>
+
                   {isRestoredDraft && (
                     <button
                       type="button"
                       onClick={handleDiscardLeadDraft}
-                      className="text-xs text-rose-400 hover:text-rose-300 mr-2 cursor-pointer"
+                      className="text-xs text-rose-400 hover:text-rose-300 mr-1 cursor-pointer"
                     >
-                      Descartar rascunho
+                      Descartar
                     </button>
                   )}
                   <button
@@ -1453,7 +1776,7 @@ export default function LeadsModule({
 
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">
-                      Número de Unidades <span className="text-rose-400">*</span>
+                      Número de Unidades
                     </label>
                     <input
                       type="number"
@@ -1482,7 +1805,7 @@ export default function LeadsModule({
                       Onde fica e quem administra?
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Preencha o endereço e os dados da administradora contratada.
+                      Preencha a cidade, endereço e administradora.
                     </p>
                   </div>
 
@@ -1528,7 +1851,7 @@ export default function LeadsModule({
                 </div>
               )}
 
-              {/* STEP 4: Origem & Serviços de Interesse */}
+              {/* STEP 4: Origem & Serviços */}
               {quizStep === 4 && (
                 <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
@@ -1596,21 +1919,21 @@ export default function LeadsModule({
                 </div>
               )}
 
-              {/* STEP 5: Pipeline, Temperatura & Responsável */}
+              {/* STEP 5: Pipeline & Temperatura */}
               {quizStep === 5 && (
                 <div className="space-y-5 animate-in fade-in duration-200">
                   <div>
                     <h3 className="text-lg font-bold text-white mb-1">
-                      Pipeline Comercial
+                      Pipeline Comercial & Temperatura
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Defina a temperatura, o estágio atual do funil e o responsável interno.
+                      Defina a temperatura no pipeline, estágio atual e responsável.
                     </p>
                   </div>
 
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-2">
-                      Temperatura
+                      Temperatura do Lead
                     </label>
                     <div className="grid grid-cols-3 gap-2">
                       {TEMPERATURE_OPTIONS.map((temp) => (
@@ -1693,7 +2016,7 @@ export default function LeadsModule({
                       Revisão do Condomínio
                     </h3>
                     <p className="text-xs text-slate-400">
-                      Confira todos os dados antes de finalizar o cadastro.
+                      Confira todos os dados antes de salvar.
                     </p>
                   </div>
 
@@ -1705,7 +2028,7 @@ export default function LeadsModule({
                     <div className="flex justify-between border-b border-slate-800/80 pb-2">
                       <span className="text-slate-400">Tipo / Unidades:</span>
                       <span className="font-semibold text-white">
-                        {formCondominiumType} ({formUnitCount} un.)
+                        {formCondominiumType} ({formUnitCount || '0'} un.)
                       </span>
                     </div>
                     <div className="flex justify-between border-b border-slate-800/80 pb-2">
@@ -1753,7 +2076,7 @@ export default function LeadsModule({
                   type="button"
                   onClick={handleCloseModal}
                   disabled={formSaving}
-                  className="px-4 py-2 text-slate-400 hover:text-white text-xs font-medium transition-colors cursor-pointer"
+                  className="px-3 py-2 text-slate-400 hover:text-white text-xs font-medium transition-colors cursor-pointer"
                 >
                   Cancelar
                 </button>
@@ -1826,7 +2149,9 @@ export default function LeadsModule({
                   <span className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
                     Temperatura
                   </span>
-                  {getTemperatureBadge(selectedLead.temperature)}
+                  <span className="font-semibold text-xs text-indigo-300">
+                    {selectedLead.temperature || 'Morno'}
+                  </span>
                 </div>
                 <div className="p-3 bg-slate-950/70 border border-slate-800/80 rounded-xl">
                   <span className="text-[10px] text-slate-400 uppercase font-semibold block mb-1">
@@ -1876,6 +2201,47 @@ export default function LeadsModule({
                 </div>
               </div>
 
+              {/* CONTATOS DO CONDOMÍNIO */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                      Contatos Vinculados
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full bg-slate-800 text-[10px] text-slate-400 font-semibold">
+                      {getContactsForLead(selectedLead.id).length}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleOpenContactPopup(selectedLead, 'whatsapp')}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>+ Gerenciar Contatos</span>
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {getContactsForLead(selectedLead.id).map((c) => (
+                    <div key={c.id} className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
+                      <div>
+                        <div className="font-semibold text-white">{c.name}</div>
+                        <div className="text-slate-400 text-[11px]">{c.role_title || 'Contato Geral'}</div>
+                      </div>
+                      <div className="flex items-center gap-3 text-slate-300 text-[11px]">
+                        {c.phone && <span>{c.phone}</span>}
+                        {c.email && <span>{c.email}</span>}
+                      </div>
+                    </div>
+                  ))}
+                  {getContactsForLead(selectedLead.id).length === 0 && (
+                    <div className="p-4 bg-slate-950/40 border border-slate-800 rounded-xl text-center text-xs text-slate-500">
+                      Nenhum contato vinculado a este condomínio.
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* HISTÓRICO DE INTERAÇÕES */}
               <div>
                 <div className="flex items-center justify-between mb-3">
@@ -1912,7 +2278,9 @@ export default function LeadsModule({
                       >
                         <div className="flex items-center justify-between text-xs">
                           <div className="flex items-center gap-2">
-                            {getInteractionTypeBadge(interaction.interaction_type)}
+                            <span className="px-2 py-0.5 rounded-md bg-slate-800 text-indigo-300 font-semibold text-[11px]">
+                              {interaction.interaction_type}
+                            </span>
                             <span className="text-slate-400 text-[11px]">
                               {formatDateTimeBR(interaction.occurred_at)}
                             </span>
@@ -2083,7 +2451,7 @@ export default function LeadsModule({
                       autoFocus
                       value={formInteractionNotes}
                       onChange={(e) => setFormInteractionNotes(e.target.value)}
-                      placeholder="Ex: Falamos com o síndico sobre a proposta de portaria remota. Ele pediu para reavaliar os valores..."
+                      placeholder="Ex: Falamos com o síndico sobre a proposta comercial..."
                       className="w-full px-4 py-3 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none transition-colors"
                     />
                   </div>

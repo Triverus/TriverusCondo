@@ -3,7 +3,6 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from './lib/supabase.ts';
 import { CRMProvider } from './lib/crmStore.tsx';
 import LeadsModule from './components/LeadsModule.tsx';
-import ContactsModule from './components/ContactsModule.tsx';
 import FollowUpsModule from './components/FollowUpsModule.tsx';
 
 export interface UserProfile {
@@ -407,32 +406,17 @@ export default function App() {
 
   // Determine active route
   const isFollowUpsActive = path.startsWith('/app/followups');
-  const isContactsActive = path.startsWith('/app/contatos');
-  const isLeadsActive =
-    path.startsWith('/app/leads') ||
-    path === '/app' ||
-    (!isContactsActive && !isFollowUpsActive && path.startsWith('/app'));
+  const isLeadsActive = !isFollowUpsActive && path.startsWith('/app');
 
   const navItems = [
     {
       id: 'leads',
-      label: 'Leads',
+      label: 'Leads & Pipeline',
       path: '/app/leads',
       active: isLeadsActive,
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-        </svg>
-      ),
-    },
-    {
-      id: 'contatos',
-      label: 'Contatos',
-      path: '/app/contatos',
-      active: isContactsActive,
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
         </svg>
       ),
     },
@@ -466,7 +450,7 @@ export default function App() {
               </svg>
             </button>
             <span className="font-bold text-sm tracking-tight text-white">
-              {isFollowUpsActive ? 'Follow-ups' : isContactsActive ? 'Contatos' : 'Leads'}
+              {isFollowUpsActive ? 'Follow-ups' : 'Pipeline de Leads'}
             </span>
           </div>
 
@@ -622,8 +606,6 @@ export default function App() {
                 navigate('/app/leads');
               }}
             />
-          ) : isContactsActive ? (
-            <ContactsModule currentProfile={profile} />
           ) : (
             <LeadsModule
               currentProfile={profile}
