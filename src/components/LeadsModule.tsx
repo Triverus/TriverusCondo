@@ -37,6 +37,19 @@ export interface LeadServiceRelation {
   service_id: string;
 }
 
+export interface ContactSummary {
+  id: string;
+  name: string;
+  role_title?: string | null;
+  phone?: string | null;
+  email?: string | null;
+}
+
+export interface LeadContactRelation {
+  lead_id: string;
+  contact_id: string;
+}
+
 interface LeadsModuleProps {
   currentProfile: UserProfile;
 }
@@ -64,6 +77,8 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [services, setServices] = useState<ServiceItem[]>([]);
   const [leadServices, setLeadServices] = useState<LeadServiceRelation[]>([]);
+  const [contacts, setContacts] = useState<ContactSummary[]>([]);
+  const [leadContacts, setLeadContacts] = useState<LeadContactRelation[]>([]);
 
   // Loading and error states
   const [loading, setLoading] = useState<boolean>(true);
@@ -133,6 +148,17 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
         .from('lead_services')
         .select('lead_id, service_id');
       setLeadServices(leadServicesRes.data || []);
+
+      // 6. Load contacts and lead_contacts relations
+      const contactsRes = await supabase
+        .from('contacts')
+        .select('id, name, role_title, phone, email');
+      setContacts(contactsRes.data || []);
+
+      const leadContactsRes = await supabase
+        .from('lead_contacts')
+        .select('lead_id, contact_id');
+      setLeadContacts(leadContactsRes.data || []);
     } catch (err: any) {
       console.error('Error loading CRM leads data:', err);
       setStatusFeedback({
@@ -175,6 +201,17 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
         .map((ls) => ls.service_id);
     },
     [leadServices]
+  );
+
+  // Get contacts associated with a specific lead
+  const getContactsForLead = useCallback(
+    (leadId: string): ContactSummary[] => {
+      const contactIds = leadContacts
+        .filter((lc) => lc.lead_id === leadId)
+        .map((lc) => lc.contact_id);
+      return contacts.filter((c) => contactIds.includes(c.id));
+    },
+    [leadContacts, contacts]
   );
 
   // Filter leads by search term
@@ -1169,6 +1206,46 @@ export default function LeadsModule({ currentProfile }: LeadsModuleProps) {
                         >
                           {serviceMap.get(sId) || 'Serviço'}
                         </span>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Contatos Vinculados */}
+              <div>
+                <h4 className="text-xs uppercase tracking-wider font-semibold text-slate-400 mb-2">
+                  Contatos Vinculados
+                </h4>
+                {(() => {
+                  const linkedContacts = getContactsForLead(selectedLead.id);
+                  if (linkedContacts.length === 0) {
+                    return (
+                      <p className="text-xs text-slate-500 italic p-3 bg-slate-950/40 rounded-lg border border-slate-800/60">
+                        Nenhum contato vinculado a este condomínio.
+                      </p>
+                    );
+                  }
+                  return (
+                    <div className="space-y-2">
+                      {linkedContacts.map((contact) => (
+                        <div
+                          key={contact.id}
+                          className="p-3 bg-slate-950/60 border border-slate-800 rounded-lg flex items-center justify-between text-xs"
+                        >
+                          <div>
+                            <div className="font-semibold text-white flex items-center gap-2">
+                              <span>{contact.name}</span>
+                              <span className="text-[10px] font-normal px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300">
+                                {contact.role_title || 'Contato'}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap gap-x-4 gap-y-0.5 font-mono">
+                              {contact.phone && <span>Tel: {contact.phone}</span>}
+                              {contact.email && <span>Email: {contact.email}</span>}
+                            </div>
+                          </div>
+                        </div>
                       ))}
                     </div>
                   );

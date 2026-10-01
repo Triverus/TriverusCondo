@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from './lib/supabase.ts';
 import LeadsModule from './components/LeadsModule.tsx';
+import ContactsModule from './components/ContactsModule.tsx';
 
 export interface UserProfile {
   id: string;
@@ -400,34 +401,50 @@ export default function App() {
     );
   }
 
-  // Área interna autenticada (/app e /app/leads)
+  // Determine active route
+  const isContactsActive = path.startsWith('/app/contatos');
+  const isLeadsActive = path.startsWith('/app/leads') || path === '/app' || (!isContactsActive && path.startsWith('/app'));
+
+  // Área interna autenticada (/app/leads e /app/contatos)
   return (
     <div className="min-h-screen bg-slate-950 text-white flex flex-col">
       {/* Top Header */}
-      <header className="border-b border-slate-800 bg-slate-900/80 backdrop-blur sticky top-0 z-40 px-4 sm:px-6 py-3.5 flex items-center justify-between">
-        <div className="flex items-center gap-6">
-          <div className="flex items-center gap-2.5">
-            <span className="text-xl font-bold tracking-tight text-white">Triverus</span>
+      <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-40 px-3 sm:px-6 py-2.5 sm:py-3.5 flex items-center justify-between gap-2 sm:gap-4">
+        <div className="flex items-center gap-3 sm:gap-6">
+          <div className="flex items-center gap-2">
+            <span className="text-lg sm:text-xl font-bold tracking-tight text-white">Triverus</span>
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 border border-indigo-700/60 text-indigo-300 font-semibold uppercase">
               CRM
             </span>
           </div>
 
-          <nav className="flex items-center gap-1">
+          <nav className="flex items-center gap-1 sm:gap-1.5">
             <button
+              type="button"
               onClick={() => navigate('/app/leads')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
-                path.startsWith('/app/leads') || path === '/app'
-                  ? 'bg-slate-800 text-white border border-slate-700'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+              className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors cursor-pointer ${
+                isLeadsActive
+                  ? 'bg-slate-800 text-white border border-slate-700 font-semibold shadow-xs'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50 border border-transparent'
               }`}
             >
               Leads
             </button>
+            <button
+              type="button"
+              onClick={() => navigate('/app/contatos')}
+              className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors cursor-pointer ${
+                isContactsActive
+                  ? 'bg-slate-800 text-white border border-slate-700 font-semibold shadow-xs'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/50 border border-transparent'
+              }`}
+            >
+              Contatos
+            </button>
           </nav>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-4">
           <div className="text-right hidden sm:block">
             <div className="flex items-center justify-end gap-1.5">
               <span className="text-xs font-medium text-slate-200">
@@ -445,16 +462,20 @@ export default function App() {
           <button
             onClick={handleLogout}
             title="Sair do sistema"
-            className="px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-red-950 hover:text-red-300 hover:border-red-800 border border-slate-700 rounded-lg text-slate-300 transition-colors cursor-pointer"
+            className="px-2.5 sm:px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-red-950 hover:text-red-300 hover:border-red-800 border border-slate-700 rounded-lg text-slate-300 transition-colors cursor-pointer"
           >
             Sair
           </button>
         </div>
       </header>
 
-      {/* Main content: Leads Module */}
+      {/* Main content: Leads Module or Contacts Module */}
       <main className="flex-1 pb-12">
-        <LeadsModule currentProfile={profile} />
+        {isContactsActive ? (
+          <ContactsModule currentProfile={profile} />
+        ) : (
+          <LeadsModule currentProfile={profile} />
+        )}
       </main>
     </div>
   );
