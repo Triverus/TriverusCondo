@@ -423,6 +423,7 @@ export default function LeadsModule({
 
   // Interaction handlers
   const handleOpenCreateInteraction = (lead: Lead) => {
+    setSelectedLead(lead);
     setFormInteractionError(null);
     setSelectedInteraction(null);
     setFormInteractionType('Ligação');
@@ -938,6 +939,26 @@ export default function LeadsModule({
                       </td>
                       <td className="py-3.5 px-4 text-right">
                         <div className="inline-flex items-center gap-1">
+                          <button
+                            onClick={() => handleOpenCreateInteraction(lead)}
+                            title="Registrar interação"
+                            aria-label="Registrar interação"
+                            className="p-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 hover:bg-emerald-950/60 transition-colors cursor-pointer"
+                          >
+                            <svg
+                              className="w-4 h-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                              />
+                            </svg>
+                          </button>
                           <button
                             onClick={() => handleOpenView(lead)}
                             title="Visualizar detalhes"

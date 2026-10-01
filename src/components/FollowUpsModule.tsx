@@ -717,7 +717,8 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
                           <button
                             type="button"
                             onClick={() => handleOpenQuickInteraction(item.lead)}
-                            title="Registrar nova interação"
+                            title="Registrar interação"
+                            aria-label="Registrar interação"
                             className="px-2.5 py-1.5 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-lg text-xs font-medium transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
                           >
                             <svg
@@ -733,7 +734,7 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
                                 d="M12 4v16m8-8H4"
                               />
                             </svg>
-                            <span className="hidden sm:inline">Interagir</span>
+                            <span className="hidden sm:inline">Registrar interação</span>
                           </button>
 
                           <button
