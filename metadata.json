@@ -1,6 +1,6 @@
 {
   "name": "Triverus",
-  "description": "Validação de deploy Triverus",
+  "description": "Triverus - CRM e Gestão de Condomínios",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
