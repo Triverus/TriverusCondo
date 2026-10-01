@@ -17,7 +17,13 @@ export default function App() {
   // Central state for profile
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileLoading, setProfileLoading] = useState<boolean>(false);
-  const [profileError, setProfileError] = useState<string | null>(null);
+  const [profileQueryError, setProfileQueryError] = useState<{
+    message: string;
+    code?: string;
+    details?: string;
+    hint?: string;
+  } | null>(null);
+  const [profileNotFound, setProfileNotFound] = useState<boolean>(false);
 
   // Form states for login
   const [email, setEmail] = useState('');
@@ -41,10 +47,11 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Fetch profile from public.profiles
+  // Fetch profile from public.profiles with diagnostic logging
   const fetchProfile = useCallback(async (userId: string) => {
     setProfileLoading(true);
-    setProfileError(null);
+    setProfileQueryError(null);
+    setProfileNotFound(false);
 
     try {
       const { data, error } = await supabase
@@ -54,23 +61,39 @@ export default function App() {
         .maybeSingle();
 
       if (error) {
-        console.error('Error fetching profile:', error.message);
+        console.error('Erro completo na consulta public.profiles:', error);
         setProfile(null);
-        setProfileError('Perfil de usuário não encontrado.');
+        setProfileQueryError({
+          message: error.message || 'Sem mensagem de erro',
+          code: error.code || 'N/A',
+          details: error.details || 'N/A',
+          hint: error.hint || 'N/A',
+        });
+        setProfileNotFound(false);
       } else if (!data) {
+        console.warn('Consulta a public.profiles retornou data = null sem erro.');
         setProfile(null);
-        setProfileError('Perfil de usuário não encontrado.');
+        setProfileQueryError(null);
+        setProfileNotFound(true);
       } else {
         setProfile({
           id: data.id,
           full_name: data.full_name,
           role: data.role,
         });
+        setProfileQueryError(null);
+        setProfileNotFound(false);
       }
-    } catch (err) {
-      console.error('Exception fetching profile:', err);
+    } catch (err: any) {
+      console.error('Exceção capturada na consulta public.profiles:', err);
       setProfile(null);
-      setProfileError('Perfil de usuário não encontrado.');
+      setProfileQueryError({
+        message: err?.message || String(err),
+        code: err?.code || 'EXCEPTION',
+        details: err?.details || String(err?.stack || 'N/A'),
+        hint: err?.hint || 'N/A',
+      });
+      setProfileNotFound(false);
     } finally {
       setProfileLoading(false);
     }
@@ -110,7 +133,8 @@ export default function App() {
           await fetchProfile(currentSession.user.id);
         } else {
           setProfile(null);
-          setProfileError(null);
+          setProfileQueryError(null);
+          setProfileNotFound(false);
           setProfileLoading(false);
         }
         setLoading(false);
@@ -183,7 +207,8 @@ export default function App() {
       await supabase.auth.signOut();
       setSession(null);
       setProfile(null);
-      setProfileError(null);
+      setProfileQueryError(null);
+      setProfileNotFound(false);
       navigate('/login');
     } catch (err) {
       console.error('Logout error:', err);
@@ -285,28 +310,91 @@ export default function App() {
     );
   }
 
-  // Se existir sessão válida mas não existir profile correspondente
-  if (profileError || !profile) {
+  // 1. Se query error existir: exibir temporariamente os detalhes técnicos do erro
+  if (profileQueryError) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 sm:p-6">
+        <div className="w-full max-w-lg bg-slate-900 border border-red-500/50 rounded-xl p-8 shadow-2xl text-left">
+          <div className="w-12 h-12 rounded-full bg-red-950/80 border border-red-700/60 flex items-center justify-center mb-4 text-red-400 font-bold text-xl">
+            !
+          </div>
+          <h1 className="text-xl font-bold text-white mb-2">Diagnóstico: Erro na consulta ao profile</h1>
+          <p className="text-slate-400 text-xs mb-4">
+            Detalhes retornados pelo Supabase para identificação do problema:
+          </p>
+
+          <div className="bg-slate-950 border border-slate-800 rounded-lg p-4 space-y-2.5 text-xs font-mono mb-6">
+            <div>
+              <span className="text-red-400 font-semibold block">error.message:</span>
+              <span className="text-slate-200 break-all">{profileQueryError.message}</span>
+            </div>
+            <div>
+              <span className="text-amber-400 font-semibold block">error.code:</span>
+              <span className="text-slate-200">{profileQueryError.code}</span>
+            </div>
+            <div>
+              <span className="text-blue-400 font-semibold block">error.details:</span>
+              <span className="text-slate-200 break-all">{profileQueryError.details}</span>
+            </div>
+            <div>
+              <span className="text-emerald-400 font-semibold block">error.hint:</span>
+              <span className="text-slate-200 break-all">{profileQueryError.hint}</span>
+            </div>
+            <div className="pt-2 border-t border-slate-800/80">
+              <span className="text-slate-500 block">user.id consultado:</span>
+              <span className="text-slate-300">{session.user.id}</span>
+            </div>
+          </div>
+
+          <div className="flex gap-3">
+            <button
+              onClick={() => fetchProfile(session.user.id)}
+              className="flex-1 py-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors text-xs cursor-pointer text-center"
+            >
+              Tentar novamente
+            </button>
+            <button
+              onClick={handleLogout}
+              className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-lg transition-colors text-xs cursor-pointer"
+            >
+              Encerrar sessão
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Somente se NÃO houver erro e data for null
+  if (profileNotFound || !profile) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-4 sm:p-6">
         <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl text-center">
-          <div className="w-12 h-12 rounded-full bg-red-950/80 border border-red-700/60 flex items-center justify-center mx-auto mb-4 text-red-400 font-bold text-xl">
+          <div className="w-12 h-12 rounded-full bg-amber-950/80 border border-amber-700/60 flex items-center justify-center mx-auto mb-4 text-amber-400 font-bold text-xl">
             !
           </div>
           <h1 className="text-2xl font-bold text-white mb-2">Acesso Bloqueado</h1>
-          <p className="text-red-300 text-sm mb-6">
+          <p className="text-amber-300 text-sm mb-6">
             Perfil de usuário não encontrado.
           </p>
           <div className="bg-slate-800/60 border border-slate-700/60 rounded-lg p-3 text-xs text-slate-400 mb-6 font-mono text-left space-y-1">
             <div><span className="text-slate-500">E-mail:</span> {session.user.email}</div>
             <div><span className="text-slate-500">ID:</span> {session.user.id}</div>
           </div>
-          <button
-            onClick={handleLogout}
-            className="w-full py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-lg transition-colors text-sm cursor-pointer"
-          >
-            Encerrar sessão
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={() => fetchProfile(session.user.id)}
+              className="flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-medium rounded-lg transition-colors text-sm cursor-pointer"
+            >
+              Tentar novamente
+            </button>
+            <button
+              onClick={handleLogout}
+              className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-white font-medium rounded-lg transition-colors text-sm cursor-pointer"
+            >
+              Encerrar sessão
+            </button>
+          </div>
         </div>
       </div>
     );
