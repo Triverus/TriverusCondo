@@ -124,6 +124,7 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
   const [formNotes, setFormNotes] = useState<string>('');
   const [formNextFollowUpDate, setFormNextFollowUpDate] = useState<string>('');
   const [savingInteraction, setSavingInteraction] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Save interaction draft
   useEffect(() => {
@@ -231,6 +232,7 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
   // Open Quick Interaction Modal
   const handleOpenInteractionModal = (lead: Lead) => {
     setModalLead(lead);
+    setFormError(null);
     setIsRestoredDraft(false);
 
     const draft = loadDraft<InteractionDraftData>(getInteractionCreateDraftKey(lead.id));
@@ -260,6 +262,7 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
   const handleCloseInteractionModal = () => {
     setModalOpen(false);
     setModalLead(null);
+    setFormError(null);
     setQuizStep(1);
     setIsRestoredDraft(false);
   };
@@ -275,6 +278,7 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
   const handleSubmitInteraction = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!modalLead) return;
+    setFormError(null);
 
     setSavingInteraction(true);
     try {
@@ -310,10 +314,7 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
       handleCloseInteractionModal();
     } catch (err: any) {
       console.error('Error recording interaction in follow-ups:', err);
-      setStatusFeedback({
-        type: 'error',
-        message: err.message || 'Erro ao registrar interação.',
-      });
+      setFormError(err.message || 'Erro ao registrar interação.');
     } finally {
       setSavingInteraction(false);
     }
@@ -779,6 +780,12 @@ export default function FollowUpsModule({ currentProfile, onOpenLead }: FollowUp
             </div>
 
             <div className="p-6 sm:p-8 overflow-y-auto flex-1 text-sm">
+              {formError && (
+                <div className="mb-5 p-3.5 bg-rose-950/80 border border-rose-600/50 rounded-xl text-rose-200 text-xs">
+                  {formError}
+                </div>
+              )}
+
               {/* STEP 1: Tipo & Data */}
               {quizStep === 1 && (
                 <div className="space-y-5 animate-in fade-in duration-200">
