@@ -1,6 +1,15 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from './supabase.ts';
 import type { UserProfile } from '../App.tsx';
+import {
+  loadCRMCache,
+  saveCRMCache,
+  getLeadTemperatureOverrides,
+  saveLeadTemperatureOverride,
+  getInteractionTypeOverrides,
+  saveInteractionTypeOverride,
+  type CRMPersistentData,
+} from './crmCache.ts';
 
 export interface Lead {
   id: string;
@@ -25,6 +34,15 @@ export interface PipelineStage {
   position: number;
   is_lost?: boolean | null;
 }
+
+export const DEFAULT_PIPELINE_STAGES: PipelineStage[] = [
+  { id: 'stg_1', name: 'Primeiro Contato', position: 1 },
+  { id: 'stg_2', name: 'Reunião Agendada', position: 2 },
+  { id: 'stg_3', name: 'Proposta Enviada', position: 3 },
+  { id: 'stg_4', name: 'Negociação', position: 4 },
+  { id: 'stg_5', name: 'Fechado / Ganho', position: 5 },
+  { id: 'stg_6', name: 'Perdido', position: 6, is_lost: true },
+];
 
 export interface ServiceItem {
   id: string;
@@ -82,6 +100,9 @@ interface CRMContextType {
   upsertLeadLocally: (lead: Lead, serviceIds?: string[]) => void;
   upsertContactLocally: (contact: Contact, leadIds?: string[]) => void;
   upsertInteractionLocally: (interaction: Interaction) => void;
+  deleteContactLocally: (contactId: string) => void;
+  deleteInteractionLocally: (interactionId: string) => void;
+  deleteLeadLocally: (leadId: string) => void;
   getLeadServices: (leadId: string) => string[];
   getContactsForLead: (leadId: string) => Contact[];
   getContactLeadIds: (contactId: string) => string[];
@@ -97,82 +118,172 @@ export function CRMProvider({
   children: React.ReactNode;
   currentProfile: UserProfile | null;
 }) {
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [stages, setStages] = useState<PipelineStage[]>([]);
-  const [profiles, setProfiles] = useState<UserProfile[]>([]);
-  const [services, setServices] = useState<ServiceItem[]>([]);
-  const [leadServices, setLeadServices] = useState<LeadServiceRelation[]>([]);
-  const [contacts, setContacts] = useState<Contact[]>([]);
-  const [leadContacts, setLeadContacts] = useState<LeadContactRelation[]>([]);
-  const [interactions, setInteractions] = useState<Interaction[]>([]);
+  // ETAPA 1: Ler o cache persistente imediatamente de forma síncrona
+  const initialCacheRef = useRef<CRMPersistentData | null>(null);
+  if (initialCacheRef.current === null) {
+    initialCacheRef.current = loadCRMCache();
+  }
+  const cached = initialCacheRef.current;
+  const hasCachedData = Boolean(cached && cached.stages && cached.stages.length > 0);
 
-  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(true);
-  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  // ETAPA 2: Inicializar o estado com o cache para renderizar no frame 0 sem spinner
+  const [leads, setLeads] = useState<Lead[]>(() => cached?.leads || []);
+  const [stages, setStages] = useState<PipelineStage[]>(() => (cached?.stages && cached.stages.length > 0) ? cached.stages : DEFAULT_PIPELINE_STAGES);
+  const [profiles, setProfiles] = useState<UserProfile[]>(() => (cached?.profiles && cached.profiles.length > 0) ? cached.profiles : (currentProfile ? [currentProfile] : []));
+  const [services, setServices] = useState<ServiceItem[]>(() => cached?.services || []);
+  const [leadServices, setLeadServices] = useState<LeadServiceRelation[]>(() => cached?.leadServices || []);
+  const [contacts, setContacts] = useState<Contact[]>(() => cached?.contacts || []);
+  const [leadContacts, setLeadContacts] = useState<LeadContactRelation[]>(() => cached?.leadContacts || []);
+  const [interactions, setInteractions] = useState<Interaction[]>(() => cached?.interactions || []);
+
+  // Se já temos cache, não bloqueamos a interface com loading
+  const [isInitialLoading, setIsInitialLoading] = useState<boolean>(!hasCachedData);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(hasCachedData);
   const [error, setError] = useState<string | null>(null);
-  const [hasLoadedOnce, setHasLoadedOnce] = useState<boolean>(false);
+  const hasLoadedOnceRef = useRef(false);
+  const loadingPromiseRef = useRef<Promise<void> | null>(null);
 
-  // Parallel optimized data fetching
+  // Parallel optimized data fetching with in-flight deduplication
   const refreshAll = useCallback(async (silent = false) => {
-    if (!silent && !hasLoadedOnce) {
+    if (loadingPromiseRef.current) {
+      return loadingPromiseRef.current;
+    }
+    if (!silent && !hasLoadedOnceRef.current && !hasCachedData) {
       setIsInitialLoading(true);
     } else {
       setIsRefreshing(true);
     }
     setError(null);
 
-    try {
-      // Execute all independent queries in parallel with precise column selection
-      const [
-        stagesRes,
-        profilesRes,
-        servicesRes,
-        leadsRes,
-        leadServicesRes,
-        contactsRes,
-        leadContactsRes,
-        interactionsRes,
-      ] = await Promise.all([
-        supabase.from('pipeline_stages').select('id, name, position, is_lost').order('position', { ascending: true }),
-        supabase.from('profiles').select('id, full_name, role'),
-        supabase.from('services').select('id, name, title'),
-        supabase
-          .from('leads')
-          .select('id, name, cnpj, condominium_type, administrator, unit_count, address, city, lead_source, temperature, current_stage_id, responsible_user_id, loss_reason, created_at')
-          .order('created_at', { ascending: false }),
-        supabase.from('lead_services').select('lead_id, service_id'),
-        supabase.from('contacts').select('id, name, role_title, phone, email, created_at').order('name', { ascending: true }),
-        supabase.from('lead_contacts').select('lead_id, contact_id'),
-        supabase
-          .from('interactions')
-          .select('id, lead_id, interaction_type, occurred_at, notes, responsible_user_id, next_follow_up_date, created_at')
-          .order('occurred_at', { ascending: false }),
-      ]);
+    const promise = (async () => {
+      try {
+        // Execute all independent queries in parallel with precise column selection
+        const [
+          stagesRes,
+          profilesRes,
+          servicesRes,
+          leadsRes,
+          leadServicesRes,
+          contactsRes,
+          leadContactsRes,
+          interactionsRes,
+        ] = await Promise.all([
+          supabase.from('pipeline_stages').select('id, name, position, is_lost').order('position', { ascending: true }),
+          supabase.from('profiles').select('id, full_name, role'),
+          supabase.from('services').select('id, name, title'),
+          supabase
+            .from('leads')
+            .select('id, name, cnpj, condominium_type, administrator, unit_count, address, city, lead_source, temperature, current_stage_id, responsible_user_id, loss_reason, created_at')
+            .order('created_at', { ascending: false }),
+          supabase.from('lead_services').select('lead_id, service_id'),
+          supabase.from('contacts').select('id, name, role_title, phone, email, created_at').order('name', { ascending: true }),
+          supabase.from('lead_contacts').select('lead_id, contact_id'),
+          supabase
+            .from('interactions')
+            .select('id, lead_id, interaction_type, occurred_at, notes, responsible_user_id, next_follow_up_date, created_at')
+            .order('occurred_at', { ascending: false }),
+        ]);
 
-      if (stagesRes.data) setStages(stagesRes.data);
-      if (profilesRes.data) setProfiles(profilesRes.data);
-      if (servicesRes.data) setServices(servicesRes.data);
-      if (leadsRes.data) setLeads(leadsRes.data);
-      if (leadServicesRes.data) setLeadServices(leadServicesRes.data);
-      if (contactsRes.data) setContacts(contactsRes.data);
-      if (leadContactsRes.data) setLeadContacts(leadContactsRes.data);
-      if (interactionsRes.data) setInteractions(interactionsRes.data);
+        const nextStages = stagesRes.data || [];
+        const nextProfiles = profilesRes.data || [];
+        const nextServices = servicesRes.data || [];
+        const nextLeads = leadsRes.data || [];
+        const nextLeadServices = leadServicesRes.data || [];
+        const nextContacts = contactsRes.data || [];
+        const nextLeadContacts = leadContactsRes.data || [];
+        const nextInteractions = interactionsRes.data || [];
 
-      setHasLoadedOnce(true);
-    } catch (err: any) {
-      console.error('Error in CRM data loading:', err);
-      setError(err?.message || 'Erro ao carregar dados do CRM.');
-    } finally {
-      setIsInitialLoading(false);
-      setIsRefreshing(false);
-    }
-  }, [hasLoadedOnce]);
+        if (stagesRes.data && stagesRes.data.length > 0) {
+          setStages(nextStages);
+        } else {
+          setStages((prev) => (prev.length > 0 ? prev : DEFAULT_PIPELINE_STAGES));
+        }
 
-  // Initial load when profile is ready
+        if (profilesRes.data && profilesRes.data.length > 0) {
+          setProfiles(nextProfiles);
+        } else if (currentProfile) {
+          setProfiles((prev) => (prev.length > 0 ? prev : [currentProfile]));
+        }
+
+        if (servicesRes.data) setServices(nextServices);
+        if (leadsRes.data) {
+          const overrides = getLeadTemperatureOverrides();
+          const leadsWithOverrides = nextLeads.map((lead) => {
+            if (overrides[lead.id]) {
+              return { ...lead, temperature: overrides[lead.id] };
+            }
+            return lead;
+          });
+          setLeads(leadsWithOverrides);
+        }
+        if (leadServicesRes.data) setLeadServices(nextLeadServices);
+        if (contactsRes.data) setContacts(nextContacts);
+        if (leadContactsRes.data) setLeadContacts(nextLeadContacts);
+        if (interactionsRes.data) {
+          const intOverrides = getInteractionTypeOverrides();
+          const interactionsWithOverrides = nextInteractions.map((i) => {
+            if (intOverrides[i.id]) {
+              return { ...i, interaction_type: intOverrides[i.id] };
+            }
+            return i;
+          });
+          setInteractions(interactionsWithOverrides);
+        }
+
+        // ETAPA 4: Salvar no cache persistente do navegador
+        saveCRMCache({
+          leads: nextLeads,
+          stages: nextStages,
+          profiles: nextProfiles,
+          services: nextServices,
+          leadServices: nextLeadServices,
+          contacts: nextContacts,
+          leadContacts: nextLeadContacts,
+          interactions: nextInteractions,
+        });
+
+        hasLoadedOnceRef.current = true;
+      } catch (err: any) {
+        console.error('Error in CRM data loading:', err);
+        setError(err?.message || 'Erro ao carregar dados do CRM.');
+      } finally {
+        setIsInitialLoading(false);
+        setIsRefreshing(false);
+        loadingPromiseRef.current = null;
+      }
+    })();
+
+    loadingPromiseRef.current = promise;
+    return promise;
+  }, [hasCachedData]);
+
+  // Initial load: ETAPA 3: consulta Supabase em background (silenciosa se já possui cache)
   useEffect(() => {
-    if (currentProfile) {
-      refreshAll(false);
+    if (currentProfile?.id && !hasLoadedOnceRef.current) {
+      refreshAll(hasCachedData);
     }
-  }, [currentProfile, refreshAll]);
+  }, [currentProfile?.id, hasCachedData, refreshAll]);
+
+  // Sincronizar qualquer mutação local no cache persistente (debounced para não travar a main thread)
+  useEffect(() => {
+    if (!hasLoadedOnceRef.current && !hasCachedData) return;
+    if (stages.length === 0) return;
+
+    const timer = setTimeout(() => {
+      saveCRMCache({
+        leads,
+        stages,
+        profiles,
+        services,
+        leadServices,
+        contacts,
+        leadContacts,
+        interactions,
+      });
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [leads, stages, profiles, services, leadServices, contacts, leadContacts, interactions, hasCachedData]);
 
   // Lookup maps for O(1) reads
   const stageMap = useMemo(() => {
@@ -239,6 +350,9 @@ export function CRMProvider({
 
   // Optimistic / Local upserts
   const upsertLeadLocally = useCallback((lead: Lead, serviceIds?: string[]) => {
+    if (lead.id && lead.temperature) {
+      saveLeadTemperatureOverride(lead.id, lead.temperature);
+    }
     setLeads((prev) => {
       const idx = prev.findIndex((l) => l.id === lead.id);
       if (idx >= 0) {
@@ -279,6 +393,9 @@ export function CRMProvider({
   }, []);
 
   const upsertInteractionLocally = useCallback((interaction: Interaction) => {
+    if (interaction.id && interaction.interaction_type) {
+      saveInteractionTypeOverride(interaction.id, interaction.interaction_type);
+    }
     setInteractions((prev) => {
       const idx = prev.findIndex((i) => i.id === interaction.id);
       if (idx >= 0) {
@@ -290,6 +407,22 @@ export function CRMProvider({
         (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
       );
     });
+  }, []);
+
+  const deleteContactLocally = useCallback((contactId: string) => {
+    setContacts((prev) => prev.filter((c) => c.id !== contactId));
+    setLeadContacts((prev) => prev.filter((lc) => lc.contact_id !== contactId));
+  }, []);
+
+  const deleteInteractionLocally = useCallback((interactionId: string) => {
+    setInteractions((prev) => prev.filter((i) => i.id !== interactionId));
+  }, []);
+
+  const deleteLeadLocally = useCallback((leadId: string) => {
+    setLeads((prev) => prev.filter((l) => l.id !== leadId));
+    setLeadServices((prev) => prev.filter((ls) => ls.lead_id !== leadId));
+    setLeadContacts((prev) => prev.filter((lc) => lc.lead_id !== leadId));
+    setInteractions((prev) => prev.filter((i) => i.lead_id !== leadId));
   }, []);
 
   const value = useMemo<CRMContextType>(
@@ -313,6 +446,9 @@ export function CRMProvider({
       upsertLeadLocally,
       upsertContactLocally,
       upsertInteractionLocally,
+      deleteContactLocally,
+      deleteInteractionLocally,
+      deleteLeadLocally,
       getLeadServices,
       getContactsForLead,
       getContactLeadIds,
@@ -338,6 +474,9 @@ export function CRMProvider({
       upsertLeadLocally,
       upsertContactLocally,
       upsertInteractionLocally,
+      deleteContactLocally,
+      deleteInteractionLocally,
+      deleteLeadLocally,
       getLeadServices,
       getContactsForLead,
       getContactLeadIds,
