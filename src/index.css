@@ -1,64 +1,440 @@
 @import "tailwindcss";
 
-@theme {
-  --color-slate-950: #09090b;
-  --color-slate-900: #121215;
-  --color-slate-850: #18181b;
-  --color-slate-800: #27272a;
-  --color-slate-700: #3f3f46;
-  --color-slate-600: #52525b;
-  --color-slate-500: #71717a;
-  --color-slate-400: #a1a1aa;
-  --color-slate-300: #d4d4d8;
-  --color-slate-200: #e4e4e7;
-  --color-slate-100: #f4f4f5;
+/* =========================================================
+   DARK MODE (DEFAULT)
+   ========================================================= */
+html.dark,
+html:not(.light) {
+  background-color: #09090b;
+  color: #f4f4f5;
+  color-scheme: dark;
 }
 
-html, body, #root {
-  background-color: #09090b !important;
+html.dark body,
+html:not(.light) body,
+html.dark #root,
+html:not(.light) #root {
+  background-color: #09090b;
   color: #f4f4f5;
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Custom crisp scrollbar */
+/* Scrollbar Dark */
+html.dark ::-webkit-scrollbar-track,
+html:not(.light) ::-webkit-scrollbar-track {
+  background: #09090b;
+}
+
+html.dark ::-webkit-scrollbar-thumb,
+html:not(.light) ::-webkit-scrollbar-thumb {
+  background: #27272a;
+  border-radius: 9999px;
+}
+
+html.dark ::-webkit-scrollbar-thumb:hover,
+html:not(.light) ::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46;
+}
+
+/* Date/time inputs in Dark Mode */
+html.dark input[type="date"],
+html.dark input[type="time"],
+html.dark input[type="datetime-local"],
+html:not(.light) input[type="date"],
+html:not(.light) input[type="time"],
+html:not(.light) input[type="datetime-local"] {
+  color-scheme: dark;
+}
+
+html.dark input[type="date"]::-webkit-calendar-picker-indicator,
+html.dark input[type="time"]::-webkit-calendar-picker-indicator,
+html.dark input[type="datetime-local"]::-webkit-calendar-picker-indicator,
+html:not(.light) input[type="date"]::-webkit-calendar-picker-indicator,
+html:not(.light) input[type="time"]::-webkit-calendar-picker-indicator,
+html:not(.light) input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.3);
+  cursor: pointer;
+  opacity: 0.95;
+}
+
+/* =========================================================
+   TEMPERATURE CARD BASE STYLING (DARK MODE)
+   ========================================================= */
+html.dark .card-temp-frio,
+html:not(.light) .card-temp-frio {
+  background-color: #0a2f4a !important;
+  border-color: #38bdf8 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.22) !important;
+}
+html.dark .card-temp-frio:hover,
+html:not(.light) .card-temp-frio:hover {
+  background-color: #0e3b5e !important;
+}
+
+html.dark .card-temp-morno,
+html:not(.light) .card-temp-morno {
+  background-color: #453403 !important;
+  border-color: #facc15 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(250, 204, 21, 0.22) !important;
+}
+html.dark .card-temp-morno:hover,
+html:not(.light) .card-temp-morno:hover {
+  background-color: #574104 !important;
+}
+
+html.dark .card-temp-quente,
+html:not(.light) .card-temp-quente {
+  background-color: #4a1f03 !important;
+  border-color: #fb923c !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(251, 146, 60, 0.22) !important;
+}
+html.dark .card-temp-quente:hover,
+html:not(.light) .card-temp-quente:hover {
+  background-color: #5f2804 !important;
+}
+
+html.dark .card-temp-cliente,
+html:not(.light) .card-temp-cliente {
+  background-color: #063321 !important;
+  border-color: #34d399 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px rgba(52, 211, 153, 0.22) !important;
+}
+html.dark .card-temp-cliente:hover,
+html:not(.light) .card-temp-cliente:hover {
+  background-color: #09422c !important;
+}
+
+/* =========================================================
+   LIGHT MODE THEME
+   ========================================================= */
+html.light {
+  background-color: #f4f6f9;
+  color: #0f172a;
+  color-scheme: light;
+}
+
+html.light body,
+html.light #root {
+  background-color: #f4f6f9;
+  color: #0f172a;
+  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Light Scrollbar */
+html.light ::-webkit-scrollbar-track {
+  background: #f4f6f9;
+}
+
+html.light ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+html.light ::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Date/time inputs in Light Mode */
+html.light input[type="date"],
+html.light input[type="time"],
+html.light input[type="datetime-local"] {
+  color-scheme: light;
+}
+
+html.light input[type="date"]::-webkit-calendar-picker-indicator,
+html.light input[type="time"]::-webkit-calendar-picker-indicator,
+html.light input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: none;
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+/* Light Mode Core Surface Mapping */
+html.light header,
+html.light .app-header {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+
+html.light .bg-slate-950,
+html.light main.bg-slate-950 {
+  background-color: #f4f6f9 !important;
+}
+
+/* Modals, Popovers and Cards in Light Mode */
+html.light .bg-slate-900,
+html.light .bg-slate-900\/95,
+html.light .bg-slate-900\/90,
+html.light .bg-slate-900\/80,
+html.light .bg-slate-900\/70,
+html.light .bg-slate-900\/60,
+html.light .bg-slate-900\/50,
+html.light .bg-slate-900\/40,
+html.light .bg-slate-900\/30 {
+  background-color: #ffffff !important;
+  border-color: #e2e8f0 !important;
+}
+
+/* Inner popover containers & modal headers */
+html.light .bg-slate-950\/90,
+html.light .bg-slate-950\/80,
+html.light .bg-slate-950\/70,
+html.light .bg-slate-950\/60,
+html.light .bg-slate-950\/50,
+html.light .bg-slate-950\/40 {
+  background-color: #f8fafc !important;
+  border-color: #e2e8f0 !important;
+}
+
+html.light .bg-slate-800,
+html.light .bg-slate-800\/90,
+html.light .bg-slate-800\/80,
+html.light .bg-slate-800\/70,
+html.light .bg-slate-800\/60,
+html.light .bg-slate-800\/50,
+html.light .bg-slate-800\/40 {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light .border-slate-800,
+html.light .border-slate-800\/90,
+html.light .border-slate-800\/80,
+html.light .border-slate-800\/70,
+html.light .border-slate-800\/60,
+html.light .border-slate-800\/50,
+html.light .border-slate-700,
+html.light .border-slate-700\/80,
+html.light .border-slate-700\/60,
+html.light .border-slate-700\/50 {
+  border-color: #e2e8f0 !important;
+}
+
+/* Typography High-Contrast Mapping in Light Mode */
+html.light .text-slate-100,
+html.light .text-slate-200,
+html.light .text-zinc-100 {
+  color: #0f172a !important;
+}
+
+html.light .text-slate-300,
+html.light .text-slate-400 {
+  color: #475569 !important;
+}
+
+/* Text white override: make black on white backgrounds, but PRESERVE on solid buttons */
+html.light .text-white:not(button):not(button *):not(.bg-indigo-600 *):not(.bg-indigo-500 *):not(.bg-emerald-600 *):not(.bg-rose-600 *):not(.bg-sky-600 *):not(.bg-blue-600 *):not(.bg-amber-600 *) {
+  color: #0f172a !important;
+}
+
+/* Light Mode Input fields */
+html.light input:not([type="checkbox"]):not([type="radio"]),
+html.light select,
+html.light textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+  border-color: #cbd5e1 !important;
+}
+
+html.light input::placeholder,
+html.light textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Light Mode Timeline Date dividers */
+html.light .bg-slate-800\/90.rounded-full,
+html.light .text-slate-300.tracking-wider {
+  background-color: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+/* Light Mode Timeline follow-up tag */
+html.light .bg-amber-950\/40,
+html.light .border-amber-800\/40 {
+  background-color: #fef3c7 !important;
+  border-color: #fde047 !important;
+  color: #92400e !important;
+}
+html.light .bg-amber-950\/40 * {
+  color: #92400e !important;
+}
+
+/* =========================================================
+   PROTECT ALL PRIMARY CTA BUTTONS & ACTION LINKS IN LIGHT MODE
+   ========================================================= */
+html.light .bg-indigo-600,
+html.light .bg-indigo-500,
+html.light .bg-blue-600,
+html.light .bg-blue-500,
+html.light .bg-emerald-600,
+html.light .bg-emerald-500,
+html.light .bg-orange-500,
+html.light .bg-orange-600,
+html.light .bg-rose-600,
+html.light .bg-rose-500,
+html.light .bg-amber-500,
+html.light .bg-amber-600,
+html.light .bg-amber-700,
+html.light a.bg-amber-500,
+html.light a.bg-amber-600 {
+  color: #ffffff !important;
+}
+
+html.light .bg-indigo-600 *,
+html.light .bg-indigo-500 *,
+html.light .bg-blue-600 *,
+html.light .bg-blue-500 *,
+html.light .bg-emerald-600 *,
+html.light .bg-emerald-500 *,
+html.light .bg-orange-500 *,
+html.light .bg-orange-600 *,
+html.light .bg-rose-600 *,
+html.light .bg-rose-500 *,
+html.light .bg-amber-500 *,
+html.light .bg-amber-600 *,
+html.light .bg-amber-700 *,
+html.light a.bg-amber-500 *,
+html.light a.bg-amber-600 * {
+  color: #ffffff !important;
+}
+
+/* =========================================================
+   LIGHT MODE TEMPERATURE CARD STYLING
+   ========================================================= */
+html.light .card-temp-frio {
+  background-color: #bfdbfe !important;
+  border-color: #0284c7 !important;
+  border-width: 2px !important;
+  color: #0c4a6e !important;
+  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.22) !important;
+}
+html.light .card-temp-frio:hover {
+  background-color: #93c5fd !important;
+}
+
+html.light .card-temp-morno {
+  background-color: #fef08a !important;
+  border-color: #ca8a04 !important;
+  border-width: 2px !important;
+  color: #422006 !important;
+  box-shadow: 0 4px 14px rgba(202, 138, 4, 0.28) !important;
+}
+html.light .card-temp-morno:hover {
+  background-color: #fde047 !important;
+}
+
+html.light .card-temp-quente {
+  background-color: #fed7aa !important;
+  border-color: #ea580c !important;
+  border-width: 2px !important;
+  color: #431407 !important;
+  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.28) !important;
+}
+html.light .card-temp-quente:hover {
+  background-color: #fdba74 !important;
+}
+
+html.light .card-temp-cliente {
+  background-color: #bbf7d0 !important;
+  border-color: #059669 !important;
+  border-width: 2px !important;
+  color: #064e3b !important;
+  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.22) !important;
+}
+html.light .card-temp-cliente:hover {
+  background-color: #86efac !important;
+}
+
+/* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 
-::-webkit-scrollbar-track {
-  background: #09090b;
+/* =========================================================
+   CONDO MARKDOWN & DRIVER.JS SPOTLIGHT CUSTOMIZATION
+   ========================================================= */
+.condo-markdown p {
+  margin-bottom: 0.625rem;
+  line-height: 1.6;
 }
 
-::-webkit-scrollbar-thumb {
-  background: #27272a;
-  border-radius: 9999px;
+.condo-markdown p:last-child {
+  margin-bottom: 0;
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+.condo-markdown ul,
+.condo-markdown ol {
+  margin-top: 0.375rem;
+  margin-bottom: 0.625rem;
+  padding-left: 1.25rem;
 }
 
-/* Make native date and time picker icons bright white and clearly visible on dark inputs */
-input[type="date"],
-input[type="time"],
-input[type="datetime-local"] {
-  color-scheme: dark;
+.condo-markdown li {
+  margin-bottom: 0.25rem;
+  line-height: 1.5;
 }
 
-input[type="date"]::-webkit-calendar-picker-indicator,
-input[type="time"]::-webkit-calendar-picker-indicator,
-input[type="datetime-local"]::-webkit-calendar-picker-indicator {
-  filter: invert(1) brightness(1.3);
-  cursor: pointer;
-  opacity: 0.95;
-  transition: opacity 0.15s ease, filter 0.15s ease;
+/* Driver.js Popover Customization */
+.driver-popover.triverus-spotlight-popover {
+  background-color: #0f172a !important;
+  color: #f8fafc !important;
+  border: 1px solid #FF6600 !important;
+  border-radius: 1rem !important;
+  padding: 1rem 1.25rem !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5) !important;
+  font-family: inherit !important;
+  max-width: 320px !important;
 }
 
-input[type="date"]::-webkit-calendar-picker-indicator:hover,
-input[type="time"]::-webkit-calendar-picker-indicator:hover,
-input[type="datetime-local"]::-webkit-calendar-picker-indicator:hover {
-  opacity: 1;
-  filter: invert(1) brightness(1.6);
+.driver-popover.triverus-spotlight-popover .driver-popover-title {
+  font-size: 0.875rem !important;
+  font-weight: 700 !important;
+  color: #FF6600 !important;
+  margin-bottom: 0.375rem !important;
+}
+
+.driver-popover.triverus-spotlight-popover .driver-popover-description {
+  font-size: 0.75rem !important;
+  line-height: 1.5 !important;
+  color: #cbd5e1 !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.driver-popover.triverus-spotlight-popover .driver-popover-footer {
+  margin-top: 0.5rem !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 0.5rem !important;
+}
+
+.driver-popover.triverus-spotlight-popover .driver-popover-prev-btn {
+  display: none !important;
+}
+
+.driver-popover.triverus-spotlight-popover .driver-popover-next-btn,
+.driver-popover.triverus-spotlight-popover .driver-popover-close-btn {
+  background-color: #FF6600 !important;
+  color: #ffffff !important;
+  border-radius: 0.625rem !important;
+  font-weight: 700 !important;
+  font-size: 0.75rem !important;
+  padding: 0.375rem 0.875rem !important;
+  border: none !important;
+  cursor: pointer !important;
+  transition: all 0.2s ease !important;
+  text-shadow: none !important;
+}
+
+.driver-popover.triverus-spotlight-popover .driver-popover-next-btn:hover {
+  background-color: #e65c00 !important;
 }

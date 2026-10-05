@@ -1,9 +1,9 @@
 import express from 'express';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { loadEnv } from 'vite';
 import {
   CONDO_MODEL_REQUESTED,
   CONDO_TOOLS,
@@ -14,6 +14,7 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const isProduction = process.env.NODE_ENV === 'production';
 const PORT = Number(process.env.PORT) || 3000;
 
 process.on('unhandledRejection', (reason) => {
@@ -23,36 +24,15 @@ process.on('uncaughtException', (error) => {
   console.error('[UNCAUGHT_EXCEPTION]', error instanceof Error ? error.message : error);
 });
 
-function loadEnvFile() {
-  const envPath = path.join(__dirname, '.env');
-  if (fs.existsSync(envPath)) {
-    try {
-      const content = fs.readFileSync(envPath, 'utf8');
-      content.split('\n').forEach((line) => {
-        const trimmed = line.trim();
-        if (trimmed && !trimmed.startsWith('#')) {
-          const idx = trimmed.indexOf('=');
-          if (idx > 0) {
-            const key = trimmed.slice(0, idx).trim();
-            const val = trimmed.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
-            if (!process.env[key]) {
-              process.env[key] = val;
-            }
-          }
-        }
-      });
-    } catch {}
-  }
-}
-loadEnvFile();
+const loadedEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+const SUPABASE_URL = loadedEnv.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = loadedEnv.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '';
 
-function getScopedSupabaseClient(token) {
+function getScopedSupabaseClient(token?: string): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -65,8 +45,8 @@ function getScopedSupabaseClient(token) {
   });
 }
 
-function getOpenAIClient() {
-  const apiKey = process.env.OPENAI_API_KEY;
+function getOpenAIClient(): OpenAI | null {
+  const apiKey = process.env.OPENAI_API_KEY || loadedEnv.OPENAI_API_KEY;
   if (!apiKey || !apiKey.trim()) {
     return null;
   }
@@ -110,7 +90,7 @@ app.get('/api/condo/health', async (req, res) => {
       model_requested: CONDO_MODEL_REQUESTED,
       model_returned: modelReturned,
     });
-  } catch (err) {
+  } catch (err: any) {
     const sanitizedError = err?.message?.replace(/sk-[a-zA-Z0-9_-]+/g, '[REDACTED]') || 'Falha ao conectar com a OpenAI.';
     return res.status(200).json({
       configured: true,
@@ -141,7 +121,7 @@ app.post('/api/condo/chat', async (req, res) => {
 
   const scopedSupabase = getScopedSupabaseClient(token);
 
-  let currentUserId = null;
+  let currentUserId: string | null = null;
   if (token) {
     try {
       const { data: userData } = await scopedSupabase.auth.getUser(token);
@@ -151,7 +131,7 @@ app.post('/api/condo/chat', async (req, res) => {
     } catch {}
   }
 
-  const { messages } = req.body;
+  const { messages, client_context, snapshot } = req.body;
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({
@@ -163,21 +143,22 @@ app.post('/api/condo/chat', async (req, res) => {
     });
   }
 
-  const lastUserMsgObj = [...messages].reverse().find((m) => m.role === 'user');
+  const lastUserMsgObj = [...messages].reverse().find((m: any) => m.role === 'user');
   const lastUserMessage = typeof lastUserMsgObj?.content === 'string' ? lastUserMsgObj.content : '';
 
-  const conversationMessages = [
+  const conversationMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
     {
       role: 'system',
       content: buildSystemPrompt(),
     },
-    ...messages.slice(-8).map((m) => ({
-      role: m.role === 'assistant' ? 'assistant' : 'user',
+    ...messages.slice(-8).map((m: any) => ({
+      role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
       content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
     })),
   ];
 
-  const accumulatedRichResults = [];
+  const actionsExecuted: any[] = [];
+  const accumulatedRichResults: any[] = [];
   const MAX_TOOL_ITERATIONS = 6;
   let iteration = 0;
 
@@ -188,7 +169,7 @@ app.post('/api/condo/chat', async (req, res) => {
       const response = await openai.chat.completions.create({
         model: CONDO_MODEL_REQUESTED,
         messages: conversationMessages,
-        tools: CONDO_TOOLS,
+        tools: CONDO_TOOLS as any,
         tool_choice: 'auto',
         temperature: 0.2,
       });
@@ -206,21 +187,28 @@ app.post('/api/condo/chat', async (req, res) => {
         for (const tc of assistantMessage.tool_calls) {
           if (tc.type === 'function') {
             const funcName = tc.function.name;
-            let parsedArgs = {};
+            let parsedArgs: any = {};
             try {
               parsedArgs = JSON.parse(tc.function.arguments || '{}');
             } catch {
               parsedArgs = {};
             }
 
-            const { result, richResults } = await executeToolCall(
+            const toolRes = await executeToolCall(
               funcName,
               parsedArgs,
               scopedSupabase,
               currentUserId,
               requestId,
-              lastUserMessage
+              lastUserMessage,
+              client_context,
+              snapshot
             );
+
+            const { result, richResults } = toolRes;
+            if (toolRes.contextRefs) {
+              // attach context refs
+            }
 
             if (richResults && Array.isArray(richResults)) {
               accumulatedRichResults.push(...richResults);
@@ -236,12 +224,16 @@ app.post('/api/condo/chat', async (req, res) => {
         continue;
       }
 
+      const hasHelpOrLink = accumulatedRichResults.some((r) => r.type === 'help' || r.type === 'link');
+      const presentationMode = hasHelpOrLink ? 'result_only' : 'text_and_results';
+
       return res.status(200).json({
         ok: true,
         success: true,
         request_id: requestId,
         text: assistantMessage.content || 'Consulta realizada com sucesso.',
         message: assistantMessage.content || 'Consulta realizada com sucesso.',
+        presentation_mode: presentationMode,
         model: response.model,
         results: accumulatedRichResults.length > 0 ? accumulatedRichResults : undefined,
       });
@@ -255,7 +247,7 @@ app.post('/api/condo/chat', async (req, res) => {
       message: 'Finalizei as consultas solicitadas no CRM.',
       results: accumulatedRichResults.length > 0 ? accumulatedRichResults : undefined,
     });
-  } catch (chatError) {
+  } catch (chatError: any) {
     console.error(`[Condo Chat Error req:${requestId}]:`, chatError?.message || chatError);
     const sanitized = chatError?.message?.replace(/sk-[a-zA-Z0-9_-]+/g, '[REDACTED]') || 'Falha ao processar solicitação com o Condo.';
     return res.status(500).json({
@@ -268,16 +260,28 @@ app.post('/api/condo/chat', async (req, res) => {
   }
 });
 
-const distPath = path.join(__dirname, 'dist');
-app.use(express.static(distPath));
-
-app.use((req, res, next) => {
-  if (req.method === 'GET' && !req.path.startsWith('/api')) {
-    return res.sendFile(path.join(distPath, 'index.html'));
+async function startServer() {
+  if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
+    const vite = await createViteServer({
+      server: { middlewareMode: true, host: '0.0.0.0', port: PORT },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(__dirname, 'dist');
+    app.use(express.static(distPath));
+    app.use((req, res, next) => {
+      if (req.method === 'GET' && !req.path.startsWith('/api')) {
+        return res.sendFile(path.join(distPath, 'index.html'));
+      }
+      next();
+    });
   }
-  next();
-});
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Triverus Production Server running on port ${PORT}`);
-});
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Triverus Server running on port ${PORT}`);
+  });
+}
+
+startServer();

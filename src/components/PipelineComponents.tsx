@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Lead, PipelineStage } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
+import { useTheme } from '../lib/themeContext.tsx';
 import {
   toDateInputValue,
   formatDateBR,
@@ -120,23 +121,30 @@ export function PipelineToolbar({
   onOpenViewConfig,
   isRefreshing,
 }: PipelineToolbarProps) {
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
   const isPersonaFiltered = responsibleFilter !== 'all';
 
   return (
-    <div className="mb-6 flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b border-slate-900/60">
+    <div className={`mb-6 flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b ${isLight ? 'border-slate-200' : 'border-slate-900/60'}`}>
       {/* Controls Bar: Search + Stage Filter + Eye Customizer */}
       <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
         {/* Search */}
         <div className="relative min-w-[200px] flex-1 sm:flex-initial">
           <input
             type="text"
+            data-help-id="pipeline-search"
             value={searchTerm}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Buscar..."
-            className="w-full pl-8 pr-7 py-2 bg-slate-900 border border-slate-800 focus:border-slate-700 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none transition-colors"
+            className={`w-full pl-8 pr-7 py-2 rounded-xl text-xs focus:outline-none transition-colors ${
+              isLight
+                ? 'bg-white border border-slate-300 text-slate-900 placeholder-slate-400 focus:border-[#FF6600] focus:ring-1 focus:ring-[#FF6600] shadow-2xs'
+                : 'bg-slate-900 border border-slate-800 focus:border-slate-700 text-white placeholder-slate-500'
+            }`}
           />
           <svg
-            className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5"
+            className={`w-3.5 h-3.5 absolute left-2.5 top-2.5 ${isLight ? 'text-slate-400' : 'text-slate-500'}`}
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -147,7 +155,7 @@ export function PipelineToolbar({
             <button
               type="button"
               onClick={() => onSearchChange('')}
-              className="absolute right-2.5 top-2 text-slate-500 hover:text-white text-xs cursor-pointer"
+              className={`absolute right-2.5 top-2 text-xs cursor-pointer ${isLight ? 'text-slate-400 hover:text-slate-700' : 'text-slate-500 hover:text-white'}`}
             >
               ×
             </button>
@@ -158,7 +166,11 @@ export function PipelineToolbar({
         <select
           value={stageFilter}
           onChange={(e) => onStageFilterChange(e.target.value)}
-          className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300 focus:outline-none focus:border-slate-700 cursor-pointer"
+          className={`px-3 py-2 rounded-xl text-xs focus:outline-none cursor-pointer transition-colors ${
+            isLight
+              ? 'bg-white border border-slate-300 text-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-2xs'
+              : 'bg-slate-900 border border-slate-800 text-slate-300 focus:border-slate-700'
+          }`}
         >
           <option value="all">Estágio: Todos</option>
           {stages.map((stg) => (
@@ -173,23 +185,25 @@ export function PipelineToolbar({
           <button
             type="button"
             onClick={onOpenViewConfig}
-            title="Personalizar exibição dos cards e filtro de persona"
+            title="Personalizar visualização (Modo Claro/Escuro, Campos dos Cards e Filtro)"
             className={`p-2 rounded-xl transition-all cursor-pointer flex items-center justify-center relative ${
               isPersonaFiltered
-                ? 'bg-indigo-600/20 text-indigo-400 border border-indigo-500/40'
+                ? 'bg-indigo-600/20 text-indigo-500 border border-indigo-500/50 shadow-2xs'
+                : isLight
+                ? 'bg-white hover:bg-slate-100 text-slate-700 hover:text-slate-950 border border-slate-300 shadow-2xs'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white border border-slate-800'
             }`}
           >
             <EyeIcon className="w-4 h-4" />
             {isPersonaFiltered && (
-              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 absolute top-1.5 right-1.5 ring-2 ring-slate-900" />
+              <span className={`w-1.5 h-1.5 rounded-full bg-indigo-500 absolute top-1.5 right-1.5 ring-2 ${isLight ? 'ring-white' : 'ring-slate-900'}`} />
             )}
           </button>
         )}
 
         {isRefreshing && (
-          <span className="inline-flex items-center gap-1 text-[11px] text-indigo-400 font-medium ml-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
+          <span className="inline-flex items-center gap-1 text-[11px] text-indigo-500 font-medium ml-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping" />
             sincronizando...
           </span>
         )}
@@ -199,13 +213,14 @@ export function PipelineToolbar({
       <div className="shrink-0 flex items-center justify-end">
         <button
           type="button"
+          data-help-id="new-condominium"
           onClick={onOpenCreate}
-          className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+          className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#e65c00] text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
           </svg>
-          <span>Novo Condomínio</span>
+          <span className="text-white">Novo Condomínio</span>
         </button>
       </div>
     </div>
@@ -239,8 +254,11 @@ export function CardQuickActions({
   onOpenFolder,
   onOpenNotes,
 }: CardQuickActionsProps) {
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
+
   return (
-    <div className="mt-2.5 pt-2 border-t border-slate-800/50 flex items-center justify-between gap-1.5">
+    <div className={`mt-2.5 pt-2 border-t flex items-center justify-between gap-1.5 ${isLight ? 'border-black/10' : 'border-white/15'}`}>
       {/* Ícones de ação alinhados à esquerda com destaque quando possuem dados */}
       <div className="flex items-center gap-1.5">
         {/* 1. Notas / Histórico de Interações (Primeiro ícone antes do WhatsApp) */}
@@ -251,56 +269,87 @@ export function CardQuickActions({
           aria-label="Linha do tempo e notas"
           className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1 ${
             notesCount > 0
-              ? 'text-indigo-400 bg-indigo-500/15 border-indigo-500/30 hover:bg-indigo-500/25 shadow-xs'
-              : 'text-slate-500 hover:text-slate-300 opacity-40 hover:opacity-100 bg-transparent border-transparent hover:bg-slate-800/60'
+              ? isLight
+                ? 'text-indigo-800 bg-white/95 border-2 border-indigo-600 shadow-xs ring-1 ring-indigo-300 font-bold'
+                : 'text-indigo-300 bg-indigo-950/80 border border-indigo-500/70 hover:bg-indigo-900/80 shadow-xs'
+              : isLight
+              ? 'text-slate-700/60 hover:text-slate-950 bg-white/40 hover:bg-white/90 border border-black/10'
+              : 'text-slate-400/60 hover:text-white bg-transparent border-transparent hover:bg-black/30'
           }`}
         >
           <NotesIcon className="w-3.5 h-3.5" />
-          {notesCount > 0 && <span className="text-[10px] font-bold text-indigo-300 leading-none">{notesCount}</span>}
+          {notesCount > 0 && (
+            <span className={`text-[10px] font-bold leading-none ${isLight ? 'text-indigo-900' : 'text-indigo-200'}`}>
+              {notesCount}
+            </span>
+          )}
         </button>
 
         {/* 2. WhatsApp */}
         <button
           type="button"
+          data-help-id="lead-card-whatsapp"
           onClick={onOpenWhatsApp}
           title={waCount > 0 ? `WhatsApp (${waCount} contato${waCount === 1 ? '' : 's'})` : 'WhatsApp (sem contato)'}
           aria-label="WhatsApp"
           className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1 ${
             waCount > 0
-              ? 'text-emerald-400 bg-emerald-500/15 border-emerald-500/30 hover:bg-emerald-500/25 shadow-xs'
-              : 'text-slate-500 hover:text-slate-300 opacity-40 hover:opacity-100 bg-transparent border-transparent hover:bg-slate-800/60'
+              ? isLight
+                ? 'text-emerald-800 bg-white/95 border-2 border-emerald-600 shadow-xs ring-1 ring-emerald-300 font-bold'
+                : 'text-emerald-300 bg-emerald-950/80 border border-emerald-500/70 hover:bg-emerald-900/80 shadow-xs'
+              : isLight
+              ? 'text-slate-700/60 hover:text-slate-950 bg-white/40 hover:bg-white/90 border border-black/10'
+              : 'text-slate-400/60 hover:text-white bg-transparent border-transparent hover:bg-black/30'
           }`}
         >
           <WhatsAppIcon className="w-3.5 h-3.5" />
-          {waCount > 0 && <span className="text-[10px] font-bold text-emerald-300 leading-none">{waCount}</span>}
+          {waCount > 0 && (
+            <span className={`text-[10px] font-bold leading-none ${isLight ? 'text-emerald-900' : 'text-emerald-200'}`}>
+              {waCount}
+            </span>
+          )}
         </button>
 
         {/* 3. E-mail */}
         <button
           type="button"
+          data-help-id="lead-card-email"
           onClick={onOpenEmail}
           title={emCount > 0 ? `E-mail (${emCount} contato${emCount === 1 ? '' : 's'})` : 'E-mail (sem e-mail)'}
           aria-label="E-mail"
           className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1 ${
             emCount > 0
-              ? 'text-sky-400 bg-sky-500/15 border-sky-500/30 hover:bg-sky-500/25 shadow-xs'
-              : 'text-slate-500 hover:text-slate-300 opacity-40 hover:opacity-100 bg-transparent border-transparent hover:bg-slate-800/60'
+              ? isLight
+                ? 'text-sky-800 bg-white/95 border-2 border-sky-600 shadow-xs ring-1 ring-sky-300 font-bold'
+                : 'text-sky-300 bg-sky-950/80 border border-sky-500/70 hover:bg-sky-900/80 shadow-xs'
+              : isLight
+              ? 'text-slate-700/60 hover:text-slate-950 bg-white/40 hover:bg-white/90 border border-black/10'
+              : 'text-slate-400/60 hover:text-white bg-transparent border-transparent hover:bg-black/30'
           }`}
         >
           <EmailIcon className="w-3.5 h-3.5" />
-          {emCount > 0 && <span className="text-[10px] font-bold text-sky-300 leading-none">{emCount}</span>}
+          {emCount > 0 && (
+            <span className={`text-[10px] font-bold leading-none ${isLight ? 'text-sky-900' : 'text-sky-200'}`}>
+              {emCount}
+            </span>
+          )}
         </button>
 
         {/* 4. Pasta / Google Drive */}
         <button
           type="button"
+          data-help-id="lead-card-folder"
           onClick={onOpenFolder}
           title={hasFolderLink ? 'Pasta de Documentos vinculada' : 'Vincular pasta do Google Drive'}
           aria-label="Pasta de Documentos"
           className={`p-1.5 rounded-lg border transition-all cursor-pointer ${
             hasFolderLink
-              ? 'text-amber-400 bg-amber-500/15 border-amber-500/30 hover:bg-amber-500/25 shadow-xs'
-              : 'text-slate-500 hover:text-slate-300 opacity-40 hover:opacity-100 bg-transparent border-transparent hover:bg-slate-800/60'
+              ? isLight
+                ? 'text-amber-800 bg-white/95 border-2 border-amber-500 shadow-xs ring-1 ring-amber-300 font-bold'
+                : 'text-amber-300 bg-amber-950/80 border border-amber-500/70 hover:bg-amber-900/80 shadow-xs'
+              : isLight
+              ? 'text-slate-700/60 hover:text-slate-950 bg-white/40 hover:bg-white/90 border border-black/10'
+              : 'text-slate-400/60 hover:text-white bg-transparent border-transparent hover:bg-black/30'
           }`}
         >
           <FolderIcon className="w-3.5 h-3.5" />
@@ -310,15 +359,16 @@ export function CardQuickActions({
       {/* Círculo com "+" padronizado para registrar nova nota */}
       <button
         type="button"
+        data-help-id="lead-card-notes"
         onClick={(e) => {
           e.stopPropagation();
           onOpenNotes();
         }}
         title="Adicionar nota ou registrar follow-up"
         aria-label="Adicionar nota / follow-up"
-        className="w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500 active:scale-90 text-white flex items-center justify-center shadow-md shadow-indigo-950/80 hover:shadow-indigo-500/40 ring-2 ring-indigo-500/25 transition-all cursor-pointer shrink-0 ml-auto"
+        className="w-7 h-7 rounded-full bg-[#FF6600] hover:bg-[#e65c00] active:scale-90 text-white flex items-center justify-center shadow-md ring-2 ring-[#FF6600]/25 transition-all cursor-pointer shrink-0 ml-auto"
       >
-        <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+        <svg className="w-3.5 h-3.5 shrink-0 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
           <path d="M12 5v14M5 12h14" />
         </svg>
       </button>
@@ -329,16 +379,16 @@ export function CardQuickActions({
 export function getTemperatureCardClasses(temp?: string | null) {
   const norm = temp ? temp.trim().toLowerCase() : 'morno';
   if (norm === 'frio' || norm === 'cold') {
-    return 'bg-sky-950/70 hover:bg-sky-950/90 border border-sky-800/30 shadow-md shadow-sky-950/50 text-slate-100';
+    return 'card-temp-frio';
   }
   if (norm === 'quente' || norm === 'hot') {
-    return 'bg-rose-950/70 hover:bg-rose-950/90 border border-rose-800/30 shadow-md shadow-rose-950/50 text-slate-100';
+    return 'card-temp-quente';
   }
   if (norm === 'cliente' || norm === 'client' || norm === 'won') {
-    return 'bg-emerald-950/70 hover:bg-emerald-950/90 border border-emerald-800/30 shadow-md shadow-emerald-950/50 text-slate-100';
+    return 'card-temp-cliente';
   }
-  // Morno (default)
-  return 'bg-amber-950/70 hover:bg-amber-950/90 border border-amber-800/30 shadow-md shadow-amber-950/50 text-slate-100';
+  // Morno (default - Mais Amarelo)
+  return 'card-temp-morno';
 }
 
 // ==========================================
@@ -416,6 +466,9 @@ export function LeadCard({
   onOpenEmail,
   onRequestDelete,
 }: LeadCardProps) {
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
+
   const [inlineEditing, setInlineEditing] = React.useState<'stage' | 'responsible' | 'temperature' | 'followup_date' | null>(null);
   const [quickDate, setQuickDate] = React.useState('');
   const [quickTime, setQuickTime] = React.useState('09:00');
@@ -425,6 +478,32 @@ export function LeadCard({
   const showResponsible = viewConfig?.showResponsible ?? true;
   const showNextContact = viewConfig?.showNextContact ?? true;
   const showQuickActions = viewConfig?.showQuickActions ?? true;
+
+  const getFollowUpBadgeThemedClass = () => {
+    if (followUpInfo.type === 'overdue') {
+      return isLight
+        ? 'text-rose-700 font-bold bg-white/85 px-1.5 py-0.5 rounded-md border border-rose-300 shadow-2xs'
+        : 'text-rose-300 font-semibold';
+    }
+    if (followUpInfo.type === 'today') {
+      return isLight
+        ? 'text-amber-900 font-bold bg-white/85 px-1.5 py-0.5 rounded-md border border-amber-400 shadow-2xs'
+        : 'text-amber-300 font-bold';
+    }
+    if (followUpInfo.type === 'tomorrow') {
+      return isLight
+        ? 'text-sky-800 font-semibold bg-white/80 px-1.5 py-0.5 rounded-md border border-sky-300'
+        : 'text-sky-300 font-medium';
+    }
+    if (followUpInfo.type === 'upcoming') {
+      return isLight
+        ? 'text-slate-900 font-semibold bg-white/75 px-1.5 py-0.5 rounded-md border border-black/10'
+        : 'text-slate-100 font-medium';
+    }
+    return isLight
+      ? 'text-slate-700 font-medium hover:text-indigo-700'
+      : 'text-slate-200/80 font-normal hover:text-indigo-300';
+  };
 
   return (
     <div
@@ -453,18 +532,23 @@ export function LeadCard({
         e.preventDefault();
         onDropOnCard(e);
       }}
-      className={`border ${getTemperatureCardClasses(lead.temperature)} rounded-xl p-3.5 shadow-sm hover:shadow-md transition-all cursor-grab active:cursor-grabbing flex flex-col justify-between group relative select-none ${
+      className={`${getTemperatureCardClasses(lead.temperature)} rounded-[22px] p-3.5 transition-all cursor-grab active:cursor-grabbing flex flex-col justify-between group relative select-none ${
         isDragging ? 'opacity-35 scale-[0.98]' : ''
       }`}
+      data-lead-id={lead.id}
       style={{ minHeight: '155px' }}
     >
       <div>
         {/* Top: Condominium Name + ⋯ */}
-        <div className="flex items-start justify-between gap-2 pb-2 mb-2 border-b border-slate-800/40">
+        <div className={`flex items-start justify-between gap-2 pb-2 mb-2 border-b ${isLight ? 'border-black/10' : 'border-white/15'}`}>
           <div className="flex items-center gap-1.5 flex-1 min-w-0">
             <h3
               onClick={onOpenView}
-              className="font-semibold text-sm text-slate-100 hover:text-indigo-400 transition-colors cursor-pointer leading-snug line-clamp-1 truncate"
+              className={`text-sm transition-colors cursor-pointer leading-snug line-clamp-1 truncate ${
+                isLight
+                  ? 'font-bold text-slate-950 hover:text-indigo-700'
+                  : 'font-semibold text-white hover:text-indigo-300'
+              }`}
               title={lead.name}
             >
               {lead.name}
@@ -479,7 +563,11 @@ export function LeadCard({
                 e.stopPropagation();
                 onToggleMenu();
               }}
-              className="p-1 -mr-1 rounded-md text-slate-500 hover:text-slate-200 hover:bg-slate-800 transition-colors cursor-pointer"
+              className={`p-1 -mr-1 rounded-md transition-colors cursor-pointer ${
+                isLight
+                  ? 'text-slate-700 hover:text-slate-950 hover:bg-white/60'
+                  : 'text-slate-300 hover:text-white hover:bg-black/30'
+              }`}
               title="Opções do condomínio"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -505,6 +593,7 @@ export function LeadCard({
                 {/* 2. Editar card */}
                 <button
                   type="button"
+                  data-help-id="lead-card-edit"
                   onClick={() => {
                     onCloseMenu();
                     onOpenEdit();
@@ -523,7 +612,7 @@ export function LeadCard({
                     onCloseMenu();
                     onRequestDelete();
                   }}
-                  className="w-full text-left px-3 py-2 text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 flex items-center gap-2 cursor-pointer"
+                  className="w-full text-left px-3 py-2 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 flex items-center gap-2 cursor-pointer"
                 >
                   <TrashIcon className="w-3.5 h-3.5" />
                   <span>Excluir condomínio</span>
@@ -535,7 +624,7 @@ export function LeadCard({
 
         {/* Subtitle: Tipo · Cidade */}
         {showCityAndType && (
-          <div className="text-[11px] text-slate-400 font-normal mb-2 truncate">
+          <div className={`text-[11px] mb-2 truncate ${isLight ? 'text-slate-800 font-medium' : 'text-slate-200/90 font-normal'}`}>
             <span>{lead.condominium_type || 'Residencial'}</span>
             {lead.city && <span> · {lead.city}</span>}
           </div>
@@ -543,7 +632,7 @@ export function LeadCard({
 
         {/* Stage Badge with Pencil Quick-Edit */}
         {showStage && (
-          <div className="mb-2">
+          <div className="mb-2" data-help-id="pipeline-stage">
             {inlineEditing === 'stage' && stages.length > 0 ? (
               <select
                 autoFocus
@@ -553,7 +642,7 @@ export function LeadCard({
                   setInlineEditing(null);
                 }}
                 onBlur={() => setInlineEditing(null)}
-                className="w-full px-2 py-1 bg-slate-900 border border-indigo-500 rounded-lg text-[11px] text-white focus:outline-none"
+                className="w-full px-2 py-1 bg-slate-900 border border-indigo-500 rounded-lg text-[11px] text-slate-100 focus:outline-none"
               >
                 {stages.map((stg) => (
                   <option key={stg.id} value={stg.id}>
@@ -563,7 +652,13 @@ export function LeadCard({
               </select>
             ) : (
               <div className="flex items-center gap-1">
-                <span className="inline-block px-2 py-0.5 rounded-md bg-slate-800/80 text-[10px] font-medium text-slate-300 truncate max-w-[200px]">
+                <span
+                  className={`inline-block px-2 py-0.5 rounded-md text-[10px] truncate max-w-[200px] border ${
+                    isLight
+                      ? 'bg-white/90 text-slate-900 border-black/15 font-semibold shadow-2xs'
+                      : 'bg-black/35 text-slate-100 border-white/15 font-medium'
+                  }`}
+                >
                   {stageName}
                 </span>
                 {onQuickUpdate && (
@@ -571,7 +666,11 @@ export function LeadCard({
                     type="button"
                     onClick={() => setInlineEditing('stage')}
                     title="Editar estágio do funil"
-                    className="p-0.5 rounded text-slate-500 hover:text-indigo-300 hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+                    className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                      isLight
+                        ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
+                        : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                    }`}
                   >
                     <EditIcon className="w-3 h-3" />
                   </button>
@@ -584,8 +683,14 @@ export function LeadCard({
         {/* Responsible with Persona Icon and Pencil Quick-Edit */}
         {showResponsible && (
           <div className="flex items-center gap-1.5 mb-2" title={`Responsável: ${responsibleName}`}>
-            <div className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 shrink-0">
-              <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div
+              className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
+                isLight
+                  ? 'bg-white/85 text-slate-700 border border-black/10'
+                  : 'bg-black/35 text-slate-200 border border-white/10'
+              }`}
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
             </div>
@@ -599,7 +704,7 @@ export function LeadCard({
                   setInlineEditing(null);
                 }}
                 onBlur={() => setInlineEditing(null)}
-                className="px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-white focus:outline-none max-w-[150px]"
+                className="px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none max-w-[150px]"
               >
                 {profiles.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -609,7 +714,7 @@ export function LeadCard({
               </select>
             ) : (
               <div className="flex items-center gap-1 min-w-0">
-                <span className="text-[11px] text-slate-400 truncate max-w-[150px]">
+                <span className={`text-[11px] truncate max-w-[150px] ${isLight ? 'text-slate-900 font-medium' : 'text-slate-200'}`}>
                   {responsibleName}
                 </span>
                 {onQuickUpdate && (
@@ -617,7 +722,11 @@ export function LeadCard({
                     type="button"
                     onClick={() => setInlineEditing('responsible')}
                     title="Alterar responsável"
-                    className="p-0.5 rounded text-slate-500 hover:text-indigo-300 hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+                    className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                      isLight
+                        ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
+                        : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                    }`}
                   >
                     <EditIcon className="w-3 h-3" />
                   </button>
@@ -631,19 +740,19 @@ export function LeadCard({
         {showNextContact && (
           <div className="pt-1.5 text-[11px]">
             {inlineEditing === 'followup_date' ? (
-              <div className="flex items-center gap-1 bg-slate-950 p-1.5 rounded-xl border border-indigo-500/80 shadow-md">
+              <div className="flex items-center gap-1 bg-slate-900 p-1.5 rounded-xl border border-indigo-500/80 shadow-md">
                 <input
                   type="date"
                   autoFocus
                   value={quickDate}
                   onChange={(e) => setQuickDate(e.target.value)}
-                  className="px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-[11px] text-white focus:outline-none flex-1 min-w-0"
+                  className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-100 focus:outline-none flex-1 min-w-0"
                 />
                 <input
                   type="time"
                   value={quickTime}
                   onChange={(e) => setQuickTime(e.target.value)}
-                  className="px-1.5 py-0.5 bg-slate-900 border border-slate-700 rounded text-[11px] text-white focus:outline-none w-16"
+                  className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-100 focus:outline-none w-16"
                 />
                 <button
                   type="button"
@@ -661,7 +770,7 @@ export function LeadCard({
                 <button
                   type="button"
                   onClick={() => setInlineEditing(null)}
-                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
+                  className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
                   title="Cancelar"
                 >
                   ✕
@@ -669,11 +778,11 @@ export function LeadCard({
               </div>
             ) : (
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Próximo contato</span>
+                <span className={isLight ? 'text-slate-800 font-medium' : 'text-slate-200/90'}>Próximo contato</span>
                 <div className="flex items-center gap-1 min-w-0">
                   <span
                     onClick={onOpenNotes}
-                    className={`${followUpInfo.badgeClass} flex items-center gap-1 cursor-pointer hover:opacity-90 truncate max-w-[170px]`}
+                    className={`${getFollowUpBadgeThemedClass()} flex items-center gap-1 cursor-pointer hover:opacity-90 truncate max-w-[170px]`}
                     title="Clique para agendar ou editar follow-up"
                   >
                     <span className="truncate">{followUpInfo.displayFull || followUpInfo.label}</span>
@@ -689,7 +798,11 @@ export function LeadCard({
                       setInlineEditing('followup_date');
                     }}
                     title="Alterar data e horário de próximo contato"
-                    className="p-0.5 rounded text-slate-500 hover:text-indigo-300 hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+                    className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                      isLight
+                        ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
+                        : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                    }`}
                   >
                     <EditIcon className="w-3 h-3" />
                   </button>
@@ -744,6 +857,9 @@ export function PipelineColumn({
   onDrop,
   children,
 }: PipelineColumnProps) {
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
+
   return (
     <div
       onDragOver={(e) => {
@@ -758,18 +874,20 @@ export function PipelineColumn({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       className={`w-full flex flex-col transition-colors rounded-2xl p-2 min-w-0 min-h-[calc(100vh-200px)] h-full ${
-        isDropTarget ? 'bg-indigo-950/20' : 'bg-transparent'
+        isDropTarget
+          ? isLight ? 'bg-indigo-100/70 ring-2 ring-indigo-400' : 'bg-indigo-500/15 ring-2 ring-indigo-500/30'
+          : isLight ? 'bg-slate-200/50' : 'bg-slate-900/30'
       }`}
     >
       {/* Column Header: ● FRIO  4 */}
       <div className="flex items-center justify-between px-2 pb-2 mb-2 pointer-events-none select-none">
         <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full ${dotClass}`} />
-          <h2 className="font-bold text-xs uppercase tracking-wider text-slate-300">
+          <span className={`w-3 h-3 rounded-full shadow-xs ${dotClass}`} />
+          <h2 className={`font-bold text-xs uppercase tracking-wider ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
             {label}
           </h2>
         </div>
-        <span className="text-xs font-semibold text-slate-500 tabular-nums">
+        <span className={`text-xs font-bold tabular-nums ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
           {leadCount}
         </span>
       </div>

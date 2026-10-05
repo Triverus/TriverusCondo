@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase.ts';
 import { useCRM, type Lead, type Interaction, type Contact } from '../lib/crmStore.tsx';
+import { useTheme } from '../lib/themeContext.tsx';
 import type { UserProfile } from '../App.tsx';
 import {
   BentoViewConfigModal,
@@ -724,46 +725,49 @@ export default function FollowUpsModule({
     setFolderPopover({ open: false, lead: null, folderUrl: '', error: null });
   };
 
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
+
   const getTemperatureCardBorder = (temp?: string | null) => {
     const norm = temp ? temp.trim().toLowerCase() : 'morno';
     if (norm === 'frio' || norm === 'cold') {
-      return 'bg-sky-950/70 hover:bg-sky-950/90 border border-sky-800/30 shadow-md shadow-sky-950/50 text-slate-100';
+      return 'card-temp-frio';
     }
     if (norm === 'quente' || norm === 'hot') {
-      return 'bg-rose-950/70 hover:bg-rose-950/90 border border-rose-800/30 shadow-md shadow-rose-950/50 text-slate-100';
+      return 'card-temp-quente';
     }
     if (norm === 'cliente' || norm === 'client' || norm === 'won') {
-      return 'bg-emerald-950/70 hover:bg-emerald-950/90 border border-emerald-800/30 shadow-md shadow-emerald-950/50 text-slate-100';
+      return 'card-temp-cliente';
     }
-    return 'bg-amber-950/70 hover:bg-amber-950/90 border border-amber-800/30 shadow-md shadow-amber-950/50 text-slate-100';
+    return 'card-temp-morno';
   };
 
   const getTemperatureBadge = (temp?: string | null) => {
     switch (temp) {
       case 'Quente':
         return (
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-rose-400">
-            <span className="w-2 h-2 rounded-full bg-rose-500 animate-pulse" />
+          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-orange-700' : 'text-orange-400'}`}>
+            <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
             Quente
           </span>
         );
       case 'Morno':
         return (
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400">
-            <span className="w-2 h-2 rounded-full bg-amber-500" />
+          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-yellow-700' : 'text-yellow-400'}`}>
+            <span className="w-2 h-2 rounded-full bg-yellow-400" />
             Morno
           </span>
         );
       case 'Frio':
         return (
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-sky-400">
+          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-sky-700' : 'text-sky-400'}`}>
             <span className="w-2 h-2 rounded-full bg-sky-500" />
             Frio
           </span>
         );
       case 'Cliente':
         return (
-          <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-400">
+          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             Cliente
           </span>
@@ -777,21 +781,39 @@ export default function FollowUpsModule({
     switch (status) {
       case 'overdue':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-950/80 text-amber-300 border border-amber-600/70 shadow-xs">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+          <span
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border shadow-xs ${
+              isLight
+                ? 'bg-white/90 text-rose-700 border-rose-400'
+                : 'bg-amber-950/90 text-amber-300 border-amber-500/70'
+            }`}
+          >
+            <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isLight ? 'bg-rose-600' : 'bg-amber-400'}`} />
             Vencido
           </span>
         );
       case 'today':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-indigo-950 text-indigo-300 border border-indigo-600/70 shadow-xs">
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+          <span
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border shadow-xs ${
+              isLight
+                ? 'bg-white/90 text-indigo-700 border-indigo-400'
+                : 'bg-indigo-950 text-indigo-300 border-indigo-500/70'
+            }`}
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
             Hoje
           </span>
         );
       case 'upcoming':
         return (
-          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-950 text-slate-300 border border-slate-800 shadow-xs">
+          <span
+            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border shadow-xs ${
+              isLight
+                ? 'bg-white/90 text-slate-800 border-slate-300'
+                : 'bg-black/40 text-slate-200 border-white/20'
+            }`}
+          >
             Próximos
           </span>
         );
@@ -827,10 +849,14 @@ export default function FollowUpsModule({
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Buscar follow-up..."
-              className="w-full pl-8 pr-7 py-2 bg-zinc-900 border border-zinc-800 focus:border-zinc-700 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none transition-colors"
+              className={`w-full pl-8 pr-7 py-2 rounded-xl text-xs focus:outline-none transition-colors ${
+                isLight
+                  ? 'bg-white border border-slate-300 focus:border-indigo-500 text-slate-900 placeholder:text-slate-400 shadow-2xs'
+                  : 'bg-zinc-900 border border-zinc-800 focus:border-zinc-700 text-white placeholder-zinc-500'
+              }`}
             />
             <svg
-              className="w-3.5 h-3.5 text-zinc-500 absolute left-2.5 top-2.5"
+              className={`w-3.5 h-3.5 absolute left-2.5 top-2.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`}
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -841,7 +867,7 @@ export default function FollowUpsModule({
               <button
                 type="button"
                 onClick={() => setSearchTerm('')}
-                className="absolute right-2.5 top-2 text-zinc-500 hover:text-white text-xs cursor-pointer"
+                className={`absolute right-2.5 top-2 text-xs cursor-pointer ${isLight ? 'text-slate-400 hover:text-slate-700' : 'text-zinc-500 hover:text-white'}`}
               >
                 ×
               </button>
@@ -850,7 +876,9 @@ export default function FollowUpsModule({
 
           {/* Filtros de Status (Esmaecidos/Inativos quando estiver na visualização de Funil) */}
           <div
-            className={`flex items-center p-1 bg-zinc-900 rounded-xl border border-zinc-800 transition-all ${
+            className={`flex items-center p-1 rounded-xl border transition-all ${
+              isLight ? 'bg-white border-slate-300 shadow-2xs' : 'bg-zinc-900 border-zinc-800'
+            } ${
               viewMode === 'funnel'
                 ? 'opacity-30 grayscale pointer-events-none cursor-not-allowed select-none'
                 : ''
@@ -867,12 +895,16 @@ export default function FollowUpsModule({
               onClick={() => setStatusFilter('all')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 statusFilter === 'all'
-                  ? 'bg-indigo-600 text-white shadow-xs'
+                  ? 'bg-[#FF6600] text-white shadow-xs'
+                  : isLight
+                  ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
               <span>Todos</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-zinc-800 text-[10px] tabular-nums font-bold">
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] tabular-nums font-bold ${
+                isLight ? 'bg-slate-100 text-slate-700 border border-slate-300/60' : 'bg-zinc-800 text-zinc-400'
+              }`}>
                 {counts.all}
               </span>
             </button>
@@ -884,7 +916,11 @@ export default function FollowUpsModule({
                 statusFilter === 'overdue'
                   ? 'bg-amber-600 text-white shadow-xs'
                   : counts.overdue > 0
-                  ? 'text-amber-400 hover:text-amber-300'
+                  ? isLight
+                    ? 'text-amber-700 hover:text-amber-800 font-bold'
+                    : 'text-amber-400 hover:text-amber-300'
+                  : isLight
+                  ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
@@ -893,7 +929,11 @@ export default function FollowUpsModule({
               <span
                 className={`px-1.5 py-0.2 rounded-full text-[10px] tabular-nums font-bold ${
                   counts.overdue > 0
-                    ? 'bg-amber-950 text-amber-300 border border-amber-800/60'
+                    ? isLight
+                      ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                      : 'bg-amber-950 text-amber-300 border border-amber-800/60'
+                    : isLight
+                    ? 'bg-slate-100 text-slate-700 border border-slate-300/60'
                     : 'bg-zinc-800 text-zinc-400'
                 }`}
               >
@@ -906,12 +946,16 @@ export default function FollowUpsModule({
               onClick={() => setStatusFilter('today')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 statusFilter === 'today'
-                  ? 'bg-indigo-600 text-white shadow-xs'
+                  ? 'bg-[#FF6600] text-white shadow-xs'
+                  : isLight
+                  ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
               <span>Hoje</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-zinc-800 text-[10px] tabular-nums font-bold">
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] tabular-nums font-bold ${
+                isLight ? 'bg-slate-100 text-slate-700 border border-slate-300/60' : 'bg-zinc-800 text-zinc-400'
+              }`}>
                 {counts.today}
               </span>
             </button>
@@ -921,25 +965,33 @@ export default function FollowUpsModule({
               onClick={() => setStatusFilter('upcoming')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 statusFilter === 'upcoming'
-                  ? 'bg-indigo-600 text-white shadow-xs'
+                  ? 'bg-[#FF6600] text-white shadow-xs'
+                  : isLight
+                  ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
               <span>Próximos</span>
-              <span className="px-1.5 py-0.2 rounded-full bg-zinc-800 text-[10px] tabular-nums font-bold">
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] tabular-nums font-bold ${
+                isLight ? 'bg-slate-100 text-slate-700 border border-slate-300/60' : 'bg-zinc-800 text-zinc-400'
+              }`}>
                 {counts.upcoming}
               </span>
             </button>
           </div>
 
           {/* Alternador de Visualização: Cards / Lista / Funil */}
-          <div className="flex items-center p-1 bg-zinc-900 rounded-xl border border-zinc-800">
+          <div className={`flex items-center p-1 rounded-xl border ${
+            isLight ? 'bg-white border-slate-300 shadow-2xs' : 'bg-zinc-900 border-zinc-800'
+          }`}>
             <button
               type="button"
               onClick={() => setViewMode('cards')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 viewMode === 'cards'
-                  ? 'bg-indigo-600 text-white shadow-xs'
+                  ? 'bg-[#FF6600] text-white shadow-xs'
+                  : isLight
+                  ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
@@ -953,7 +1005,9 @@ export default function FollowUpsModule({
               onClick={() => setViewMode('list')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 viewMode === 'list'
-                  ? 'bg-indigo-600 text-white shadow-xs'
+                  ? 'bg-[#FF6600] text-white shadow-xs'
+                  : isLight
+                  ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
@@ -967,7 +1021,9 @@ export default function FollowUpsModule({
               onClick={() => setViewMode('funnel')}
               className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 ${
                 viewMode === 'funnel'
-                  ? 'bg-indigo-600 text-white shadow-xs'
+                  ? 'bg-[#FF6600] text-white shadow-xs'
+                  : isLight
+                  ? 'text-slate-600 hover:text-slate-950 hover:bg-slate-100'
                   : 'text-zinc-400 hover:text-white'
               }`}
             >
@@ -981,16 +1037,13 @@ export default function FollowUpsModule({
           {/* Eye Customizer */}
           <button
             type="button"
-            disabled={viewMode === 'funnel'}
             onClick={() => setIsBentoModalOpen(true)}
-            className={`p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700 transition-colors cursor-pointer ${
-              viewMode === 'funnel' ? 'opacity-30 grayscale pointer-events-none cursor-not-allowed' : ''
+            className={`p-2 rounded-xl border transition-colors cursor-pointer ${
+              isLight
+                ? 'bg-white border-slate-300 text-slate-700 hover:text-slate-950 hover:bg-slate-100 shadow-2xs'
+                : 'bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-100 hover:border-zinc-700'
             }`}
-            title={
-              viewMode === 'funnel'
-                ? 'Personalização indisponível na visualização de Funil'
-                : 'Personalizar visualização dos cards'
-            }
+            title="Personalizar visualização dos cards e tema da página"
             aria-label="Personalizar cards"
           >
             <EyeIcon className="w-4 h-4" />
@@ -1005,7 +1058,7 @@ export default function FollowUpsModule({
               setPickerSearch('');
               setIsPickerOpen(true);
             }}
-            className="w-full sm:w-auto px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+            className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#E65C00] text-white font-semibold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -1017,18 +1070,20 @@ export default function FollowUpsModule({
 
       {/* Main Content Area */}
       {filteredItems.length === 0 ? (
-        <div className="mt-8 text-center py-16 bg-slate-900/40 border border-slate-800/80 rounded-3xl p-6">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-3">
+        <div className={`mt-8 text-center py-16 rounded-3xl p-6 border ${
+          isLight ? 'bg-white border-slate-200 shadow-md' : 'bg-slate-900/40 border-slate-800/80'
+        }`}>
+          <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-indigo-500 flex items-center justify-center mx-auto mb-3">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
           </div>
-          <h3 className="text-base font-semibold text-white mb-1">
+          <h3 className={`text-base font-semibold mb-1 ${isLight ? 'text-slate-950' : 'text-white'}`}>
             {searchTerm || statusFilter !== 'all' || responsibleFilter !== 'all'
               ? 'Nenhum follow-up encontrado para estes filtros'
               : 'Nenhum follow-up agendado no momento'}
           </h3>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+          <p className={`text-xs max-w-sm mx-auto ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
             Os follow-ups são gerados automaticamente quando você define uma data de próximo contato ao registrar uma interação em um condomínio.
           </p>
         </div>
@@ -1049,22 +1104,25 @@ export default function FollowUpsModule({
             return (
               <div
                 key={item.lead.id}
-                className={`border rounded-2xl p-4 shadow-sm hover:shadow-md flex flex-col justify-between transition-all group ${getTemperatureCardBorder(item.lead.temperature)}`}
+                data-lead-id={item.lead.id}
+                className={`rounded-[22px] p-4 flex flex-col justify-between transition-all group ${getTemperatureCardBorder(item.lead.temperature)}`}
               >
                 <div>
                   {/* Top: Condominium Name + Status Badge */}
-                  <div className="flex items-start justify-between gap-2 pb-2 mb-2 border-b border-slate-800/40">
+                  <div className={`flex items-start justify-between gap-2 pb-2 mb-2 border-b ${isLight ? 'border-black/10' : 'border-white/15'}`}>
                     <div className="flex-1 min-w-0">
                       <h3
                         onClick={() => onOpenLead(item.lead.id)}
-                        className="font-bold text-sm text-white hover:text-indigo-400 transition-colors cursor-pointer leading-snug truncate"
+                        className={`font-bold text-sm transition-colors cursor-pointer leading-snug truncate ${
+                          isLight ? 'text-slate-950 hover:text-indigo-700' : 'text-white hover:text-indigo-300'
+                        }`}
                         title={item.lead.name}
                       >
                         {item.lead.name}
                       </h3>
 
                       {(viewConfig.showCityAndType || viewConfig.showStage) && (
-                        <div className="flex items-center flex-wrap gap-1.5 mt-0.5 text-[11px] text-slate-400">
+                        <div className={`flex items-center flex-wrap gap-1.5 mt-0.5 text-[11px] ${isLight ? 'text-slate-800 font-medium' : 'text-slate-200/90'}`}>
                           {viewConfig.showCityAndType && (
                             <span className="truncate">
                               {item.lead.city
@@ -1081,7 +1139,7 @@ export default function FollowUpsModule({
                                   value={quickEdit?.value || ''}
                                   onChange={(e) => handleSaveQuickField(item, e.target.value)}
                                   onBlur={() => setQuickEdit(null)}
-                                  className="px-1.5 py-0.5 bg-slate-950 border border-indigo-500 rounded-md text-[11px] text-white focus:outline-none"
+                                  className="px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded-md text-[11px] text-slate-100 focus:outline-none"
                                 >
                                   {stages.map((stg) => (
                                     <option key={stg.id} value={stg.id}>
@@ -1091,7 +1149,7 @@ export default function FollowUpsModule({
                                 </select>
                               </div>
                             ) : (
-                              <span className="inline-flex items-center gap-1 text-indigo-300 font-medium truncate">
+                              <span className={`inline-flex items-center gap-1 font-semibold truncate ${isLight ? 'text-indigo-800' : 'text-indigo-200'}`}>
                                 <span className="truncate">{item.stageName}</span>
                                 <button
                                   type="button"
@@ -1103,7 +1161,9 @@ export default function FollowUpsModule({
                                     )
                                   }
                                   title="Editar estágio do funil"
-                                  className="p-0.5 rounded text-slate-500 hover:text-indigo-300 hover:bg-slate-800/70 transition-colors cursor-pointer shrink-0"
+                                  className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                    isLight ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70' : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                                  }`}
                                 >
                                   <EditIcon className="w-3 h-3" />
                                 </button>
@@ -1130,9 +1190,9 @@ export default function FollowUpsModule({
                       {viewConfig.showFollowUpDate && (
                         <>
                           {/* Bloco 1: Agendamento */}
-                          <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 flex flex-col justify-between">
+                          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
                             <div className="flex items-center justify-between gap-1 mb-0.5">
-                              <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold truncate">
+                              <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
                                 Agendamento
                               </span>
                               <button
@@ -1143,7 +1203,9 @@ export default function FollowUpsModule({
                                     : handleOpenQuickEdit(item.lead.id, 'date', toDateInputValue(item.followUpDate))
                                 }
                                 title="Alterar data do agendamento"
-                                className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
+                                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                  isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                                }`}
                               >
                                 <EditIcon className="w-3 h-3" />
                               </button>
@@ -1162,20 +1224,20 @@ export default function FollowUpsModule({
                                   onKeyDown={(e) => {
                                     if (e.key === 'Escape') setQuickEdit(null);
                                   }}
-                                  className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-white focus:outline-none"
+                                  className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
                                 />
                               </div>
                             ) : (
-                              <span className="font-bold text-white text-xs truncate">
+                              <span className={`font-bold text-xs truncate ${isLight ? 'text-slate-950' : 'text-white'}`}>
                                 {formatDateBR(item.followUpDate)}
                               </span>
                             )}
                           </div>
 
                           {/* Bloco 2: Horário */}
-                          <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 flex flex-col justify-between">
+                          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
                             <div className="flex items-center justify-between gap-1 mb-0.5">
-                              <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold truncate">
+                              <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
                                 Horário
                               </span>
                               <button
@@ -1186,7 +1248,9 @@ export default function FollowUpsModule({
                                     : handleOpenQuickEdit(item.lead.id, 'time', displayTime)
                                 }
                                 title="Alterar horário do agendamento"
-                                className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
+                                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                  isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                                }`}
                               >
                                 <EditIcon className="w-3 h-3" />
                               </button>
@@ -1208,11 +1272,11 @@ export default function FollowUpsModule({
                                     if (e.key === 'Enter') handleSaveQuickField(item);
                                     if (e.key === 'Escape') setQuickEdit(null);
                                   }}
-                                  className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-white focus:outline-none"
+                                  className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
                                 />
                               </div>
                             ) : (
-                              <span className="font-bold text-indigo-300 text-xs truncate">
+                              <span className={`font-bold text-xs truncate ${isLight ? 'text-indigo-700' : 'text-indigo-300'}`}>
                                 {displayTime}
                               </span>
                             )}
@@ -1222,9 +1286,9 @@ export default function FollowUpsModule({
 
                       {/* Bloco 3: Temperatura */}
                       {viewConfig.showTemperature && (
-                        <div className="p-2.5 rounded-xl bg-slate-950/70 border border-slate-800/80 flex flex-col justify-between">
+                        <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
                           <div className="flex items-center justify-between gap-1 mb-0.5">
-                            <span className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold truncate">
+                            <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
                               Temperatura
                             </span>
                             <button
@@ -1235,7 +1299,9 @@ export default function FollowUpsModule({
                                   : handleOpenQuickEdit(item.lead.id, 'temperature', item.lead.temperature || 'Morno')
                               }
                               title="Alterar temperatura"
-                              className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
+                              className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                              }`}
                             >
                               <EditIcon className="w-3 h-3" />
                             </button>
@@ -1246,7 +1312,7 @@ export default function FollowUpsModule({
                               value={quickEdit?.value || 'Morno'}
                               onChange={(e) => handleSaveQuickField(item, e.target.value)}
                               onBlur={() => setQuickEdit(null)}
-                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-white focus:outline-none mt-0.5"
+                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none mt-0.5"
                             >
                               {TEMPERATURE_OPTIONS.map((temp) => (
                                 <option key={temp} value={temp}>
@@ -1266,8 +1332,8 @@ export default function FollowUpsModule({
 
                   {/* Latest Interaction preview with Quick-Edit Pencil */}
                   {viewConfig.showLatestNotes && (
-                    <div className="text-xs text-slate-300 space-y-1.5 p-2.5 rounded-xl bg-slate-950/40 border border-slate-800/60 mb-2">
-                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <div className={`text-xs space-y-1.5 p-2.5 rounded-xl border mb-2 ${isLight ? 'bg-white/75 border-black/10 text-slate-800' : 'bg-black/25 border-white/10 text-slate-200'}`}>
+                      <div className={`flex items-center justify-between text-[11px] ${isLight ? 'text-slate-600 font-medium' : 'text-slate-300/80'}`}>
                         <span>Última interação ({item.latestInteraction.interaction_type}):</span>
                         <button
                           type="button"
@@ -1277,7 +1343,9 @@ export default function FollowUpsModule({
                               : handleOpenQuickEdit(item.lead.id, 'notes', item.latestInteraction.notes || '')
                           }
                           title="Editar mensagem da nota"
-                          className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
+                          className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                            isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                          }`}
                         >
                           <EditIcon className="w-3 h-3" />
                         </button>
@@ -1293,13 +1361,13 @@ export default function FollowUpsModule({
                               setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null))
                             }
                             placeholder="Digite a observação..."
-                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-indigo-500 rounded-lg text-[11px] text-white focus:outline-none resize-none"
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-indigo-500 rounded-lg text-[11px] text-slate-100 focus:outline-none resize-none"
                           />
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               type="button"
                               onClick={() => setQuickEdit(null)}
-                              className="px-2 py-0.5 rounded text-[10px] text-slate-400 hover:text-white cursor-pointer"
+                              className="px-2 py-0.5 rounded text-[10px] text-slate-500 hover:text-slate-900 cursor-pointer"
                             >
                               Cancelar
                             </button>
@@ -1314,22 +1382,22 @@ export default function FollowUpsModule({
                           </div>
                         </div>
                       ) : item.latestInteraction.notes ? (
-                        <p className="text-[11px] text-slate-300/90 line-clamp-2 italic">
+                        <p className={`text-[11px] line-clamp-2 italic ${isLight ? 'text-slate-900 font-medium' : 'text-slate-100/90'}`}>
                           "{renderFormattedTextWithLinks(item.latestInteraction.notes)}"
                         </p>
                       ) : (
-                        <p className="text-[11px] text-slate-500 italic">Sem mensagem registrada</p>
+                        <p className={`text-[11px] italic ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>Sem mensagem registrada</p>
                       )}
                     </div>
                   )}
 
                   {/* Horizontal Split Row: Responsible (Left) + Last Note Date (Right) */}
                   {(viewConfig.showResponsible || viewConfig.showLatestNotes) && (
-                    <div className="flex items-center justify-between gap-2 mb-1 text-[11px] text-slate-400">
+                    <div className={`flex items-center justify-between gap-2 mb-1 text-[11px] ${isLight ? 'text-slate-800 font-medium' : 'text-slate-200'}`}>
                       {viewConfig.showResponsible ? (
                         <div className="flex items-center gap-1.5 min-w-0 flex-1" title={`Responsável: ${item.responsibleName}`}>
-                          <div className="w-5 h-5 rounded-full bg-slate-800 flex items-center justify-center text-slate-400 shrink-0">
-                            <svg className="w-3 h-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${isLight ? 'bg-white/85 text-slate-700 border border-black/10' : 'bg-black/35 text-slate-200 border border-white/10'}`}>
+                            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                             </svg>
                           </div>
@@ -1340,7 +1408,7 @@ export default function FollowUpsModule({
                               value={quickEdit?.value || currentResponsibleId}
                               onChange={(e) => handleSaveQuickField(item, e.target.value)}
                               onBlur={() => setQuickEdit(null)}
-                              className="px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-white focus:outline-none max-w-[150px]"
+                              className="px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none max-w-[150px]"
                             >
                               {profiles.map((p) => (
                                 <option key={p.id} value={p.id}>
@@ -1357,7 +1425,9 @@ export default function FollowUpsModule({
                                   handleOpenQuickEdit(item.lead.id, 'responsible', currentResponsibleId)
                                 }
                                 title="Alterar responsável pela demanda"
-                                className="p-0.5 rounded text-slate-500 hover:text-white hover:bg-slate-800/80 transition-colors cursor-pointer shrink-0"
+                                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                  isLight ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70' : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                                }`}
                               >
                                 <EditIcon className="w-3 h-3" />
                               </button>
@@ -1370,11 +1440,11 @@ export default function FollowUpsModule({
 
                       {/* Data da última nota na mesma linha horizontal à direita */}
                       <div
-                        className="flex items-center gap-1 text-[11px] text-slate-400 shrink-0"
+                        className={`flex items-center gap-1 text-[11px] shrink-0 ${isLight ? 'text-slate-700' : 'text-slate-300'}`}
                         title="Data da última nota registrada"
                       >
-                        <span className="text-slate-500">Última nota:</span>
-                        <span className="font-medium text-slate-300">
+                        <span className={isLight ? 'text-slate-600' : 'text-slate-300/80'}>Última nota:</span>
+                        <span className={`font-semibold ${isLight ? 'text-slate-950' : 'text-white'}`}>
                           {formatDateBR(item.latestInteraction.occurred_at)}
                         </span>
                       </div>
@@ -1431,11 +1501,15 @@ export default function FollowUpsModule({
         </div>
       ) : (
         /* LIST VIEW */
-        <div className="mt-5 bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden shadow-lg">
+        <div className={`mt-5 rounded-2xl overflow-hidden shadow-lg border ${
+          isLight ? 'bg-white border-slate-200' : 'bg-slate-900/80 border-slate-800'
+        }`}>
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-sm">
               <thead>
-                <tr className="border-b border-slate-800 bg-slate-950/60 text-slate-400 text-xs font-semibold uppercase tracking-wider">
+                <tr className={`border-b text-xs font-semibold uppercase tracking-wider ${
+                  isLight ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-slate-800 bg-slate-950/60 text-slate-400'
+                }`}>
                   <th className="py-3 px-4 sm:px-6">Condomínio</th>
                   <th className="py-3 px-4">Data Follow-up</th>
                   <th className="py-3 px-4">Situação</th>
@@ -1445,20 +1519,22 @@ export default function FollowUpsModule({
                   <th className="py-3 px-4 text-right">Ação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/70 text-slate-200">
+              <tbody className={`divide-y ${isLight ? 'divide-slate-200 text-slate-800' : 'divide-slate-800/70 text-slate-200'}`}>
                 {filteredItems.map((item) => (
-                  <tr key={item.lead.id} className="hover:bg-slate-800/40 transition-colors">
-                    <td className="py-3.5 px-4 sm:px-6 font-medium text-white">
+                  <tr key={item.lead.id} className={isLight ? 'hover:bg-slate-50 transition-colors' : 'hover:bg-slate-800/40 transition-colors'}>
+                    <td className={`py-3.5 px-4 sm:px-6 font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>
                       <button
                         type="button"
                         onClick={() => onOpenLead(item.lead.id)}
-                        className="text-left font-semibold text-white hover:text-indigo-400 cursor-pointer"
+                        className={`text-left font-semibold cursor-pointer ${
+                          isLight ? 'text-slate-950 hover:text-indigo-600' : 'text-white hover:text-indigo-400'
+                        }`}
                       >
                         {item.lead.name}
                       </button>
-                      <span className="text-[11px] text-slate-400 block">{item.stageName}</span>
+                      <span className={`text-[11px] block ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{item.stageName}</span>
                     </td>
-                    <td className="py-3.5 px-4 font-bold text-white">
+                    <td className={`py-3.5 px-4 font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>
                       {formatDateBR(item.followUpDate)}
                     </td>
                     <td className="py-3.5 px-4">

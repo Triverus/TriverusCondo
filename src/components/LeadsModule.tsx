@@ -711,25 +711,25 @@ export default function LeadsModule({
         id: 'Frio' as const,
         label: 'Frio',
         leads: sortByOrder(cold, 'Frio'),
-        dotClass: 'bg-sky-400',
+        dotClass: 'bg-sky-500',
       },
       {
         id: 'Morno' as const,
         label: 'Morno',
         leads: sortByOrder(warm, 'Morno'),
-        dotClass: 'bg-amber-400',
+        dotClass: 'bg-yellow-400',
       },
       {
         id: 'Quente' as const,
         label: 'Quente',
         leads: sortByOrder(hot, 'Quente'),
-        dotClass: 'bg-rose-400',
+        dotClass: 'bg-orange-500',
       },
       {
         id: 'Cliente' as const,
         label: 'Cliente',
         leads: sortByOrder(client, 'Cliente'),
-        dotClass: 'bg-emerald-400',
+        dotClass: 'bg-emerald-500',
       },
     ];
   }, [filteredLeads, columnOrder]);
@@ -2472,21 +2472,21 @@ export default function LeadsModule({
             onClick={(e) => e.stopPropagation()}
             className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-6 flex flex-col"
           >
-            <div className="px-5 py-3.5 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-amber-950 text-amber-400 border border-amber-700/50">
-                  <FolderIcon className="w-4 h-4" />
+            <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/70 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400 border border-amber-300 dark:border-amber-500/40 font-bold shrink-0 shadow-xs">
+                  <FolderIcon className="w-5 h-5 text-amber-600 dark:text-amber-400" />
                 </div>
                 <div>
-                  <h3 className="font-semibold text-xs text-white">Pasta de Documentos</h3>
-                  <p className="text-[11px] text-slate-400 truncate max-w-[220px]">{folderPopover.lead.name}</p>
+                  <h3 className="font-bold text-xs text-slate-900 dark:text-white">Pasta de Documentos</h3>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-400 truncate max-w-[220px]">{folderPopover.lead.name}</p>
                 </div>
               </div>
 
               <button
                 type="button"
                 onClick={handleCloseFolderPopover}
-                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-200 dark:hover:bg-slate-800 cursor-pointer"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -2494,20 +2494,21 @@ export default function LeadsModule({
               </button>
             </div>
 
-            <div className="p-5 text-xs">
+            <div className="p-5 text-xs space-y-4">
               {getLeadFolderLink(folderPopover.lead.id) && (
-                <div className="mb-4 p-3.5 bg-slate-950 border border-slate-800 rounded-xl space-y-2.5">
-                  <span className="text-[11px] text-slate-400 font-medium block">Link salvo atualmente:</span>
+                <div className="p-3.5 bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl space-y-2.5">
+                  <span className="text-[11px] text-slate-700 dark:text-slate-300 font-semibold block">Link salvo atualmente:</span>
                   <a
                     href={getLeadFolderLink(folderPopover.lead.id)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full px-3.5 py-2.5 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/40 text-amber-300 rounded-xl font-semibold flex items-center justify-center gap-2 transition-all cursor-pointer"
+                    style={{ color: '#ffffff' }}
+                    className="w-full px-4 py-3 bg-gradient-to-r from-amber-500 via-amber-600 to-amber-500 hover:from-amber-600 hover:to-amber-700 !text-white rounded-xl font-bold flex items-center justify-center gap-2.5 shadow-sm hover:shadow-md transition-all cursor-pointer"
                   >
-                    <FolderIcon className="w-4 h-4" />
-                    <span>Abrir pasta no Google Drive</span>
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    <FolderIcon className="w-4 h-4 text-white shrink-0" />
+                    <span className="!text-white font-bold">Abrir pasta no Google Drive</span>
+                    <svg className="w-3.5 h-3.5 text-white shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                     </svg>
                   </a>
                 </div>
@@ -2521,7 +2522,7 @@ export default function LeadsModule({
                 )}
 
                 <div>
-                  <label className="block text-[11px] font-medium text-slate-300 mb-1.5">
+                  <label className="block text-[11px] font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
                     Link da pasta (Google Drive, Dropbox, etc.)
                   </label>
                   <input
@@ -2529,7 +2530,7 @@ export default function LeadsModule({
                     value={folderPopover.folderUrl}
                     onChange={(e) => setFolderPopover((prev) => ({ ...prev, folderUrl: e.target.value, error: null }))}
                     placeholder="https://drive.google.com/drive/folders/..."
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-amber-500 rounded-xl text-white text-xs focus:outline-none placeholder-slate-500"
+                    className="w-full px-3.5 py-2.5 bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-800 focus:border-amber-500 rounded-xl text-slate-900 dark:text-white text-xs focus:outline-none placeholder-slate-400"
                   />
                 </div>
 
@@ -2538,7 +2539,7 @@ export default function LeadsModule({
                     <button
                       type="button"
                       onClick={handleRemoveFolderLink}
-                      className="text-xs text-rose-400 hover:text-rose-300 hover:underline cursor-pointer"
+                      className="text-xs text-rose-600 dark:text-rose-400 hover:text-rose-700 dark:hover:text-rose-300 font-semibold hover:underline cursor-pointer"
                     >
                       Remover link
                     </button>
@@ -2548,13 +2549,14 @@ export default function LeadsModule({
                     <button
                       type="button"
                       onClick={handleCloseFolderPopover}
-                      className="px-3 py-1.5 text-slate-400 hover:text-white cursor-pointer"
+                      className="px-3 py-1.5 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white font-medium cursor-pointer"
                     >
                       Cancelar
                     </button>
                     <button
                       type="submit"
-                      className="px-4 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-xl font-semibold cursor-pointer shadow-xs transition-colors"
+                      style={{ color: '#ffffff' }}
+                      className="px-4 py-2 bg-amber-600 hover:bg-amber-500 !text-white rounded-xl font-bold cursor-pointer shadow-xs transition-colors"
                     >
                       Salvar Link
                     </button>
@@ -2792,12 +2794,12 @@ export default function LeadsModule({
                         className={`p-2.5 rounded-xl border text-center text-xs font-semibold cursor-pointer transition-all ${
                           formTemperature === temp
                             ? temp === 'Quente'
-                              ? 'bg-rose-950/60 border-rose-500 text-rose-300'
+                              ? 'bg-orange-950/80 border-orange-500 text-orange-300'
                               : temp === 'Frio'
-                              ? 'bg-sky-950/60 border-sky-500 text-sky-300'
+                              ? 'bg-sky-950/80 border-sky-500 text-sky-300'
                               : temp === 'Cliente'
-                              ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300'
-                              : 'bg-amber-950/60 border-amber-500 text-amber-300'
+                              ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300'
+                              : 'bg-yellow-950/80 border-yellow-500 text-yellow-300'
                             : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
                         }`}
                       >

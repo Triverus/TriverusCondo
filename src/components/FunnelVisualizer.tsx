@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import type { Lead, PipelineStage, Interaction, Contact } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
+import { useTheme } from '../lib/themeContext.tsx';
 import {
   CardQuickActions,
   WhatsAppIcon,
@@ -76,6 +77,8 @@ export default function FunnelVisualizer({
   onOpenFolder,
   onSuccessFeedback,
 }: FunnelVisualizerProps) {
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
   const [funnelType, setFunnelType] = useState<FunnelType>('temperature');
   const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
@@ -419,19 +422,21 @@ export default function FunnelVisualizer({
         {/* ========================================================================= */}
         {/* COLUNA ESQUERDA: DESENHO DO FUNIL COMPACTO (Sem taxas intermediárias)     */}
         {/* ========================================================================= */}
-        <div className="lg:col-span-5 bg-[#121215] border border-zinc-800 rounded-3xl p-4 sm:p-5 shadow-xl backdrop-blur-md flex flex-col justify-between">
+        <div className={`lg:col-span-5 rounded-3xl p-4 sm:p-5 shadow-xl border flex flex-col justify-between ${
+          isLight ? 'bg-white border-slate-200' : 'bg-[#121215] border-zinc-800 backdrop-blur-md'
+        }`}>
           <div>
             {/* Top Bar: Title + Seletor de Tipo Compacto */}
-            <div className="flex flex-col gap-2.5 pb-3.5 border-b border-zinc-800/80">
+            <div className={`flex flex-col gap-2.5 pb-3.5 border-b ${isLight ? 'border-slate-200' : 'border-zinc-800/80'}`}>
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <div className="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-600/20 border border-indigo-500/30 text-indigo-500 flex items-center justify-center shrink-0">
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                     </svg>
                   </div>
                   <div>
-                    <h3 className="text-sm font-bold text-white">Funil Comercial</h3>
+                    <h3 className={`text-sm font-bold ${isLight ? 'text-slate-950' : 'text-white'}`}>Funil Comercial</h3>
                   </div>
                 </div>
 
@@ -439,7 +444,7 @@ export default function FunnelVisualizer({
                   <button
                     type="button"
                     onClick={() => setSelectedTierId(null)}
-                    className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold underline cursor-pointer"
+                    className="text-[11px] text-indigo-500 hover:text-indigo-600 font-semibold underline cursor-pointer"
                   >
                     Ver todos
                   </button>
@@ -447,7 +452,9 @@ export default function FunnelVisualizer({
               </div>
 
               {/* Type Switcher Tabs (Compact) */}
-              <div className="grid grid-cols-3 p-1 bg-[#09090b] rounded-xl border border-zinc-800 text-[11px] font-semibold text-center">
+              <div className={`grid grid-cols-3 p-1 rounded-xl border text-[11px] font-semibold text-center ${
+                isLight ? 'bg-slate-100 border-slate-200' : 'bg-[#09090b] border-zinc-800'
+              }`}>
                 <button
                   type="button"
                   onClick={() => {
@@ -457,6 +464,8 @@ export default function FunnelVisualizer({
                   className={`py-1.5 px-1 rounded-lg transition-all cursor-pointer truncate ${
                     funnelType === 'temperature'
                       ? 'bg-indigo-600 text-white shadow-xs'
+                      : isLight
+                      ? 'text-slate-600 hover:text-slate-950'
                       : 'text-zinc-400 hover:text-white'
                   }`}
                   title="Funil por Temperatura"
@@ -472,6 +481,8 @@ export default function FunnelVisualizer({
                   className={`py-1.5 px-1 rounded-lg transition-all cursor-pointer truncate ${
                     funnelType === 'stages'
                       ? 'bg-indigo-600 text-white shadow-xs'
+                      : isLight
+                      ? 'text-slate-600 hover:text-slate-950'
                       : 'text-zinc-400 hover:text-white'
                   }`}
                   title="Funil por Etapas"
@@ -487,6 +498,8 @@ export default function FunnelVisualizer({
                   className={`py-1.5 px-1 rounded-lg transition-all cursor-pointer truncate ${
                     funnelType === 'followups'
                       ? 'bg-indigo-600 text-white shadow-xs'
+                      : isLight
+                      ? 'text-slate-600 hover:text-slate-950'
                       : 'text-zinc-400 hover:text-white'
                   }`}
                   title="Funil de Follow-ups"
@@ -496,11 +509,10 @@ export default function FunnelVisualizer({
               </div>
             </div>
 
-            {/* DESENHO REAL DO FUNIL EM TRAPÉZIOS PROGRESSIVOS COMPACTOS (SEM LINHAS DE PASSAGEM) */}
+            {/* DESENHO REAL DO FUNIL EM TRAPÉZIOS PROGRESSIVOS COMPACTOS */}
             <div className="py-4 space-y-2.5">
               {tiers.map((tier, idx) => {
                 const totalTiers = tiers.length;
-                // Width narrows down smoothly from 100% to 54%
                 const widthFactor = 100 - (idx * (46 / Math.max(1, totalTiers - 1)));
                 const isSelected = selectedTierId === tier.id;
 
@@ -515,7 +527,11 @@ export default function FunnelVisualizer({
                       }}
                       className={`relative group cursor-pointer transition-all duration-200 rounded-xl p-2.5 border ${
                         isSelected
-                          ? `${tier.color.border} ring-2 ring-indigo-500 bg-zinc-900 scale-[1.02]`
+                          ? isLight
+                            ? `${tier.color.border} ring-2 ring-indigo-500 bg-indigo-50/90 scale-[1.02] shadow-sm`
+                            : `${tier.color.border} ring-2 ring-indigo-500 bg-zinc-900 scale-[1.02]`
+                          : isLight
+                          ? `${tier.color.border} hover:scale-[1.01] bg-slate-50 hover:bg-slate-100 shadow-2xs`
                           : `${tier.color.border} hover:scale-[1.01] bg-[#09090b]/90 hover:bg-zinc-900/90`
                       }`}
                     >
@@ -528,11 +544,13 @@ export default function FunnelVisualizer({
                         <div className="flex items-center gap-2 min-w-0">
                           <div className={`w-2.5 h-2.5 rounded-full ${tier.color.accent} shrink-0`} />
                           <div className="min-w-0">
-                            <span className="font-bold text-xs text-white truncate block group-hover:text-indigo-300 transition-colors">
+                            <span className={`font-bold text-xs truncate block transition-colors ${
+                              isLight ? 'text-slate-900 group-hover:text-indigo-700' : 'text-white group-hover:text-indigo-300'
+                            }`}>
                               {tier.name}
                             </span>
                             {tier.subtitle && (
-                              <span className="text-[10px] text-zinc-400 truncate block">
+                              <span className={`text-[10px] truncate block ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                                 {tier.subtitle}
                               </span>
                             )}
@@ -541,10 +559,10 @@ export default function FunnelVisualizer({
 
                         {/* Right: Big Count + Percent */}
                         <div className="text-right shrink-0">
-                          <span className="text-base font-black text-white tabular-nums block leading-tight">
+                          <span className={`text-base font-black tabular-nums block leading-tight ${isLight ? 'text-slate-950' : 'text-white'}`}>
                             {tier.count}
                           </span>
-                          <span className="text-[9px] text-zinc-400 font-semibold block">
+                          <span className={`text-[9px] font-semibold block ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                             {tier.percentage}%
                           </span>
                         </div>
@@ -557,12 +575,12 @@ export default function FunnelVisualizer({
           </div>
 
           {/* Quick info footer */}
-          <div className="pt-3 border-t border-zinc-800/80 flex items-center justify-between text-[11px] text-zinc-400">
+          <div className={`pt-3 border-t flex items-center justify-between text-[11px] ${isLight ? 'border-slate-200 text-slate-600' : 'border-zinc-800/80 text-zinc-400'}`}>
             <span>
-              Filtrando: <strong className="text-white">{selectedTier ? selectedTier.name : 'Todos'}</strong>
+              Filtrando: <strong className={isLight ? 'text-slate-950' : 'text-white'}>{selectedTier ? selectedTier.name : 'Todos'}</strong>
             </span>
             <span>
-              <strong className="text-white">{displayedLeads.length}</strong> condomínios
+              <strong className={isLight ? 'text-slate-950' : 'text-white'}>{displayedLeads.length}</strong> condomínios
             </span>
           </div>
         </div>
@@ -572,12 +590,16 @@ export default function FunnelVisualizer({
         {/* ========================================================================= */}
         <div className="lg:col-span-7 flex flex-col">
           {/* Header da Lista de Cards com Busca Compacta */}
-          <div className="flex items-center justify-between gap-3 mb-3 bg-[#121215] p-2.5 rounded-2xl border border-zinc-800">
+          <div className={`flex items-center justify-between gap-3 mb-3 p-2.5 rounded-2xl border ${
+            isLight ? 'bg-white border-slate-200 shadow-sm' : 'bg-[#121215] border-zinc-800'
+          }`}>
             <div className="flex items-center gap-2 min-w-0">
-              <span className="text-xs font-bold text-white truncate">
+              <span className={`text-xs font-bold truncate ${isLight ? 'text-slate-950' : 'text-white'}`}>
                 {selectedTier ? `Etapa: ${selectedTier.name}` : 'Todos os Condomínios'}
               </span>
-              <span className="px-2 py-0.2 rounded-full bg-zinc-800 text-[10px] font-bold text-zinc-300 tabular-nums">
+              <span className={`px-2 py-0.2 rounded-full text-[10px] font-bold tabular-nums ${
+                isLight ? 'bg-slate-100 text-slate-700 border border-slate-300/60' : 'bg-zinc-800 text-zinc-300'
+              }`}>
                 {displayedLeads.length}
               </span>
             </div>
@@ -589,16 +611,20 @@ export default function FunnelVisualizer({
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Buscar condomínio..."
-                className="w-full pl-7 pr-6 py-1 bg-[#09090b] border border-zinc-800 focus:border-indigo-500 rounded-xl text-white placeholder-zinc-500 text-[11px] focus:outline-none transition-colors"
+                className={`w-full pl-7 pr-6 py-1 rounded-xl text-[11px] focus:outline-none transition-colors ${
+                  isLight
+                    ? 'bg-slate-50 border border-slate-300 focus:border-indigo-500 text-slate-900 placeholder:text-slate-400'
+                    : 'bg-[#09090b] border border-zinc-800 focus:border-indigo-500 text-white placeholder-zinc-500'
+                }`}
               />
-              <svg className="w-3 h-3 text-zinc-500 absolute left-2 top-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-3 h-3 absolute left-2 top-1.5 ${isLight ? 'text-slate-400' : 'text-zinc-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
               </svg>
               {searchTerm && (
                 <button
                   type="button"
                   onClick={() => setSearchTerm('')}
-                  className="absolute right-2 top-1 text-zinc-500 hover:text-white text-[10px] cursor-pointer"
+                  className={`absolute right-2 top-1 text-[10px] cursor-pointer ${isLight ? 'text-slate-400 hover:text-slate-700' : 'text-zinc-500 hover:text-white'}`}
                 >
                   ✕
                 </button>
@@ -606,11 +632,13 @@ export default function FunnelVisualizer({
             </div>
           </div>
 
-          {/* Container Scrollável dos Cards em 2 Colunas (Lado a Lado) */}
+          {/* Container Scrollável dos Cards em 2 Colunas */}
           <div className="max-h-[calc(100vh-230px)] min-h-[380px] overflow-y-auto pr-1">
             {displayedLeads.length === 0 ? (
-              <div className="text-center py-12 bg-[#121215]/80 border border-zinc-800/80 rounded-2xl p-6">
-                <p className="text-xs text-zinc-400">
+              <div className={`text-center py-12 rounded-2xl p-6 border ${
+                isLight ? 'bg-white border-slate-200' : 'bg-[#121215]/80 border-zinc-800/80'
+              }`}>
+                <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-zinc-400'}`}>
                   Nenhum condomínio encontrado nesta etapa ou com esta busca.
                 </p>
               </div>
@@ -628,30 +656,32 @@ export default function FunnelVisualizer({
 
                   const getTempBadgeStyle = (temp?: string | null) => {
                     const norm = (temp || 'morno').trim().toLowerCase();
-                    if (norm === 'frio') return 'bg-sky-950/80 text-sky-300 border border-sky-800/60';
-                    if (norm === 'quente') return 'bg-rose-950/80 text-rose-300 border border-rose-800/60';
-                    if (norm === 'cliente') return 'bg-emerald-950/80 text-emerald-300 border border-emerald-800/60';
-                    return 'bg-amber-950/80 text-amber-300 border border-amber-800/60';
+                    if (norm === 'frio') return isLight ? 'bg-white/90 text-sky-800 border border-sky-400 font-bold shadow-2xs' : 'bg-sky-500/20 text-sky-300 border border-sky-400/50 font-bold';
+                    if (norm === 'quente') return isLight ? 'bg-white/90 text-orange-800 border border-orange-400 font-bold shadow-2xs' : 'bg-orange-500/20 text-orange-300 border border-orange-400/50 font-bold';
+                    if (norm === 'cliente') return isLight ? 'bg-white/90 text-emerald-800 border border-emerald-400 font-bold shadow-2xs' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 font-bold';
+                    return isLight ? 'bg-white/90 text-yellow-900 border border-yellow-500 font-bold shadow-2xs' : 'bg-yellow-500/20 text-yellow-300 border border-yellow-400/50 font-bold';
                   };
 
                   const getCardBgClasses = (temp?: string | null) => {
                     const norm = (temp || 'morno').trim().toLowerCase();
-                    if (norm === 'frio') return 'bg-[#0e1626]/80 hover:bg-[#0e1626] border-sky-900/50';
-                    if (norm === 'quente') return 'bg-[#220d14]/80 hover:bg-[#220d14] border-rose-900/50';
-                    if (norm === 'cliente') return 'bg-[#091e17]/80 hover:bg-[#091e17] border-emerald-900/50';
-                    return 'bg-[#1f1709]/80 hover:bg-[#1f1709] border-amber-900/50';
+                    if (norm === 'frio') return 'card-temp-frio';
+                    if (norm === 'quente') return 'card-temp-quente';
+                    if (norm === 'cliente') return 'card-temp-cliente';
+                    return 'card-temp-morno';
                   };
 
                   return (
                     <div
                       key={lead.id}
-                      className={`p-3 rounded-2xl border transition-all hover:shadow-md flex flex-col justify-between ${getCardBgClasses(lead.temperature)}`}
+                      className={`p-3.5 rounded-[22px] border transition-all hover:shadow-md flex flex-col justify-between ${getCardBgClasses(lead.temperature)}`}
                     >
                       <div>
                         {/* Linha 1: Nome do Condomínio */}
                         <h5
                           onClick={() => onOpenLead(lead.id)}
-                          className="font-bold text-xs text-white hover:text-indigo-400 cursor-pointer truncate mb-1.5"
+                          className={`font-bold text-xs cursor-pointer truncate mb-1.5 ${
+                            isLight ? 'text-slate-950 hover:text-indigo-700' : 'text-white hover:text-indigo-300'
+                          }`}
                           title={lead.name}
                         >
                           {lead.name}
@@ -659,11 +689,15 @@ export default function FunnelVisualizer({
 
                         {/* Linha 2: Temperatura + Status da Etapa */}
                         <div className="flex items-center gap-1.5 flex-wrap mb-2.5">
-                          <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${getTempBadgeStyle(lead.temperature)}`}>
+                          <span className={`px-2 py-0.5 rounded-md text-[10px] ${getTempBadgeStyle(lead.temperature)}`}>
                             {lead.temperature || 'Morno'}
                           </span>
                           <span
-                            className="px-2 py-0.5 rounded-md bg-zinc-900/90 border border-zinc-700/70 text-[10px] text-zinc-300 font-medium truncate max-w-[125px]"
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-semibold truncate max-w-[125px] border ${
+                              isLight
+                                ? 'bg-white/90 border-black/15 text-slate-900 shadow-2xs'
+                                : 'bg-zinc-900/90 border-zinc-700/70 text-zinc-200'
+                            }`}
                             title={stageName}
                           >
                             {stageName}

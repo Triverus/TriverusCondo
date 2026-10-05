@@ -3,8 +3,13 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from './lib/supabase.ts';
 import { clearCRMCache } from './lib/crmCache.ts';
 import { CRMProvider } from './lib/crmStore.tsx';
+import { ThemeProvider } from './lib/themeContext.tsx';
+import { CondoUIContextProvider } from './lib/condoUIContext.tsx';
 import LeadsModule from './components/LeadsModule.tsx';
 import FollowUpsModule from './components/FollowUpsModule.tsx';
+import { CondoFloatingButton } from './components/CondoAssistant/CondoFloatingButton.tsx';
+import { CondoDrawer } from './components/CondoAssistant/CondoDrawer.tsx';
+import ProfileAvatar from './components/ProfileAvatar.tsx';
 
 export interface UserProfile {
   id: string;
@@ -62,6 +67,9 @@ export default function App() {
 
   // Cross-module navigation state (e.g. open lead from followups)
   const [targetLeadIdForView, setTargetLeadIdForView] = useState<string | null>(null);
+
+  // Condo AI Assistant Drawer state
+  const [condoOpen, setCondoOpen] = useState<boolean>(false);
 
   // State for mobile drawer
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -464,74 +472,75 @@ export default function App() {
   const isFollowUpsActive = path.startsWith('/app/followups');
 
   return (
-    <CRMProvider currentProfile={activeProfile}>
-      <div className="min-h-screen bg-[#09090b] text-zinc-100 flex flex-col antialiased selection:bg-indigo-500 selection:text-white">
-        {/* Top Global Navigation Bar - Full Width & Harmonious */}
-        <header className="sticky top-0 z-40 w-full bg-[#09090b]/95 border-b border-zinc-800/80 backdrop-blur-md px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between gap-4">
-          {/* Module Selector */}
-          <div className="flex items-center gap-3 sm:gap-5">
-            {/* Horizontal Module Selector Tab Group */}
-            <div className="flex items-center bg-zinc-900/90 border border-zinc-800 rounded-xl p-1 shadow-inner">
-              <button
-                type="button"
-                onClick={() => navigate('/app/leads')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
-                  !isFollowUpsActive
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
-                }`}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                </svg>
-                <span>Pipeline</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate('/app/followups')}
-                className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
-                  isFollowUpsActive
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
-                }`}
-              >
-                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                </svg>
-                <span>Follow-ups</span>
-              </button>
-            </div>
-          </div>
-
-          {/* User Profile & Logout */}
-          <div className="flex items-center gap-3 shrink-0">
-
-            <div className="flex items-center gap-2">
-              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-zinc-900 border border-zinc-700/80 flex items-center justify-center text-xs font-bold text-indigo-300">
-                {(activeProfile.full_name || 'U').charAt(0).toUpperCase()}
-              </div>
-              <div className="text-left hidden md:block leading-tight">
-                <span className="text-xs font-semibold text-white block truncate max-w-[130px]">
-                  {activeProfile.full_name || 'Usuário'}
-                </span>
-                <span className="text-[10px] text-zinc-400 block truncate max-w-[130px]">
-                  {session?.user?.email || 'Conectado'}
-                </span>
+    <ThemeProvider>
+      <CondoUIContextProvider>
+        <CRMProvider currentProfile={activeProfile}>
+          <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased selection:bg-indigo-500 selection:text-white transition-colors duration-150">
+          {/* Top Global Navigation Bar - Full Width & Harmonious */}
+          <header className="sticky top-0 z-40 w-full bg-slate-900/95 border-b border-slate-800 backdrop-blur-md px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between gap-4 shadow-2xs">
+            {/* Module Selector */}
+            <div className="flex items-center gap-3 sm:gap-5">
+              {/* Horizontal Module Selector Tab Group */}
+              <div className="flex items-center bg-slate-800/70 border border-slate-700/60 rounded-xl p-1">
+                <button
+                  type="button"
+                  data-help-id="pipeline-menu"
+                  onClick={() => navigate('/app/leads')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
+                    !isFollowUpsActive
+                      ? 'bg-[#FF6600] text-white shadow-xs'
+                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-700/40'
+                  }`}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                  <span>Pipeline</span>
+                </button>
+                <button
+                  type="button"
+                  data-help-id="followups-menu"
+                  onClick={() => navigate('/app/followups')}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
+                    isFollowUpsActive
+                      ? 'bg-[#FF6600] text-white shadow-xs'
+                      : 'text-slate-400 hover:text-slate-100 hover:bg-slate-700/40'
+                  }`}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  <span>Follow-ups</span>
+                </button>
               </div>
             </div>
 
-            <button
-              onClick={handleLogout}
-              title="Sair do sistema"
-              className="py-1.5 px-2.5 bg-zinc-900 hover:bg-rose-950/60 hover:text-rose-300 text-zinc-400 border border-zinc-800 hover:border-rose-800/50 rounded-xl text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-              </svg>
-              <span className="hidden sm:inline">Sair</span>
-            </button>
-          </div>
-        </header>
+            {/* User Profile & Logout */}
+            <div className="flex items-center gap-3 shrink-0">
+              <div className="flex items-center gap-2">
+                <ProfileAvatar name={activeProfile.full_name || 'Usuário'} size="md" />
+                <div className="text-left hidden md:block leading-tight">
+                  <span className="text-xs font-semibold text-slate-100 block truncate max-w-[140px]">
+                    {activeProfile.full_name || 'Usuário'}
+                  </span>
+                  <span className="text-[10px] text-slate-400 block truncate max-w-[140px]">
+                    {session?.user?.email || 'Conectado'}
+                  </span>
+                </div>
+              </div>
+
+              <button
+                onClick={handleLogout}
+                title="Sair do sistema"
+                className="py-1.5 px-2.5 bg-slate-800/80 hover:bg-rose-500/15 hover:text-rose-500 text-slate-300 border border-slate-700/70 hover:border-rose-500/40 rounded-xl text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                <span className="hidden sm:inline">Sair</span>
+              </button>
+            </div>
+          </header>
 
         {/* Main Content Area */}
         <main className="flex-1 min-w-0 bg-slate-950 flex flex-col">
@@ -551,7 +560,30 @@ export default function App() {
             />
           )}
         </main>
+
+        {/* Condo AI Assistant Floating Bubble & Drawer */}
+        <CondoFloatingButton
+          isOpen={condoOpen}
+          onClick={() => setCondoOpen((prev) => !prev)}
+        />
+        <CondoDrawer
+          isOpen={condoOpen}
+          onClose={() => setCondoOpen(false)}
+          currentProfile={activeProfile}
+          onOpenLead={(leadId) => {
+            setTargetLeadIdForView(leadId);
+            navigate('/app/leads');
+          }}
+          onOpenFollowUp={(leadId) => {
+            if (leadId) setTargetLeadIdForView(leadId);
+            navigate('/app/followups');
+          }}
+          currentPath={path}
+          navigate={navigate}
+        />
       </div>
     </CRMProvider>
-  );
+  </CondoUIContextProvider>
+</ThemeProvider>
+);
 }

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import ProfileAvatar from './ProfileAvatar.tsx';
 import { supabase } from '../lib/supabase.ts';
 import type { UserProfile } from '../App.tsx';
 import { useCRM, type Contact, type Lead } from '../lib/crmStore.tsx';
@@ -552,9 +553,7 @@ export default function ContactsModule({ currentProfile: _profile }: ContactsMod
                 <div>
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-sm font-bold text-indigo-300">
-                        {contact.name.charAt(0).toUpperCase()}
-                      </div>
+                      <ProfileAvatar name={contact.name} size="lg" />
                       <div>
                         <h3
                           onClick={() => handleOpenView(contact)}
