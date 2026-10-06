@@ -3,6 +3,8 @@ import type { UserProfile } from '../App.tsx';
 
 export const CRM_CACHE_KEY = 'triverus:crm-cache:v1';
 export const TEMP_OVERRIDES_KEY = 'triverus:temperature-overrides:v1';
+export const STAGE_OVERRIDES_KEY = 'triverus:stage-overrides:v1';
+export const LOSS_REASON_OVERRIDES_KEY = 'triverus:loss-reason-overrides:v1';
 export const INTERACTION_TYPE_OVERRIDES_KEY = 'triverus:interaction-type-overrides:v1';
 export const CRM_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos
 
@@ -20,7 +22,56 @@ export interface CRMPersistentData {
 }
 
 /**
- * Lê os overrides locais de temperatura/status dos leads (ex: 'Cliente').
+ * Lê os overrides locais de estágio dos leads.
+ */
+export function getLeadStageOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(STAGE_OVERRIDES_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Salva o override local de estágio do lead no localStorage.
+ */
+export function saveLeadStageOverride(leadId: string, stageId: string, lossReason?: string | null): void {
+  try {
+    if (!leadId || !stageId) return;
+    const currentStages = getLeadStageOverrides();
+    currentStages[leadId] = stageId;
+    localStorage.setItem(STAGE_OVERRIDES_KEY, JSON.stringify(currentStages));
+
+    const rawReasons = localStorage.getItem(LOSS_REASON_OVERRIDES_KEY);
+    const currentReasons: Record<string, string> = rawReasons ? JSON.parse(rawReasons) : {};
+    if (lossReason) {
+      currentReasons[leadId] = lossReason;
+    } else {
+      delete currentReasons[leadId];
+    }
+    localStorage.setItem(LOSS_REASON_OVERRIDES_KEY, JSON.stringify(currentReasons));
+  } catch (err) {
+    console.warn('[CRM Cache] Falha ao salvar override de estágio:', err);
+  }
+}
+
+/**
+ * Lê os overrides locais de motivo de perda dos leads.
+ */
+export function getLeadLossReasonOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(LOSS_REASON_OVERRIDES_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Lê os overrides locais de temperatura/status dos leads.
  */
 export function getLeadTemperatureOverrides(): Record<string, string> {
   try {
@@ -86,12 +137,22 @@ export function loadCRMCache(): CRMPersistentData | null {
     }
 
     const tempOverrides = getLeadTemperatureOverrides();
-    if (parsed.leads && Object.keys(tempOverrides).length > 0) {
+    const stageOverrides = getLeadStageOverrides();
+    const lossReasonOverrides = getLeadLossReasonOverrides();
+
+    if (parsed.leads && (Object.keys(tempOverrides).length > 0 || Object.keys(stageOverrides).length > 0 || Object.keys(lossReasonOverrides).length > 0)) {
       parsed.leads = parsed.leads.map((l: Lead) => {
+        let updated = { ...l };
         if (tempOverrides[l.id]) {
-          return { ...l, temperature: tempOverrides[l.id] };
+          updated.temperature = tempOverrides[l.id];
         }
-        return l;
+        if (stageOverrides[l.id]) {
+          updated.current_stage_id = stageOverrides[l.id];
+        }
+        if (lossReasonOverrides[l.id] !== undefined) {
+          updated.loss_reason = lossReasonOverrides[l.id];
+        }
+        return updated;
       });
     }
 
@@ -153,6 +214,8 @@ export function clearCRMCache(): void {
   try {
     localStorage.removeItem(CRM_CACHE_KEY);
     localStorage.removeItem(TEMP_OVERRIDES_KEY);
+    localStorage.removeItem(STAGE_OVERRIDES_KEY);
+    localStorage.removeItem(LOSS_REASON_OVERRIDES_KEY);
     localStorage.removeItem(INTERACTION_TYPE_OVERRIDES_KEY);
   } catch (err) {
     console.warn('[CRM Cache] Falha ao limpar cache:', err);

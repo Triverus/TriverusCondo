@@ -6,6 +6,9 @@ import {
   saveCRMCache,
   getLeadTemperatureOverrides,
   saveLeadTemperatureOverride,
+  getLeadStageOverrides,
+  saveLeadStageOverride,
+  getLeadLossReasonOverrides,
   getInteractionTypeOverrides,
   saveInteractionTypeOverride,
   type CRMPersistentData,
@@ -32,16 +35,34 @@ export interface PipelineStage {
   id: string;
   name: string;
   position: number;
+  is_won?: boolean | null;
   is_lost?: boolean | null;
 }
 
+export const OFFICIAL_PIPELINE_STAGES: Omit<PipelineStage, 'id'>[] = [
+  { name: 'Início', position: 1, is_won: false, is_lost: false },
+  { name: 'Reunião', position: 2, is_won: false, is_lost: false },
+  { name: 'Proposta', position: 3, is_won: false, is_lost: false },
+  { name: 'Negociação', position: 4, is_won: false, is_lost: false },
+  { name: 'Contrato', position: 5, is_won: false, is_lost: false },
+  { name: 'Cliente', position: 6, is_won: true, is_lost: false },
+  { name: 'Perdido', position: 7, is_won: false, is_lost: true },
+];
+
 export const DEFAULT_PIPELINE_STAGES: PipelineStage[] = [
-  { id: 'stg_1', name: 'Primeiro Contato', position: 1 },
-  { id: 'stg_2', name: 'Reunião Agendada', position: 2 },
-  { id: 'stg_3', name: 'Proposta Enviada', position: 3 },
-  { id: 'stg_4', name: 'Negociação', position: 4 },
-  { id: 'stg_5', name: 'Fechado / Ganho', position: 5 },
-  { id: 'stg_6', name: 'Perdido', position: 6, is_lost: true },
+  { id: 'stg_inicio', name: 'Início', position: 1, is_won: false, is_lost: false },
+  { id: 'stg_reuniao', name: 'Reunião', position: 2, is_won: false, is_lost: false },
+  { id: 'stg_proposta', name: 'Proposta', position: 3, is_won: false, is_lost: false },
+  { id: 'stg_negociacao', name: 'Negociação', position: 4, is_won: false, is_lost: false },
+  { id: 'stg_contrato', name: 'Contrato', position: 5, is_won: false, is_lost: false },
+  { id: 'stg_cliente', name: 'Cliente', position: 6, is_won: true, is_lost: false },
+  { id: 'stg_perdido', name: 'Perdido', position: 7, is_won: false, is_lost: true },
+];
+
+export const DEFAULT_TEAM_PROFILES: UserProfile[] = [
+  { id: 'usr_edson', full_name: 'Edson', role: 'member' },
+  { id: 'usr_jailma', full_name: 'Jailma', role: 'member' },
+  { id: 'usr_rogerio', full_name: 'Rogerio', role: 'member' },
 ];
 
 export interface ServiceItem {
@@ -168,7 +189,7 @@ export function CRMProvider({
           leadContactsRes,
           interactionsRes,
         ] = await Promise.all([
-          supabase.from('pipeline_stages').select('id, name, position, is_lost').order('position', { ascending: true }),
+          supabase.from('pipeline_stages').select('id, name, position, is_won, is_lost').order('position', { ascending: true }),
           supabase.from('profiles').select('id, full_name, role'),
           supabase.from('services').select('id, name, title'),
           supabase
@@ -184,7 +205,6 @@ export function CRMProvider({
             .order('occurred_at', { ascending: false }),
         ]);
 
-        const nextStages = stagesRes.data || [];
         const nextProfiles = profilesRes.data || [];
         const nextServices = servicesRes.data || [];
         const nextLeads = leadsRes.data || [];
@@ -193,28 +213,92 @@ export function CRMProvider({
         const nextLeadContacts = leadContactsRes.data || [];
         const nextInteractions = interactionsRes.data || [];
 
-        if (stagesRes.data && stagesRes.data.length > 0) {
-          setStages(nextStages);
-        } else {
-          setStages((prev) => (prev.length > 0 ? prev : DEFAULT_PIPELINE_STAGES));
+        let nextStages: PipelineStage[] = DEFAULT_PIPELINE_STAGES;
+
+        if (stagesRes.data && stagesRes.data.length >= 7) {
+          const sorted = [...stagesRes.data].sort((a, b) => (a.position || 0) - (b.position || 0));
+          const updatedStages: PipelineStage[] = [];
+
+          sorted.forEach((stg, idx) => {
+            const official = OFFICIAL_PIPELINE_STAGES[idx] || OFFICIAL_PIPELINE_STAGES[OFFICIAL_PIPELINE_STAGES.length - 1];
+            const needsUpdate =
+              stg.name !== official.name ||
+              stg.position !== official.position ||
+              Boolean(stg.is_won) !== Boolean(official.is_won) ||
+              Boolean(stg.is_lost) !== Boolean(official.is_lost);
+
+            const unifiedStage: PipelineStage = {
+              id: stg.id,
+              name: official.name,
+              position: official.position,
+              is_won: official.is_won,
+              is_lost: official.is_lost,
+            };
+
+            updatedStages.push(unifiedStage);
+
+            if (needsUpdate) {
+              (async () => {
+                try {
+                  await supabase
+                    .from('pipeline_stages')
+                    .update({
+                      name: official.name,
+                      position: official.position,
+                      is_won: official.is_won,
+                      is_lost: official.is_lost,
+                    })
+                    .eq('id', stg.id);
+                } catch (err) {
+                  console.warn('Stage rename sync notice:', err);
+                }
+              })();
+            }
+          });
+
+          nextStages = updatedStages;
+        } else if (stagesRes.data && stagesRes.data.length > 0) {
+          nextStages = stagesRes.data;
         }
 
-        if (profilesRes.data && profilesRes.data.length > 0) {
-          setProfiles(nextProfiles);
-        } else if (currentProfile) {
-          setProfiles((prev) => (prev.length > 0 ? prev : [currentProfile]));
-        }
+        setStages(nextStages);
+
+        // Merge fetched profiles with default team profiles (Edson, Jailma, Rogerio)
+        const fetchedProfiles = profilesRes.data || [];
+        const profileMapById = new Map<string, UserProfile>();
+        DEFAULT_TEAM_PROFILES.forEach((p) => profileMapById.set(p.id, p));
+        if (currentProfile) profileMapById.set(currentProfile.id, currentProfile);
+        fetchedProfiles.forEach((p) => profileMapById.set(p.id, p));
+        const mergedProfiles = Array.from(profileMapById.values());
+        setProfiles(mergedProfiles);
 
         if (servicesRes.data) setServices(nextServices);
         if (leadsRes.data) {
-          const overrides = getLeadTemperatureOverrides();
-          const leadsWithOverrides = nextLeads.map((lead) => {
-            if (overrides[lead.id]) {
-              return { ...lead, temperature: overrides[lead.id] };
+          const stageOverrides = getLeadStageOverrides();
+          const lossOverrides = getLeadLossReasonOverrides();
+          const defaultStageId = nextStages[0]?.id || '';
+
+          const validStageIds = new Set(nextStages.map((s) => s.id));
+
+          const leadsMapped = nextLeads.map((lead) => {
+            let updated = { ...lead };
+            const overriddenStage = stageOverrides[lead.id];
+            if (overriddenStage && validStageIds.has(overriddenStage)) {
+              updated.current_stage_id = overriddenStage;
+            } else if (lead.current_stage_id && validStageIds.has(lead.current_stage_id)) {
+              updated.current_stage_id = lead.current_stage_id;
+            } else if (lead.current_stage_id) {
+              updated.current_stage_id = lead.current_stage_id;
+            } else {
+              updated.current_stage_id = defaultStageId;
             }
-            return lead;
+
+            if (lossOverrides[lead.id] !== undefined) {
+              updated.loss_reason = lossOverrides[lead.id];
+            }
+            return updated;
           });
-          setLeads(leadsWithOverrides);
+          setLeads(leadsMapped);
         }
         if (leadServicesRes.data) setLeadServices(nextLeadServices);
         if (contactsRes.data) setContacts(nextContacts);

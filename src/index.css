@@ -307,7 +307,200 @@ html.light a.bg-amber-600 * {
 }
 
 /* =========================================================
-   LIGHT MODE TEMPERATURE CARD STYLING
+   STAGE CARD STYLING (7 ETAPAS DO PIPELINE COMERCIAL)
+   Official Palette:
+   Início: #64748B (Slate)
+   Reunião: #3B82F6 (Blue)
+   Proposta: #8B5CF6 (Violet)
+   Negociação: #F59E0B (Amber)
+   Contrato: #FF6600 (Laranja Triverus)
+   Cliente: #16A34A (Green)
+   Perdido: #DC2626 (Red)
+   ========================================================= */
+.card-stage-inicio {
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, rgba(100, 116, 139, 0.06) 0%, transparent 100%);
+  border: 1px solid rgba(100, 116, 139, 0.35);
+  color: #f8fafc;
+}
+.card-stage-inicio:hover {
+  border-color: #64748b;
+  box-shadow: 0 4px 12px rgba(100, 116, 139, 0.15);
+}
+
+.card-stage-reuniao {
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, rgba(59, 130, 246, 0.07) 0%, transparent 100%);
+  border: 1px solid rgba(59, 130, 246, 0.35);
+  color: #f8fafc;
+}
+.card-stage-reuniao:hover {
+  border-color: #3b82f6;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.18);
+}
+
+.card-stage-proposta {
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, rgba(139, 92, 246, 0.07) 0%, transparent 100%);
+  border: 1px solid rgba(139, 92, 246, 0.35);
+  color: #f8fafc;
+}
+.card-stage-proposta:hover {
+  border-color: #8b5cf6;
+  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.18);
+}
+
+.card-stage-negociacao {
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, rgba(245, 158, 11, 0.07) 0%, transparent 100%);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #f8fafc;
+}
+.card-stage-negociacao:hover {
+  border-color: #f59e0b;
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.18);
+}
+
+.card-stage-contrato {
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, rgba(255, 102, 0, 0.07) 0%, transparent 100%);
+  border: 1px solid rgba(255, 102, 0, 0.35);
+  color: #f8fafc;
+}
+.card-stage-contrato:hover {
+  border-color: #FF6600;
+  box-shadow: 0 4px 12px rgba(255, 102, 0, 0.18);
+}
+
+.card-stage-cliente {
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, rgba(22, 163, 74, 0.07) 0%, transparent 100%);
+  border: 1px solid rgba(22, 163, 74, 0.35);
+  color: #f8fafc;
+}
+.card-stage-cliente:hover {
+  border-color: #16a34a;
+  box-shadow: 0 4px 12px rgba(22, 163, 74, 0.18);
+}
+
+.card-stage-perdido {
+  background-color: #0f172a;
+  background-image: linear-gradient(135deg, rgba(220, 38, 38, 0.06) 0%, transparent 100%);
+  border: 1px solid rgba(220, 38, 38, 0.35);
+  color: #f8fafc;
+}
+.card-stage-perdido:hover {
+  border-color: #dc2626;
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.18);
+}
+
+/* Light Mode Stage Cards (Root Card Container Stage Tint ~8-12%) */
+html.light .card-stage-inicio {
+  background-color: rgba(100, 116, 139, 0.12) !important;
+  background-image: linear-gradient(135deg, rgba(100, 116, 139, 0.15) 0%, rgba(100, 116, 139, 0.06) 100%) !important;
+  border: 1.5px solid rgba(100, 116, 139, 0.45) !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 10px rgba(100, 116, 139, 0.12) !important;
+}
+html.light .card-stage-inicio:hover {
+  border-color: #64748b !important;
+  box-shadow: 0 4px 14px rgba(100, 116, 139, 0.22) !important;
+}
+
+html.light .card-stage-reuniao {
+  background-color: rgba(59, 130, 246, 0.11) !important;
+  background-image: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(59, 130, 246, 0.07) 100%) !important;
+  border: 1.5px solid rgba(59, 130, 246, 0.5) !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 10px rgba(59, 130, 246, 0.14) !important;
+}
+html.light .card-stage-reuniao:hover {
+  border-color: #3b82f6 !important;
+  box-shadow: 0 4px 14px rgba(59, 130, 246, 0.25) !important;
+}
+
+html.light .card-stage-proposta {
+  background-color: rgba(139, 92, 246, 0.11) !important;
+  background-image: linear-gradient(135deg, rgba(139, 92, 246, 0.15) 0%, rgba(139, 92, 246, 0.07) 100%) !important;
+  border: 1.5px solid rgba(139, 92, 246, 0.5) !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 10px rgba(139, 92, 246, 0.14) !important;
+}
+html.light .card-stage-proposta:hover {
+  border-color: #8b5cf6 !important;
+  box-shadow: 0 4px 14px rgba(139, 92, 246, 0.25) !important;
+}
+
+html.light .card-stage-negociacao {
+  background-color: rgba(245, 158, 11, 0.12) !important;
+  background-image: linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(245, 158, 11, 0.08) 100%) !important;
+  border: 1.5px solid rgba(245, 158, 11, 0.5) !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.14) !important;
+}
+html.light .card-stage-negociacao:hover {
+  border-color: #f59e0b !important;
+  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.25) !important;
+}
+
+html.light .card-stage-contrato {
+  background-color: rgba(255, 102, 0, 0.12) !important;
+  background-image: linear-gradient(135deg, rgba(255, 102, 0, 0.16) 0%, rgba(255, 102, 0, 0.08) 100%) !important;
+  border: 1.5px solid rgba(255, 102, 0, 0.55) !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 10px rgba(255, 102, 0, 0.16) !important;
+}
+html.light .card-stage-contrato:hover {
+  border-color: #FF6600 !important;
+  box-shadow: 0 4px 14px rgba(255, 102, 0, 0.28) !important;
+}
+
+html.light .card-stage-cliente {
+  background-color: rgba(22, 163, 74, 0.11) !important;
+  background-image: linear-gradient(135deg, rgba(22, 163, 74, 0.15) 0%, rgba(22, 163, 74, 0.07) 100%) !important;
+  border: 1.5px solid rgba(22, 163, 74, 0.5) !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 10px rgba(22, 163, 74, 0.14) !important;
+}
+html.light .card-stage-cliente:hover {
+  border-color: #16a34a !important;
+  box-shadow: 0 4px 14px rgba(22, 163, 74, 0.25) !important;
+}
+
+html.light .card-stage-perdido {
+  background-color: rgba(220, 38, 38, 0.10) !important;
+  background-image: linear-gradient(135deg, rgba(220, 38, 38, 0.14) 0%, rgba(220, 38, 38, 0.06) 100%) !important;
+  border: 1.5px solid rgba(220, 38, 38, 0.45) !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 10px rgba(220, 38, 38, 0.14) !important;
+}
+html.light .card-stage-perdido:hover {
+  border-color: #dc2626 !important;
+  box-shadow: 0 4px 14px rgba(220, 38, 38, 0.22) !important;
+}
+
+/* Stage Focus Pulse Animation */
+@keyframes stageFocusPulseAnim {
+  0% {
+    box-shadow: 0 0 0 0px var(--pulse-color, rgba(255, 102, 0, 0.6));
+    outline: 2px solid var(--pulse-color, #FF6600);
+  }
+  50% {
+    box-shadow: 0 0 18px 4px var(--pulse-color, rgba(255, 102, 0, 0.4));
+    outline: 2px solid var(--pulse-color, #FF6600);
+  }
+  100% {
+    box-shadow: 0 0 0 0px transparent;
+    outline: 0px solid transparent;
+  }
+}
+
+.stage-focus-pulse {
+  animation: stageFocusPulseAnim 1.2s ease-in-out forwards;
+}
+
+/* =========================================================
+   LIGHT MODE TEMPERATURE CARD STYLING (BACKWARD COMPAT)
    ========================================================= */
 html.light .card-temp-frio {
   background-color: #bfdbfe !important;

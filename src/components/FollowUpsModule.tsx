@@ -742,39 +742,42 @@ export default function FollowUpsModule({
     return 'card-temp-morno';
   };
 
-  const getTemperatureBadge = (temp?: string | null) => {
-    switch (temp) {
-      case 'Quente':
-        return (
-          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-orange-700' : 'text-orange-400'}`}>
-            <span className="w-2 h-2 rounded-full bg-orange-500 animate-pulse" />
-            Quente
-          </span>
-        );
-      case 'Morno':
-        return (
-          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-yellow-700' : 'text-yellow-400'}`}>
-            <span className="w-2 h-2 rounded-full bg-yellow-400" />
-            Morno
-          </span>
-        );
-      case 'Frio':
-        return (
-          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-sky-700' : 'text-sky-400'}`}>
-            <span className="w-2 h-2 rounded-full bg-sky-500" />
-            Frio
-          </span>
-        );
-      case 'Cliente':
-        return (
-          <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${isLight ? 'text-emerald-700' : 'text-emerald-400'}`}>
-            <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            Cliente
-          </span>
-        );
-      default:
-        return <span className="text-xs text-slate-400">-</span>;
+  const getStageBadge = (stageId?: string | null) => {
+    const stageName = stageId ? stageMap.get(stageId) || 'Início' : 'Início';
+    const stageObj = stages.find((s) => s.id === stageId);
+    let dotClass = 'bg-slate-400';
+    let textClass = isLight ? 'text-slate-700' : 'text-slate-300';
+
+    if (stageObj?.is_won || stageName.toLowerCase().includes('cliente')) {
+      dotClass = 'bg-emerald-500';
+      textClass = isLight ? 'text-emerald-700' : 'text-emerald-400';
+    } else if (stageObj?.is_lost || stageName.toLowerCase().includes('perdid')) {
+      dotClass = 'bg-rose-500';
+      textClass = isLight ? 'text-rose-700' : 'text-rose-400';
+    } else if (stageName.toLowerCase().includes('reuni')) {
+      dotClass = 'bg-amber-400';
+      textClass = isLight ? 'text-amber-700' : 'text-amber-400';
+    } else if (stageName.toLowerCase().includes('proposta')) {
+      dotClass = 'bg-sky-400';
+      textClass = isLight ? 'text-sky-700' : 'text-sky-400';
+    } else if (stageName.toLowerCase().includes('negocia')) {
+      dotClass = 'bg-[#FF6600]';
+      textClass = isLight ? 'text-orange-700' : 'text-[#FF6600]';
+    } else if (stageName.toLowerCase().includes('contrato')) {
+      dotClass = 'bg-purple-400';
+      textClass = isLight ? 'text-purple-700' : 'text-purple-400';
     }
+
+    return (
+      <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${textClass}`}>
+        <span className={`w-2 h-2 rounded-full ${dotClass}`} />
+        {stageName}
+      </span>
+    );
+  };
+
+  const getTemperatureBadge = (temp?: string | null) => {
+    return getStageBadge(temp);
   };
 
   const getStatusBadge = (status: 'overdue' | 'today' | 'upcoming') => {
@@ -797,11 +800,11 @@ export default function FollowUpsModule({
           <span
             className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold border shadow-xs ${
               isLight
-                ? 'bg-white/90 text-indigo-700 border-indigo-400'
-                : 'bg-indigo-950 text-indigo-300 border-indigo-500/70'
+                ? 'bg-orange-50 text-[#FF6600] border-orange-200'
+                : 'bg-orange-950/60 text-[#FF6600] border-orange-500/40'
             }`}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+            <span className="w-1.5 h-1.5 rounded-full bg-[#FF6600]" />
             Hoje
           </span>
         );
@@ -1073,7 +1076,7 @@ export default function FollowUpsModule({
         <div className={`mt-8 text-center py-16 rounded-3xl p-6 border ${
           isLight ? 'bg-white border-slate-200 shadow-md' : 'bg-slate-900/40 border-slate-800/80'
         }`}>
-          <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-indigo-500 flex items-center justify-center mx-auto mb-3">
+          <div className="w-12 h-12 rounded-2xl bg-[#FF6600]/10 border border-[#FF6600]/20 text-[#FF6600] flex items-center justify-center mx-auto mb-3">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
@@ -1284,21 +1287,21 @@ export default function FollowUpsModule({
                         </>
                       )}
 
-                      {/* Bloco 3: Temperatura */}
+                      {/* Bloco 3: Estágio Comercial */}
                       {viewConfig.showTemperature && (
                         <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
                           <div className="flex items-center justify-between gap-1 mb-0.5">
                             <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
-                              Temperatura
+                              Estágio
                             </span>
                             <button
                               type="button"
                               onClick={() =>
-                                isEditingField('temperature')
+                                isEditingField('stage')
                                   ? setQuickEdit(null)
-                                  : handleOpenQuickEdit(item.lead.id, 'temperature', item.lead.temperature || 'Morno')
+                                  : handleOpenQuickEdit(item.lead.id, 'stage', item.lead.current_stage_id || stages[0]?.id || '')
                               }
-                              title="Alterar temperatura"
+                              title="Alterar estágio comercial"
                               className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
                                 isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
                               }`}
@@ -1306,23 +1309,23 @@ export default function FollowUpsModule({
                               <EditIcon className="w-3 h-3" />
                             </button>
                           </div>
-                          {isEditingField('temperature') ? (
+                          {isEditingField('stage') ? (
                             <select
                               autoFocus
-                              value={quickEdit?.value || 'Morno'}
+                              value={quickEdit?.value || item.lead.current_stage_id || ''}
                               onChange={(e) => handleSaveQuickField(item, e.target.value)}
                               onBlur={() => setQuickEdit(null)}
                               className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none mt-0.5"
                             >
-                              {TEMPERATURE_OPTIONS.map((temp) => (
-                                <option key={temp} value={temp}>
-                                  {temp}
+                              {stages.map((stg) => (
+                                <option key={stg.id} value={stg.id}>
+                                  {stg.name}
                                 </option>
                               ))}
                             </select>
                           ) : (
                             <div className="mt-0.5 truncate">
-                              {getTemperatureBadge(item.lead.temperature)}
+                              {getStageBadge(item.lead.current_stage_id)}
                             </div>
                           )}
                         </div>

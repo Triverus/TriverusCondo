@@ -1,7 +1,9 @@
 import React from 'react';
+import { CircleCheck, CircleX } from 'lucide-react';
 import type { Lead, PipelineStage } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
 import { useTheme } from '../lib/themeContext.tsx';
+import { getStageVisualConfig } from '../lib/stageVisuals.ts';
 import {
   toDateInputValue,
   formatDateBR,
@@ -99,11 +101,11 @@ export interface PipelineViewConfig {
 export interface PipelineToolbarProps {
   searchTerm: string;
   onSearchChange: (value: string) => void;
-  stageFilter: string;
-  onStageFilterChange: (value: string) => void;
   responsibleFilter: string;
   onResponsibleFilterChange: (value: string) => void;
   stages: PipelineStage[];
+  activeStageId?: string;
+  onSelectStage?: (stageId: string) => void;
   profiles: UserProfile[];
   onOpenCreate: () => void;
   onOpenViewConfig?: () => void;
@@ -113,10 +115,10 @@ export interface PipelineToolbarProps {
 export function PipelineToolbar({
   searchTerm,
   onSearchChange,
-  stageFilter,
-  onStageFilterChange,
   responsibleFilter,
   stages,
+  activeStageId,
+  onSelectStage,
   onOpenCreate,
   onOpenViewConfig,
   isRefreshing,
@@ -125,12 +127,14 @@ export function PipelineToolbar({
   const isLight = theme === 'light';
   const isPersonaFiltered = responsibleFilter !== 'all';
 
+  const sortedStages = [...stages].sort((a, b) => (a.position || 0) - (b.position || 0));
+
   return (
-    <div className={`mb-6 flex flex-col md:flex-row md:items-center justify-between gap-3 pb-4 border-b ${isLight ? 'border-slate-200' : 'border-slate-900/60'}`}>
-      {/* Controls Bar: Search + Stage Filter + Eye Customizer */}
+    <div className={`mb-6 flex flex-col lg:flex-row lg:items-center justify-between gap-3 pb-4 border-b ${isLight ? 'border-slate-200' : 'border-slate-900/60'}`}>
+      {/* Controls Bar: Search + Fast Stage Navigation + Eye Customizer */}
       <div className="flex flex-wrap items-center gap-2.5 flex-1 min-w-0">
         {/* Search */}
-        <div className="relative min-w-[200px] flex-1 sm:flex-initial">
+        <div className="relative min-w-[180px] max-w-xs flex-1 sm:flex-initial">
           <input
             type="text"
             data-help-id="pipeline-search"
@@ -162,23 +166,109 @@ export function PipelineToolbar({
           )}
         </div>
 
-        {/* Estágio Filter */}
-        <select
-          value={stageFilter}
-          onChange={(e) => onStageFilterChange(e.target.value)}
-          className={`px-3 py-2 rounded-xl text-xs focus:outline-none cursor-pointer transition-colors ${
-            isLight
-              ? 'bg-white border border-slate-300 text-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-2xs'
-              : 'bg-slate-900 border border-slate-800 text-slate-300 focus:border-slate-700'
-          }`}
-        >
-          <option value="all">Estágio: Todos</option>
-          {stages.map((stg) => (
-            <option key={stg.id} value={stg.id}>
-              {stg.name}
-            </option>
-          ))}
-        </select>
+        {/* Fast Stage Navigation: Commercial Journey Flow */}
+        {sortedStages.length > 0 && onSelectStage && (
+          <nav
+            aria-label="Jornada Comercial do Pipeline"
+            className={`flex items-center gap-1.5 p-1 sm:p-1.5 rounded-xl border max-w-full overflow-x-auto scrollbar-none ${
+              isLight ? 'bg-slate-100/90 border-slate-300/80 shadow-2xs' : 'bg-slate-900 border border-slate-800'
+            }`}
+          >
+            {/* Main Journey Path (Início -> Reunião -> Proposta -> Negociação -> Contrato -> [CircleCheck Cliente]) */}
+            <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+              {sortedStages.map((stg, index) => {
+                const isActive = activeStageId === stg.id;
+                const isClientStage = stg.is_won || stg.name.toLowerCase().includes('cliente') || index === 5;
+                const isLostStage = stg.is_lost || stg.name.toLowerCase().includes('perdid') || index === 6;
+
+                // Perdido stage is rendered in the separate exit block
+                if (isLostStage) return null;
+
+                const activeClass = 'bg-[#FF6600] text-white border-[#FF6600] shadow-xs font-bold ring-1 ring-[#FF6600]/50';
+                const inactiveClass = isLight
+                  ? 'text-slate-700 hover:text-slate-950 hover:bg-white/90 border-transparent'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800/90 border-transparent';
+
+                return (
+                  <React.Fragment key={stg.id}>
+                    {/* Journey Connector arrow if not first item */}
+                    {index > 0 && index <= 5 && (
+                      <span className={`text-[10px] select-none font-bold px-0.5 ${isLight ? 'text-slate-400' : 'text-slate-600'}`}>
+                        →
+                      </span>
+                    )}
+
+                    {isClientStage ? (
+                      <button
+                        type="button"
+                        data-help-id="pipeline-nav-cliente"
+                        onClick={() => onSelectStage(stg.id)}
+                        title="Cliente"
+                        aria-label="Cliente"
+                        aria-current={isActive ? 'true' : undefined}
+                        className={`p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-center border focus-visible:ring-2 focus-visible:ring-[#FF6600] focus-visible:outline-none ${
+                          isActive
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs font-bold ring-1 ring-emerald-400/50'
+                            : isLight
+                            ? 'text-emerald-700 hover:text-emerald-950 hover:bg-emerald-50/80 border-transparent'
+                            : 'text-emerald-400 hover:text-emerald-200 hover:bg-emerald-950/40 border-transparent'
+                        }`}
+                      >
+                        <CircleCheck className="w-4 h-4 shrink-0" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        data-help-id={`pipeline-nav-${stg.id}`}
+                        onClick={() => onSelectStage(stg.id)}
+                        title={stg.name}
+                        aria-label={stg.name}
+                        aria-current={isActive ? 'true' : undefined}
+                        className={`px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-all cursor-pointer border focus-visible:ring-2 focus-visible:ring-[#FF6600] focus-visible:outline-none ${
+                          isActive ? activeClass : inactiveClass
+                        }`}
+                      >
+                        {stg.name}
+                      </button>
+                    )}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+
+            {/* Separate Exit Path: Perdido */}
+            {sortedStages.some((stg, idx) => stg.is_lost || stg.name.toLowerCase().includes('perdid') || idx === 6) && (
+              <div className="flex items-center gap-1.5 shrink-0 pl-1 border-l border-slate-300 dark:border-slate-800">
+                {sortedStages.map((stg, index) => {
+                  const isLostStage = stg.is_lost || stg.name.toLowerCase().includes('perdid') || index === 6;
+                  if (!isLostStage) return null;
+                  const isActive = activeStageId === stg.id;
+
+                  return (
+                    <button
+                      key={stg.id}
+                      type="button"
+                      data-help-id="pipeline-nav-perdido"
+                      onClick={() => onSelectStage(stg.id)}
+                      title="Perdido"
+                      aria-label="Perdido"
+                      aria-current={isActive ? 'true' : undefined}
+                      className={`p-1.5 sm:px-2.5 sm:py-1.5 rounded-lg text-xs transition-all cursor-pointer flex items-center justify-center border focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:outline-none ${
+                        isActive
+                          ? 'bg-rose-600 text-white border-rose-500 shadow-xs font-bold ring-1 ring-rose-400/50'
+                          : isLight
+                          ? 'text-rose-600 hover:text-rose-950 hover:bg-rose-50/80 border-transparent'
+                          : 'text-rose-400 hover:text-rose-200 hover:bg-rose-950/40 border-transparent'
+                      }`}
+                    >
+                      <CircleX className="w-4 h-4 shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </nav>
+        )}
 
         {/* Eye icon - Bento Grid Customization & Persona Filter Modal */}
         {onOpenViewConfig && (
@@ -202,8 +292,8 @@ export function PipelineToolbar({
         )}
 
         {isRefreshing && (
-          <span className="inline-flex items-center gap-1 text-[11px] text-indigo-500 font-medium ml-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-ping" />
+          <span className="inline-flex items-center gap-1 text-[11px] text-[#FF6600] font-medium ml-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#FF6600] animate-ping" />
             sincronizando...
           </span>
         )}
@@ -215,7 +305,7 @@ export function PipelineToolbar({
           type="button"
           data-help-id="new-condominium"
           onClick={onOpenCreate}
-          className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#e65c00] text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+          className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#E65C00] active:bg-[#CC5200] text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
         >
           <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -376,19 +466,30 @@ export function CardQuickActions({
   );
 }
 
+export function getStageCardClasses(stageId?: string | null, stageName?: string | null, isWon?: boolean | null, isLost?: boolean | null) {
+  if (isWon) return 'card-stage-cliente';
+  if (isLost) return 'card-stage-perdido';
+
+  const idStr = String(stageId || '').toLowerCase();
+  const nameStr = String(stageName || '').toLowerCase();
+
+  if (idStr === 'stg_inicio' || nameStr.includes('início') || nameStr.includes('inicio') || nameStr.includes('primeiro')) return 'card-stage-inicio';
+  if (idStr === 'stg_reuniao' || nameStr.includes('reuni')) return 'card-stage-reuniao';
+  if (idStr === 'stg_proposta' || nameStr.includes('proposta')) return 'card-stage-proposta';
+  if (idStr === 'stg_negociacao' || nameStr.includes('negocia')) return 'card-stage-negociacao';
+  if (idStr === 'stg_contrato' || nameStr.includes('contrato')) return 'card-stage-contrato';
+  if (idStr === 'stg_cliente' || nameStr.includes('cliente')) return 'card-stage-cliente';
+  if (idStr === 'stg_perdido' || nameStr.includes('perdid')) return 'card-stage-perdido';
+
+  return 'card-stage-inicio';
+}
+
 export function getTemperatureCardClasses(temp?: string | null) {
   const norm = temp ? temp.trim().toLowerCase() : 'morno';
-  if (norm === 'frio' || norm === 'cold') {
-    return 'card-temp-frio';
-  }
-  if (norm === 'quente' || norm === 'hot') {
-    return 'card-temp-quente';
-  }
-  if (norm === 'cliente' || norm === 'client' || norm === 'won') {
-    return 'card-temp-cliente';
-  }
-  // Morno (default - Mais Amarelo)
-  return 'card-temp-morno';
+  if (norm === 'frio' || norm === 'cold') return 'card-stage-inicio';
+  if (norm === 'quente' || norm === 'hot') return 'card-stage-negociacao';
+  if (norm === 'cliente' || norm === 'client' || norm === 'won') return 'card-stage-cliente';
+  return 'card-stage-reuniao';
 }
 
 // ==========================================
@@ -532,7 +633,7 @@ export function LeadCard({
         e.preventDefault();
         onDropOnCard(e);
       }}
-      className={`${getTemperatureCardClasses(lead.temperature)} rounded-[22px] p-3.5 transition-all cursor-grab active:cursor-grabbing flex flex-col justify-between group relative select-none ${
+      className={`${getStageCardClasses(lead.current_stage_id, stageName)} rounded-[22px] p-3.5 transition-all cursor-grab active:cursor-grabbing flex flex-col justify-between group relative select-none ${
         isDragging ? 'opacity-35 scale-[0.98]' : ''
       }`}
       data-lead-id={lead.id}
@@ -652,15 +753,29 @@ export function LeadCard({
               </select>
             ) : (
               <div className="flex items-center gap-1">
-                <span
-                  className={`inline-block px-2 py-0.5 rounded-md text-[10px] truncate max-w-[200px] border ${
-                    isLight
-                      ? 'bg-white/90 text-slate-900 border-black/15 font-semibold shadow-2xs'
-                      : 'bg-black/35 text-slate-100 border-white/15 font-medium'
-                  }`}
-                >
-                  {stageName}
-                </span>
+                {(() => {
+                  const stageVis = getStageVisualConfig(lead.current_stage_id, stageName);
+                  return (
+                    <span
+                      className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold truncate max-w-[200px] border shadow-2xs"
+                      style={
+                        isLight
+                          ? {
+                              backgroundColor: stageVis.lightBadgeBg,
+                              color: stageVis.lightBadgeText,
+                              borderColor: stageVis.lightBadgeBorder,
+                            }
+                          : {
+                              backgroundColor: stageVis.darkBadgeBg,
+                              color: stageVis.darkBadgeText,
+                              borderColor: stageVis.darkBadgeBorder,
+                            }
+                      }
+                    >
+                      {stageName}
+                    </span>
+                  );
+                })()}
                 {onQuickUpdate && (
                   <button
                     type="button"
@@ -833,14 +948,15 @@ export function LeadCard({
 }
 
 // ==========================================
-// 4. PipelineColumn (Coluna Visual Limpa - Sem Linhas/Bordas Pesadas)
+// 4. PipelineColumn (Coluna Visual das Etapas Comerciais)
 // ==========================================
 export interface PipelineColumnProps {
-  id: 'Frio' | 'Morno' | 'Quente' | 'Cliente';
+  id: string;
   label: string;
   leadCount: number;
   dotClass: string;
   isDropTarget: boolean;
+  isHighlighted?: boolean;
   onDragOver: (e: React.DragEvent) => void;
   onDragLeave: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
@@ -848,10 +964,12 @@ export interface PipelineColumnProps {
 }
 
 export function PipelineColumn({
+  id,
   label,
   leadCount,
   dotClass,
   isDropTarget,
+  isHighlighted = false,
   onDragOver,
   onDragLeave,
   onDrop,
@@ -862,6 +980,8 @@ export function PipelineColumn({
 
   return (
     <div
+      id={`pipeline-col-${id}`}
+      data-stage-id={id}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
@@ -873,21 +993,27 @@ export function PipelineColumn({
       }}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      className={`w-full flex flex-col transition-colors rounded-2xl p-2 min-w-0 min-h-[calc(100vh-200px)] h-full ${
+      className={`w-[290px] sm:w-[305px] shrink-0 flex flex-col transition-all duration-300 rounded-2xl p-2.5 min-h-[calc(100vh-220px)] h-full ${
         isDropTarget
-          ? isLight ? 'bg-indigo-100/70 ring-2 ring-indigo-400' : 'bg-indigo-500/15 ring-2 ring-indigo-500/30'
-          : isLight ? 'bg-slate-200/50' : 'bg-slate-900/30'
+          ? isLight ? 'bg-orange-100/70 ring-2 ring-[#FF6600]' : 'bg-[#FF6600]/15 ring-2 ring-[#FF6600]/40'
+          : isHighlighted
+          ? isLight
+            ? 'bg-orange-50/90 ring-2 ring-[#FF6600] border-[#FF6600] shadow-lg shadow-[#FF6600]/15 scale-[1.008]'
+            : 'bg-[#FF6600]/10 ring-2 ring-[#FF6600] border-[#FF6600] shadow-lg shadow-[#FF6600]/25 scale-[1.008]'
+          : isLight
+          ? 'bg-slate-100/90 border border-slate-200/80'
+          : 'bg-slate-900/40 border border-slate-800/60'
       }`}
     >
-      {/* Column Header: ● FRIO  4 */}
-      <div className="flex items-center justify-between px-2 pb-2 mb-2 pointer-events-none select-none">
+      {/* Column Header: ● INÍCIO  4 */}
+      <div className="flex items-center justify-between px-2 pb-2.5 mb-2.5 pointer-events-none select-none border-b border-black/5 dark:border-white/5">
         <div className="flex items-center gap-2">
-          <span className={`w-3 h-3 rounded-full shadow-xs ${dotClass}`} />
+          <span className={`w-2.5 h-2.5 rounded-full shadow-xs ${dotClass}`} />
           <h2 className={`font-bold text-xs uppercase tracking-wider ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
             {label}
           </h2>
         </div>
-        <span className={`text-xs font-bold tabular-nums ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
+        <span className={`text-xs font-bold tabular-nums px-2 py-0.5 rounded-full ${isLight ? 'bg-slate-200 text-slate-700' : 'bg-slate-800 text-slate-300'}`}>
           {leadCount}
         </span>
       </div>
@@ -901,12 +1027,24 @@ export function PipelineColumn({
 }
 
 // ==========================================
-// 5. PipelineBoard (Container Contínuo do Board - 100% Full Width Grid)
+// 5. PipelineBoard (Container Horizontal Scrollável do Board)
 // ==========================================
-export function PipelineBoard({ children }: { children: React.ReactNode }) {
+export interface PipelineBoardProps {
+  children: React.ReactNode;
+  scrollRef?: React.Ref<HTMLDivElement>;
+  onScroll?: React.UIEventHandler<HTMLDivElement>;
+  onDragOver?: React.DragEventHandler<HTMLDivElement>;
+}
+
+export function PipelineBoard({ children, scrollRef, onScroll, onDragOver }: PipelineBoardProps) {
   return (
-    <div className="w-full pb-8 pt-1">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 lg:gap-5 w-full">
+    <div
+      ref={scrollRef}
+      onScroll={onScroll}
+      onDragOver={onDragOver}
+      className="w-full pb-8 pt-1 overflow-x-auto scroll-smooth select-none"
+    >
+      <div className="flex flex-row items-start gap-3 sm:gap-4 lg:gap-4.5 min-w-max pb-4">
         {children}
       </div>
     </div>

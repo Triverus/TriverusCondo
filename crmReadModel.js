@@ -183,15 +183,104 @@ export function getLeadFolderLink(snapshot, leadId) {
   };
 }
 
-export function getLeadFollowups(snapshot, leadId) {
+export function parseDateTime(dateStr) {
+  if (!dateStr) return { date: '', time: '', timestamp: 0 };
+  const trimmed = String(dateStr).trim();
+  let dt = new Date(trimmed);
+  if (isNaN(dt.getTime())) {
+    dt = new Date();
+  }
+  const yyyy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const date = `${dd}/${mm}/${yyyy}`;
+
+  let time = '';
+  const timeMatch = trimmed.match(/T(\d{2}:\d{2})|(\d{2}:\d{2})/);
+  if (timeMatch) {
+    time = timeMatch[1] || timeMatch[2];
+  } else if (!trimmed.includes('T') && trimmed.length > 10) {
+    const parts = trimmed.split(' ');
+    if (parts[1]) time = parts[1].slice(0, 5);
+  }
+
+  return {
+    date,
+    time: time || '',
+    timestamp: dt.getTime(),
+  };
+}
+
+export function dedupeById(items) {
+  const map = new Map();
+  (items || []).forEach((item) => {
+    if (item && item.id) {
+      if (!map.has(item.id)) {
+        map.set(item.id, item);
+      }
+    }
+  });
+  return Array.from(map.values());
+}
+
+export function getLeadFollowups(snapshot, leadId, filter = 'all') {
   if (!snapshot) return [];
   const interactions = snapshot.interactions || [];
+  const leads = snapshot.leads || [];
+  const leadMap = new Map(leads.map((l) => [l.id, l]));
 
-  const targetInts = leadId
-    ? interactions.filter((i) => i.lead_id === leadId)
-    : interactions;
+  const interactionsByLead = new Map();
+  interactions.forEach((i) => {
+    if (!i || !i.lead_id) return;
+    if (leadId && i.lead_id !== leadId) return;
+    const existing = interactionsByLead.get(i.lead_id) || [];
+    existing.push(i);
+    interactionsByLead.set(i.lead_id, existing);
+  });
 
-  return targetInts.filter((i) => i.next_follow_up_date && String(i.next_follow_up_date).trim() !== '');
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tmrStr = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+
+  const canonical = [];
+  interactionsByLead.forEach((leadInts, lid) => {
+    const lead = leadMap.get(lid);
+    const sorted = [...leadInts].sort((a, b) => new Date(b.occurred_at || 0).getTime() - new Date(a.occurred_at || 0).getTime());
+    const latest = sorted[0];
+
+    if (latest && latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== '') {
+      const { date, time, timestamp } = parseDateTime(latest.next_follow_up_date);
+      const followupDatePrefix = String(latest.next_follow_up_date).trim().slice(0, 10);
+
+      let status = 'upcoming';
+      if (followupDatePrefix < todayStr) status = 'overdue';
+      else if (followupDatePrefix === todayStr) status = 'today';
+      else if (followupDatePrefix === tmrStr) status = 'tomorrow';
+
+      if (filter === 'overdue' && status !== 'overdue') return;
+      if (filter === 'today' && status !== 'today') return;
+      if (filter === 'tomorrow' && status !== 'tomorrow') return;
+      if (filter === 'upcoming' && status === 'overdue') return;
+
+      canonical.push({
+        id: latest.id,
+        lead_id: lid,
+        lead_name: lead?.name || 'Condomínio',
+        interaction_type: latest.interaction_type || 'Contato Agendado',
+        notes: latest.notes || '',
+        date,
+        time,
+        next_follow_up_date_br: time ? `${date} às ${time}` : date,
+        scheduled_at: latest.next_follow_up_date,
+        status,
+        timestamp,
+      });
+    }
+  });
+
+  return dedupeById(canonical);
 }
 
 export function getLeadServices(snapshot, leadId) {
@@ -248,9 +337,33 @@ export function resolveReference(snapshot, reference, contextRefs) {
   return { found: false };
 }
 
+export function getLeadsByStage(snapshot, stageQuery) {
+  if (!snapshot || !stageQuery) return [];
+  const q = String(stageQuery).trim().toLowerCase();
+  const stages = snapshot.stages || [];
+  const leads = snapshot.leads || [];
+
+  // Find matching stage
+  const matchedStage = stages.find(
+    (s) =>
+      s.id === stageQuery ||
+      (s.name || '').toLowerCase() === q ||
+      (s.name || '').toLowerCase().includes(q)
+  );
+
+  if (matchedStage) {
+    return leads.filter((l) => (l.current_stage_id || stages[0]?.id) === matchedStage.id);
+  }
+
+  return [];
+}
+
 export function searchCRM(snapshot, query) {
   if (!snapshot) return { leads: [], contacts: [], mentions: [] };
   const q = (query || '').trim().toLowerCase();
+
+  const stages = snapshot.stages || [];
+  const stageMap = new Map(stages.map((s) => [s.id, (s.name || '').toLowerCase()]));
 
   if (!q) {
     return {
@@ -259,13 +372,16 @@ export function searchCRM(snapshot, query) {
     };
   }
 
-  const leads = (snapshot.leads || []).filter(
-    (l) =>
+  const leads = (snapshot.leads || []).filter((l) => {
+    const stageName = l.current_stage_id ? stageMap.get(l.current_stage_id) || '' : '';
+    return (
       (l.name || '').toLowerCase().includes(q) ||
       (l.city || '').toLowerCase().includes(q) ||
       (l.administrator || '').toLowerCase().includes(q) ||
+      stageName.includes(q) ||
       (l.temperature || '').toLowerCase().includes(q)
-  );
+    );
+  });
 
   const contacts = (snapshot.contacts || []).filter(
     (c) =>

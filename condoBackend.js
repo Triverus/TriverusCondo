@@ -689,6 +689,89 @@ export async function executeToolCall(
       }
 
       case 'get_contact': {
+        if (snapshot) {
+          const resRef = CRMReader.resolveReference(snapshot, args?.name || args?.contact_name);
+          if (resRef.found) {
+            if (resRef.contact) {
+              const c = resRef.contact;
+              const leadContacts = snapshot.leadContacts || [];
+              const lc = leadContacts.find((l) => l.contact_id === c.id);
+              const linkedLead = lc ? (snapshot.leads || []).find((l) => l.id === lc.lead_id) : null;
+              const linkedLeadName = linkedLead?.name || 'Condomínio';
+              const richResults = [];
+
+              if (c.phone) {
+                richResults.push({
+                  type: 'whatsapp',
+                  contact_id: c.id,
+                  label: c.name,
+                  subtitle: `${c.role_title || 'Contato'} · ${linkedLeadName}`,
+                  value: c.phone,
+                  display_value: c.phone,
+                });
+              }
+              if (c.email) {
+                richResults.push({
+                  type: 'email',
+                  contact_id: c.id,
+                  label: c.name,
+                  subtitle: `${c.role_title || 'Contato'} · ${linkedLeadName}`,
+                  value: c.email,
+                });
+              }
+
+              return {
+                result: {
+                  found: true,
+                  contact: c,
+                  condominium_name: linkedLeadName,
+                },
+                richResults,
+              };
+            }
+
+            if (resRef.type === 'mentions' && resRef.mentions) {
+              const mentions = resRef.mentions;
+              const richResults = [];
+              if (mentions.matchedContacts?.length > 0) {
+                for (const c of mentions.matchedContacts) {
+                  if (c.phone) {
+                    richResults.push({
+                      type: 'whatsapp',
+                      contact_id: c.id,
+                      label: c.name,
+                      subtitle: c.role_title || 'Contato',
+                      value: c.phone,
+                      display_value: c.phone,
+                    });
+                  }
+                  if (c.email) {
+                    richResults.push({
+                      type: 'email',
+                      contact_id: c.id,
+                      label: c.name,
+                      subtitle: c.role_title || 'Contato',
+                      value: c.email,
+                    });
+                  }
+                }
+              }
+
+              return {
+                result: {
+                  found: true,
+                  is_mention_in_notes: true,
+                  term: mentions.term,
+                  mentioned_in_notes: mentions.matchedNotes || [],
+                  matched_contacts: mentions.matchedContacts || [],
+                  message: `Encontrei menções a "${mentions.term}" no histórico de interações da plataforma.`,
+                },
+                richResults,
+              };
+            }
+          }
+        }
+
         const resolved = await resolveHumanReferenceToLead(supabaseClient, {
           contact_name: args?.name || args?.contact_name,
         });
@@ -737,6 +820,47 @@ export async function executeToolCall(
 
       case 'get_followups': {
         const filter = args.filter || 'all';
+
+        if (snapshot) {
+          let targetLeadId = null;
+          if (args.contact_name || args.lead_name) {
+            const resRef = CRMReader.resolveReference(snapshot, args.lead_name || args.contact_name);
+            if (resRef.found && resRef.lead) {
+              targetLeadId = resRef.lead.id;
+            }
+          }
+
+          const followups = CRMReader.getLeadFollowups(snapshot, targetLeadId, filter);
+          const sliced = followups.slice(0, maxLimit);
+
+          const richResults = sliced.map((f) => ({
+            type: 'followup',
+            lead_id: f.lead_id,
+            title: f.lead_name,
+            subtitle: f.interaction_type || 'Contato Agendado',
+            next_follow_up_date_br: f.next_follow_up_date_br || f.date,
+            date: f.date,
+            time: f.time,
+            notes: f.notes,
+            route: '/app/followups',
+          }));
+
+          return {
+            result: {
+              count: sliced.length,
+              followups: sliced.map((f) => ({
+                lead_name: f.lead_name,
+                interaction_type: f.interaction_type,
+                date: f.date,
+                time: f.time || 'Não especificado',
+                next_follow_up_date_br: f.next_follow_up_date_br,
+                notes: f.notes,
+              })),
+            },
+            richResults,
+          };
+        }
+
         const now = new Date();
         const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
@@ -815,6 +939,28 @@ export async function executeToolCall(
       }
 
       case 'get_interactions': {
+        if (snapshot) {
+          const resRef = CRMReader.resolveReference(snapshot, args?.lead_name || args?.contact_name);
+          if (resRef.found && resRef.lead) {
+            const notes = CRMReader.getLeadNotes(snapshot, resRef.lead.id);
+            return {
+              result: {
+                condominium_name: resRef.lead.name,
+                interactions: notes.slice(0, 5).map((n) => {
+                  const { date, time } = CRMReader.parseDateTime(n.occurred_at);
+                  const parsedFollow = n.next_follow_up_date ? CRMReader.parseDateTime(n.next_follow_up_date) : null;
+                  return {
+                    interaction_type: n.interaction_type || 'Nota',
+                    notes: n.notes || n.text || '',
+                    occurred_at_br: time ? `${date} às ${time}` : date,
+                    next_follow_up_date_br: parsedFollow ? (parsedFollow.time ? `${parsedFollow.date} às ${parsedFollow.time}` : parsedFollow.date) : null,
+                  };
+                }),
+              },
+            };
+          }
+        }
+
         const resolved = await resolveHumanReferenceToLead(supabaseClient, {
           contact_name: args?.contact_name,
           lead_name: args?.lead_name,
@@ -844,17 +990,49 @@ export async function executeToolCall(
       }
 
       case 'get_crm_summary': {
-        const { data: leads } = await supabaseClient.from('leads').select('id, temperature');
-        const counts = { total: leads?.length || 0, quente: 0, morno: 0, frio: 0, cliente: 0 };
-        (leads || []).forEach((l) => {
-          const t = String(l.temperature || '').toLowerCase();
-          if (t.includes('quente')) counts.quente++;
-          else if (t.includes('morno')) counts.morno++;
-          else if (t.includes('frio')) counts.frio++;
-          else if (t.includes('cliente')) counts.cliente++;
+        if (snapshot) {
+          const leads = snapshot.leads || [];
+          const stages = snapshot.stages || [];
+          const stageMap = new Map(stages.map((s) => [s.id, s.name]));
+
+          const countsByStage = {};
+          stages.forEach((s) => {
+            countsByStage[s.name] = 0;
+          });
+
+          leads.forEach((l) => {
+            const stgName = l.current_stage_id ? stageMap.get(l.current_stage_id) || 'Início' : 'Início';
+            countsByStage[stgName] = (countsByStage[stgName] || 0) + 1;
+          });
+
+          return {
+            result: {
+              total_condominios: leads.length,
+              por_estagio: countsByStage,
+            },
+          };
+        }
+
+        const { data: leads } = await supabaseClient.from('leads').select('id, current_stage_id');
+        const { data: stages } = await supabaseClient.from('pipeline_stages').select('id, name').order('position');
+        const stageMap = new Map((stages || []).map((s) => [s.id, s.name]));
+
+        const countsByStage = {};
+        (stages || []).forEach((s) => {
+          countsByStage[s.name] = 0;
         });
 
-        return { result: counts };
+        (leads || []).forEach((l) => {
+          const stgName = l.current_stage_id ? stageMap.get(l.current_stage_id) || 'Início' : 'Início';
+          countsByStage[stgName] = (countsByStage[stgName] || 0) + 1;
+        });
+
+        return {
+          result: {
+            total_condominios: leads?.length || 0,
+            por_estagio: countsByStage,
+          },
+        };
       }
 
       case 'search_platform_help': {

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.ts';
 import type { UserProfile } from '../App.tsx';
 import { useCRM, type Lead, type PipelineStage, type ServiceItem, type Contact, type Interaction } from '../lib/crmStore.tsx';
+import { saveLeadStageOverride } from '../lib/crmCache.ts';
 import { saveDraft, loadDraft, clearDraft, hasDraft } from '../lib/draftStorage.ts';
 import {
   WhatsAppIcon,
@@ -315,7 +316,201 @@ export default function LeadsModule({
   const [searchTerm, setSearchTerm] = useState('');
   const [responsibleFilter, setResponsibleFilter] = useState('all');
   const [stageFilter, setStageFilter] = useState('all');
+  const [activeStageId, setActiveStageId] = useState<string>('');
+  const [highlightedStageId, setHighlightedStageId] = useState<string | null>(null);
   const [statusFeedback, setStatusFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Drag & Drop State
+  const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
+  const draggedLeadRef = useRef<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+
+  const boardScrollRef = useRef<HTMLDivElement>(null);
+  const autoScrollRafRef = useRef<number | null>(null);
+  const isProgrammaticScrollRef = useRef<boolean>(false);
+  const programmaticScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Initialize active stage id
+  useEffect(() => {
+    if (!activeStageId && stages.length > 0) {
+      const sorted = [...stages].sort((a, b) => (a.position || 0) - (b.position || 0));
+      setActiveStageId(sorted[0].id);
+    }
+  }, [stages, activeStageId]);
+
+  // Smooth HORIZONTAL-ONLY scroll to target stage column (never scrolls page vertically)
+  const scrollToStage = useCallback((targetStageId: string) => {
+    setActiveStageId(targetStageId);
+    setMobileActiveCol(targetStageId);
+    setHighlightedStageId(targetStageId);
+
+    // Remove temporary column highlight after 1.8s
+    setTimeout(() => {
+      setHighlightedStageId((prev) => (prev === targetStageId ? null : prev));
+    }, 1800);
+
+    // Lock scroll listener override while smooth scrolling programmatically
+    isProgrammaticScrollRef.current = true;
+    if (programmaticScrollTimeoutRef.current) {
+      clearTimeout(programmaticScrollTimeoutRef.current);
+    }
+    programmaticScrollTimeoutRef.current = setTimeout(() => {
+      isProgrammaticScrollRef.current = false;
+    }, 800);
+
+    if (!boardScrollRef.current) return;
+    const container = boardScrollRef.current;
+    const colEl = container.querySelector(`[data-stage-id="${targetStageId}"]`) as HTMLElement | null;
+    if (colEl) {
+      const colLeft = colEl.offsetLeft;
+      const colWidth = colEl.offsetWidth;
+      const containerWidth = container.clientWidth;
+      const maxScroll = container.scrollWidth - containerWidth;
+
+      let targetScrollLeft = colLeft - (containerWidth / 2) + (colWidth / 2);
+      if (targetScrollLeft < 0) targetScrollLeft = 0;
+      if (maxScroll > 0 && targetScrollLeft > maxScroll) targetScrollLeft = maxScroll;
+
+      container.scrollTo({
+        left: targetScrollLeft,
+        behavior: 'smooth',
+      });
+    }
+  }, []);
+
+  // Detect active column during manual scroll with boundary check
+  const handleBoardScroll = useCallback(() => {
+    if (!boardScrollRef.current) return;
+    if (isProgrammaticScrollRef.current) return; // Prevent scroll listener from overriding programmatic selection
+
+    const container = boardScrollRef.current;
+    const scrollLeft = container.scrollLeft;
+    const maxScroll = container.scrollWidth - container.clientWidth;
+
+    const sortedStages = [...stages].sort((a, b) => (a.position || 0) - (b.position || 0));
+    if (sortedStages.length === 0) return;
+
+    // Check boundary conditions (scrolled all the way right or left)
+    if (maxScroll > 0 && scrollLeft >= maxScroll - 20) {
+      const lastStage = sortedStages[sortedStages.length - 1];
+      if (lastStage && lastStage.id !== activeStageId) {
+        setActiveStageId(lastStage.id);
+      }
+      return;
+    }
+
+    if (scrollLeft <= 10) {
+      const firstStage = sortedStages[0];
+      if (firstStage && firstStage.id !== activeStageId) {
+        setActiveStageId(firstStage.id);
+      }
+      return;
+    }
+
+    // Otherwise calculate closest column center
+    const containerCenter = scrollLeft + container.clientWidth / 2;
+    const colEls = Array.from(container.querySelectorAll('[data-stage-id]')) as HTMLElement[];
+    if (colEls.length === 0) return;
+
+    let closestId = activeStageId;
+    let minDistance = Infinity;
+
+    colEls.forEach((el) => {
+      const stageId = el.getAttribute('data-stage-id');
+      if (!stageId) return;
+      const elCenter = el.offsetLeft + el.offsetWidth / 2;
+      const dist = Math.abs(elCenter - containerCenter);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestId = stageId;
+      }
+    });
+
+    if (closestId && closestId !== activeStageId) {
+      setActiveStageId(closestId);
+    }
+  }, [activeStageId, stages]);
+
+  // Keyboard shortcuts 1–7 (excluding inputs/textareas/selects)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isTyping =
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          activeEl.tagName === 'SELECT' ||
+          (activeEl as HTMLElement).isContentEditable);
+
+      if (isTyping) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const num = parseInt(e.key, 10);
+      if (num >= 1 && num <= 7) {
+        const sorted = [...stages].sort((a, b) => (a.position || 0) - (b.position || 0));
+        const targetStage = sorted[num - 1];
+        if (targetStage) {
+          e.preventDefault();
+          scrollToStage(targetStage.id);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [stages, scrollToStage]);
+
+  // Stop auto scroll helper
+  const stopAutoScroll = useCallback(() => {
+    if (autoScrollRafRef.current !== null) {
+      cancelAnimationFrame(autoScrollRafRef.current);
+      autoScrollRafRef.current = null;
+    }
+  }, []);
+
+  // Progressive auto-scroll during drag near boundaries (80px zone)
+  const handleBoardDragOver = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      if (!boardScrollRef.current) return;
+      if (!draggedLeadRef.current && !draggedLeadId) {
+        stopAutoScroll();
+        return;
+      }
+
+      const container = boardScrollRef.current;
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX;
+      const zoneWidth = 80;
+
+      const distFromLeft = mouseX - rect.left;
+      const distFromRight = rect.right - mouseX;
+
+      let speed = 0;
+      if (distFromLeft >= 0 && distFromLeft <= zoneWidth) {
+        const ratio = (zoneWidth - distFromLeft) / zoneWidth;
+        speed = -Math.round(4 + ratio * 20); // -4px to -24px progressive speed
+      } else if (distFromRight >= 0 && distFromRight <= zoneWidth) {
+        const ratio = (zoneWidth - distFromRight) / zoneWidth;
+        speed = Math.round(4 + ratio * 20); // +4px to +24px progressive speed
+      }
+
+      if (speed !== 0) {
+        if (autoScrollRafRef.current === null) {
+          const loop = () => {
+            if (boardScrollRef.current) {
+              boardScrollRef.current.scrollLeft += speed;
+            }
+            autoScrollRafRef.current = requestAnimationFrame(loop);
+          };
+          autoScrollRafRef.current = requestAnimationFrame(loop);
+        }
+      } else {
+        stopAutoScroll();
+      }
+    },
+    [draggedLeadId, stopAutoScroll]
+  );
 
   // Auto-dismiss status feedback notification toast after 2.5s
   useEffect(() => {
@@ -360,12 +555,22 @@ export default function LeadsModule({
   };
 
   // Mobile active column tab
-  const [mobileActiveCol, setMobileActiveCol] = useState<'Frio' | 'Morno' | 'Quente' | 'Cliente'>('Morno');
+  const [mobileActiveCol, setMobileActiveCol] = useState<string>('stg_inicio');
 
-  // Drag & Drop State
-  const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
-  const draggedLeadRef = useRef<string | null>(null);
-  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  // Lost Reason Modal State (Mandatory when moving to Perdido)
+  const [lostReasonModal, setLostReasonModal] = useState<{
+    open: boolean;
+    leadId: string | null;
+    targetStageId: string;
+    reason: string;
+    error: string | null;
+  }>({
+    open: false,
+    leadId: null,
+    targetStageId: 'stg_perdido',
+    reason: '',
+    error: null,
+  });
 
   // Card Menu State
   const [activeMenuLeadId, setActiveMenuLeadId] = useState<string | null>(null);
@@ -484,7 +689,8 @@ export default function LeadsModule({
   const [formAddress, setFormAddress] = useState('');
   const [formCity, setFormCity] = useState('');
   const [formTemperature, setFormTemperature] = useState<'Frio' | 'Morno' | 'Quente' | 'Cliente'>('Morno');
-  const [formCurrentStageId, setFormCurrentStageId] = useState('');
+  const [formCurrentStageId, setFormCurrentStageId] = useState('stg_inicio');
+  const [formLossReason, setFormLossReason] = useState('');
   const [formResponsibleUserId, setFormResponsibleUserId] = useState('');
   const [formSaving, setFormSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -674,65 +880,55 @@ export default function LeadsModule({
     });
   }, [leads, searchTerm, responsibleFilter, stageFilter, profileMap, stageMap, contactsTextMap, notesTextMap]);
 
-  // Pipeline Columns (4 Categories: Frio, Morno, Quente, Cliente) with Pinned Cards Pinned to Top
+  // Helper for stage dot color (Official Palette)
+  const getStageDotClass = (stageId?: string, stageName?: string, isWon?: boolean | null, isLost?: boolean | null) => {
+    if (isWon) return 'bg-[#16A34A] shadow-xs shadow-[#16A34A]/50';
+    if (isLost) return 'bg-[#DC2626] shadow-xs shadow-[#DC2626]/50';
+    const idStr = String(stageId || '').toLowerCase();
+    const nameStr = String(stageName || '').toLowerCase();
+    if (idStr === 'stg_inicio' || nameStr.includes('início') || nameStr.includes('inicio') || nameStr.includes('primeiro')) return 'bg-[#64748B] shadow-xs shadow-[#64748B]/50';
+    if (idStr === 'stg_reuniao' || nameStr.includes('reuni')) return 'bg-[#3B82F6] shadow-xs shadow-[#3B82F6]/50';
+    if (idStr === 'stg_proposta' || nameStr.includes('proposta')) return 'bg-[#8B5CF6] shadow-xs shadow-[#8B5CF6]/50';
+    if (idStr === 'stg_negociacao' || nameStr.includes('negocia')) return 'bg-[#F59E0B] shadow-xs shadow-[#F59E0B]/50';
+    if (idStr === 'stg_contrato' || nameStr.includes('contrato')) return 'bg-[#FF6600] shadow-xs shadow-[#FF6600]/50';
+    if (idStr === 'stg_cliente' || nameStr.includes('cliente')) return 'bg-[#16A34A] shadow-xs shadow-[#16A34A]/50';
+    if (idStr === 'stg_perdido' || nameStr.includes('perdid')) return 'bg-[#DC2626] shadow-xs shadow-[#DC2626]/50';
+    return 'bg-[#64748B]';
+  };
+
+  // Pipeline Columns (7 Etapas Comerciais: Início, Reunião, Proposta, Negociação, Contrato, Cliente, Perdido)
   const pipelineColumns = useMemo(() => {
-    const cold: Lead[] = [];
-    const warm: Lead[] = [];
-    const hot: Lead[] = [];
-    const client: Lead[] = [];
+    const sortedStages = [...stages].sort((a, b) => (a.position || 0) - (b.position || 0));
+    const firstStageId = sortedStages[0]?.id || 'stg_inicio';
 
-    filteredLeads.forEach((lead) => {
-      const temp = (lead.temperature || 'Morno').toLowerCase();
-      if (temp === 'quente') {
-        hot.push(lead);
-      } else if (temp === 'frio') {
-        cold.push(lead);
-      } else if (temp === 'cliente') {
-        client.push(lead);
-      } else {
-        warm.push(lead);
-      }
-    });
-
-    const sortByOrder = (list: Lead[], colId: string) => {
-      const order = columnOrder[colId] || [];
-      return [...list].sort((a, b) => {
-        const idxA = order.indexOf(a.id);
-        const idxB = order.indexOf(b.id);
-        if (idxA === -1 && idxB === -1) return 0;
-        if (idxA === -1) return 1;
-        if (idxB === -1) return -1;
-        return idxA - idxB;
+    return sortedStages.map((stage) => {
+      const stageLeads = filteredLeads.filter((lead) => {
+        const leadStageId = lead.current_stage_id || firstStageId;
+        return leadStageId === stage.id;
       });
-    };
 
-    return [
-      {
-        id: 'Frio' as const,
-        label: 'Frio',
-        leads: sortByOrder(cold, 'Frio'),
-        dotClass: 'bg-sky-500',
-      },
-      {
-        id: 'Morno' as const,
-        label: 'Morno',
-        leads: sortByOrder(warm, 'Morno'),
-        dotClass: 'bg-yellow-400',
-      },
-      {
-        id: 'Quente' as const,
-        label: 'Quente',
-        leads: sortByOrder(hot, 'Quente'),
-        dotClass: 'bg-orange-500',
-      },
-      {
-        id: 'Cliente' as const,
-        label: 'Cliente',
-        leads: sortByOrder(client, 'Cliente'),
-        dotClass: 'bg-emerald-500',
-      },
-    ];
-  }, [filteredLeads, columnOrder]);
+      const sortByOrder = (list: Lead[], colId: string) => {
+        const order = columnOrder[colId] || [];
+        return [...list].sort((a, b) => {
+          const idxA = order.indexOf(a.id);
+          const idxB = order.indexOf(b.id);
+          if (idxA === -1 && idxB === -1) return 0;
+          if (idxA === -1) return 1;
+          if (idxB === -1) return -1;
+          return idxA - idxB;
+        });
+      };
+
+      return {
+        id: stage.id,
+        label: stage.name,
+        is_won: stage.is_won,
+        is_lost: stage.is_lost,
+        leads: sortByOrder(stageLeads, stage.id),
+        dotClass: getStageDotClass(stage.id, stage.name, stage.is_won, stage.is_lost),
+      };
+    });
+  }, [filteredLeads, stages, columnOrder]);
 
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent, leadId: string) => {
@@ -745,6 +941,7 @@ export default function LeadsModule({
   };
 
   const handleDragEnd = () => {
+    stopAutoScroll();
     draggedLeadRef.current = null;
     setDraggedLeadId(null);
     setDragOverCol(null);
@@ -766,10 +963,11 @@ export default function LeadsModule({
 
   const handleDrop = async (
     e: React.DragEvent,
-    targetTemperature: 'Frio' | 'Morno' | 'Quente' | 'Cliente',
+    targetStageId: string,
     specificLeadId?: string
   ) => {
     e.preventDefault();
+    stopAutoScroll();
     setDragOverCol(null);
     let leadId = specificLeadId;
     if (!leadId) {
@@ -786,38 +984,85 @@ export default function LeadsModule({
 
     const lead = leads.find((l) => l.id === leadId);
     if (!lead) return;
-    if (lead.temperature && lead.temperature.toLowerCase() === targetTemperature.toLowerCase()) return;
+    if (lead.current_stage_id === targetStageId) return;
 
-    const updatedLead: Lead = { ...lead, temperature: targetTemperature };
+    const targetStage = stages.find((s) => s.id === targetStageId);
+    const isTargetLost = targetStage?.is_lost || targetStageId === 'stg_perdido' || targetStage?.name?.toLowerCase().includes('perdid');
 
-    // Optimistic UI update in central store & local cache
+    if (isTargetLost) {
+      setLostReasonModal({
+        open: true,
+        leadId,
+        targetStageId,
+        reason: lead.loss_reason || '',
+        error: null,
+      });
+      return;
+    }
+
+    const wasLost = Boolean(lead.loss_reason) || lead.current_stage_id === 'stg_perdido';
+    const newLossReason = wasLost ? null : lead.loss_reason;
+
+    const updatedLead: Lead = {
+      ...lead,
+      current_stage_id: targetStageId,
+      loss_reason: newLossReason,
+    };
+
     upsertLeadLocally(updatedLead);
+    saveLeadStageOverride(leadId, targetStageId, newLossReason);
 
-    // Asynchronous background persistence to Supabase (with DB-safe temperature value)
     try {
-      const dbTemperature = sanitizeTemperatureForDB(targetTemperature);
-      const { error } = await supabase
+      await supabase
         .from('leads')
-        .update({ temperature: dbTemperature })
+        .update({
+          current_stage_id: targetStageId,
+          loss_reason: newLossReason,
+        })
         .eq('id', leadId);
-
-      if (error) {
-        console.warn('Supabase background update notice:', error.message);
-        if (error.code === '23514') {
-          // Fallback retry if check constraint rejects custom string
-          await supabase
-            .from('leads')
-            .update({ temperature: 'Quente' })
-            .eq('id', leadId);
-        }
-      }
+      setStatusFeedback({ type: 'success', message: `Condomínio movido para ${targetStage?.name || 'novo estágio'}!` });
     } catch (err: any) {
-      console.warn('Background network sync notice:', err?.message || err);
+      console.warn('Background stage sync notice:', err?.message || err);
+    }
+  };
+
+  const handleConfirmLostReason = async () => {
+    if (!lostReasonModal.leadId || !lostReasonModal.targetStageId) return;
+    const reasonTrimmed = lostReasonModal.reason.trim();
+    if (!reasonTrimmed) {
+      setLostReasonModal((prev) => ({ ...prev, error: 'O motivo da perda é obrigatório.' }));
+      return;
+    }
+
+    const lead = leads.find((l) => l.id === lostReasonModal.leadId);
+    if (!lead) return;
+
+    const updatedLead: Lead = {
+      ...lead,
+      current_stage_id: lostReasonModal.targetStageId,
+      loss_reason: reasonTrimmed,
+    };
+
+    upsertLeadLocally(updatedLead);
+    saveLeadStageOverride(lead.id, lostReasonModal.targetStageId, reasonTrimmed);
+    setLostReasonModal({ open: false, leadId: null, targetStageId: 'stg_perdido', reason: '', error: null });
+    setStatusFeedback({ type: 'success', message: 'Condomínio marcado como Perdido.' });
+
+    try {
+      await supabase
+        .from('leads')
+        .update({
+          current_stage_id: lostReasonModal.targetStageId,
+          loss_reason: reasonTrimmed,
+        })
+        .eq('id', lead.id);
+    } catch (err) {
+      console.warn('Sync lost reason error:', err);
     }
   };
 
   // Intra-column card reordering handler
-  const handleDropOnCard = (e: React.DragEvent, targetLeadId: string, colId: 'Frio' | 'Morno' | 'Quente' | 'Cliente') => {
+  const handleDropOnCard = (e: React.DragEvent, targetLeadId: string, colId: string) => {
     e.stopPropagation();
     e.preventDefault();
     setDragOverCol(null);
@@ -834,7 +1079,7 @@ export default function LeadsModule({
     if (!sourceLead) return;
 
     // If dropped across columns, trigger column drop
-    if (sourceLead.temperature?.toLowerCase() !== colId.toLowerCase()) {
+    if (sourceLead.current_stage_id !== colId) {
       handleDrop(e, colId, sourceLeadId);
       return;
     }
@@ -867,10 +1112,24 @@ export default function LeadsModule({
     if (!lead || !value) return;
 
     if (field === 'stage') {
-      const updated = { ...lead, current_stage_id: value };
+      const targetStage = stages.find((s) => s.id === value);
+      const isTargetLost = targetStage?.is_lost || value === 'stg_perdido' || targetStage?.name?.toLowerCase().includes('perdid');
+      if (isTargetLost) {
+        setLostReasonModal({
+          open: true,
+          leadId,
+          targetStageId: value,
+          reason: lead.loss_reason || '',
+          error: null,
+        });
+        return;
+      }
+      const newLossReason = null;
+      const updated = { ...lead, current_stage_id: value, loss_reason: newLossReason };
       upsertLeadLocally(updated);
+      saveLeadStageOverride(leadId, value, newLossReason);
       try {
-        await supabase.from('leads').update({ current_stage_id: value }).eq('id', leadId);
+        await supabase.from('leads').update({ current_stage_id: value, loss_reason: newLossReason }).eq('id', leadId);
         setStatusFeedback({ type: 'success', message: 'Estágio do funil atualizado!' });
       } catch (err) {
         console.error(err);
@@ -1897,11 +2156,11 @@ export default function LeadsModule({
       <PipelineToolbar
         searchTerm={searchTerm}
         onSearchChange={setSearchTerm}
-        stageFilter={stageFilter}
-        onStageFilterChange={setStageFilter}
         responsibleFilter={responsibleFilter}
         onResponsibleFilterChange={setResponsibleFilter}
         stages={stages}
+        activeStageId={activeStageId}
+        onSelectStage={scrollToStage}
         profiles={profiles}
         onOpenCreate={handleOpenCreate}
         onOpenViewConfig={() => setIsBentoModalOpen(true)}
@@ -1945,16 +2204,16 @@ export default function LeadsModule({
         </div>
       )}
 
-      {/* Mobile Column Tabs (Segmented Control) */}
-      <div className="mb-4 flex md:hidden p-1 bg-slate-900 border border-slate-800 rounded-lg">
+      {/* Mobile Column Tabs (Scrollable Segmented Control for 7 stages) */}
+      <div className="mb-4 flex md:hidden p-1.5 bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto gap-1 scrollbar-none">
         {pipelineColumns.map((col) => (
           <button
             key={col.id}
             type="button"
             onClick={() => setMobileActiveCol(col.id)}
-            className={`flex-1 py-1.5 px-2 rounded-md text-xs font-semibold flex items-center justify-center gap-1.5 transition-all ${
+            className={`shrink-0 py-1.5 px-3 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
               mobileActiveCol === col.id
-                ? 'bg-slate-800 text-white shadow-xs'
+                ? 'bg-slate-800 text-white shadow-xs border border-slate-700'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
@@ -1972,7 +2231,11 @@ export default function LeadsModule({
           <p className="text-xs text-slate-400">Carregando pipeline comercial...</p>
         </div>
       ) : (
-        <PipelineBoard>
+        <PipelineBoard
+          scrollRef={boardScrollRef}
+          onScroll={handleBoardScroll}
+          onDragOver={handleBoardDragOver}
+        >
           {pipelineColumns.map((col) => {
             const isColHiddenOnMobile = mobileActiveCol !== col.id;
             const isDropTarget = dragOverCol === col.id;
@@ -1988,6 +2251,7 @@ export default function LeadsModule({
                   leadCount={col.leads.length}
                   dotClass={col.dotClass}
                   isDropTarget={isDropTarget}
+                  isHighlighted={highlightedStageId === col.id}
                   onDragOver={(e) => handleDragOver(e, col.id)}
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, col.id)}
@@ -2613,6 +2877,68 @@ export default function LeadsModule({
         </div>
       )}
 
+      {/* MODAL FOR LOST REASON WHEN MOVING TO PERDIDO */}
+      {lostReasonModal.open && (
+        <div
+          onClick={() => setLostReasonModal((prev) => ({ ...prev, open: false }))}
+          className="fixed inset-0 z-[110] overflow-y-auto bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-md bg-slate-900 border border-rose-500/40 rounded-2xl shadow-2xl p-5 my-6 flex flex-col"
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-950/80 border border-rose-600/60 flex items-center justify-center text-rose-400 shrink-0">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">Marcar Condomínio como Perdido</h3>
+                <p className="text-xs text-slate-400">Informe o motivo da perda desta oportunidade.</p>
+              </div>
+            </div>
+
+            {lostReasonModal.error && (
+              <div className="mb-3 p-2.5 bg-rose-950/80 border border-rose-600/60 rounded-xl text-rose-200 text-xs font-medium">
+                {lostReasonModal.error}
+              </div>
+            )}
+
+            <div className="mb-4">
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Motivo da perda <span className="text-rose-400">*</span>
+              </label>
+              <textarea
+                autoFocus
+                rows={3}
+                value={lostReasonModal.reason}
+                onChange={(e) => setLostReasonModal((prev) => ({ ...prev, reason: e.target.value, error: null }))}
+                placeholder="Ex: Preço acima do orçamento, optaram por concorrente, síndico encerrou mandato..."
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-rose-500 rounded-xl text-white text-xs focus:outline-none resize-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setLostReasonModal((prev) => ({ ...prev, open: false }))}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLostReason}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer transition-colors"
+              >
+                Confirmar Perdido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* QUIZ MODAL FOR LEAD CREATE / EDIT WITH INSTANT SAVE */}
       {(modalMode === 'create' || modalMode === 'edit') && (
         <div
@@ -2783,42 +3109,56 @@ export default function LeadsModule({
               {quizStep === 4 && (
                 <div className="space-y-4">
                   <div>
-                    <h3 className="text-base font-bold text-white mb-1">Temperatura & Estágio</h3>
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {TEMPERATURE_OPTIONS.map((temp) => (
-                      <button
-                        key={temp}
-                        type="button"
-                        onClick={() => setFormTemperature(temp)}
-                        className={`p-2.5 rounded-xl border text-center text-xs font-semibold cursor-pointer transition-all ${
-                          formTemperature === temp
-                            ? temp === 'Quente'
-                              ? 'bg-orange-950/80 border-orange-500 text-orange-300'
-                              : temp === 'Frio'
-                              ? 'bg-sky-950/80 border-sky-500 text-sky-300'
-                              : temp === 'Cliente'
-                              ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300'
-                              : 'bg-yellow-950/80 border-yellow-500 text-yellow-300'
-                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                        }`}
-                      >
-                        {temp}
-                      </button>
-                    ))}
+                    <h3 className="text-base font-bold text-white mb-1">Estágio Comercial & Responsável</h3>
+                    <p className="text-xs text-slate-400">Defina a etapa atual no processo de vendas e o membro responsável.</p>
                   </div>
                   <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1.5">Estágio do Funil</label>
-                    <select
-                      value={formCurrentStageId}
-                      onChange={(e) => handleStageChange(e.target.value)}
-                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
-                    >
-                      {stages.map((stg) => (
-                        <option key={stg.id} value={stg.id}>{stg.name}</option>
-                      ))}
-                    </select>
+                    <label className="block text-xs font-medium text-slate-300 mb-2">Etapa do Pipeline</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {stages.map((stg) => {
+                        const isSelected = formCurrentStageId === stg.id;
+                        const dotClass = getStageDotClass(stg.id, stg.name, stg.is_won, stg.is_lost);
+                        return (
+                          <button
+                            key={stg.id}
+                            type="button"
+                            onClick={() => {
+                              setFormCurrentStageId(stg.id);
+                              handleStageChange(stg.id);
+                            }}
+                            className={`p-2.5 rounded-xl border text-center text-xs font-semibold cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+                              isSelected
+                                ? stg.is_won
+                                  ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-xs'
+                                  : stg.is_lost
+                                  ? 'bg-rose-950/80 border-rose-500 text-rose-300 shadow-xs'
+                                  : 'bg-orange-950/80 border-[#FF6600] text-[#FF6600] shadow-xs'
+                                : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} />
+                            <span className="truncate">{stg.name}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
+
+                  {(formCurrentStageId === 'stg_perdido' || stages.find((s) => s.id === formCurrentStageId)?.is_lost) && (
+                    <div>
+                      <label className="block text-xs font-medium text-rose-300 mb-1.5">
+                        Motivo da Perda <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={formLossReason}
+                        onChange={(e) => setFormLossReason(e.target.value)}
+                        placeholder="Ex: Optaram por outra empresa, orçamento cancelado..."
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-rose-600/70 focus:border-rose-500 rounded-xl text-white text-xs focus:outline-none"
+                      />
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">Responsável</label>
                     <select
@@ -2827,7 +3167,7 @@ export default function LeadsModule({
                       className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
                     >
                       {profiles.map((p) => (
-                        <option key={p.id} value={p.id}>{p.full_name || 'Sem nome'}</option>
+                        <option key={p.id} value={p.id}>{p.full_name || 'Usuário'}</option>
                       ))}
                     </select>
                   </div>
@@ -2837,14 +3177,15 @@ export default function LeadsModule({
               {quizStep === 5 && (
                 <div className="space-y-3 text-xs">
                   <h3 className="text-base font-bold text-white mb-2">Revisão</h3>
-                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
+                  <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
                     <div className="flex justify-between"><span>Nome:</span><strong className="text-white">{formName}</strong></div>
                     {formCnpj && <div className="flex justify-between"><span>CNPJ:</span><strong className="text-white">{formCnpj}</strong></div>}
                     <div className="flex justify-between"><span>Tipo:</span><strong className="text-white">{formCondominiumType}</strong></div>
                     {formUnitCount && <div className="flex justify-between"><span>Unidades:</span><strong className="text-white">{formUnitCount}</strong></div>}
                     <div className="flex justify-between"><span>Cidade:</span><strong className="text-white">{formCity || '-'}</strong></div>
                     {formAdministrator && <div className="flex justify-between"><span>Administradora:</span><strong className="text-white">{formAdministrator}</strong></div>}
-                    <div className="flex justify-between"><span>Temperatura / Estágio:</span><strong className="text-indigo-300">{formTemperature} · {stageMap.get(formCurrentStageId) || 'Inicial'}</strong></div>
+                    <div className="flex justify-between"><span>Estágio Comercial:</span><strong className="text-[#FF6600]">{stageMap.get(formCurrentStageId) || 'Início'}</strong></div>
+                    {formLossReason && <div className="flex justify-between"><span>Motivo da Perda:</span><strong className="text-rose-400">{formLossReason}</strong></div>}
                     <div className="flex justify-between"><span>Responsável:</span><strong className="text-white">{profileMap.get(formResponsibleUserId) || 'Não atribuído'}</strong></div>
                   </div>
                 </div>
@@ -2957,19 +3298,21 @@ export default function LeadsModule({
             </div>
 
             <div className="p-6 overflow-y-auto space-y-5 text-xs">
-              <div className="grid grid-cols-3 gap-2.5">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block mb-0.5">Temperatura</span>
-                  <span className="font-bold text-white text-sm">{selectedLead.temperature || 'Morno'}</span>
-                </div>
-                <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-                  <span className="text-slate-400 block mb-0.5">Estágio</span>
-                  <span className="font-semibold text-indigo-300 truncate block">{stageMap.get(selectedLead.current_stage_id || '') || 'Inicial'}</span>
+                  <span className="text-slate-400 block mb-0.5">Estágio Comercial</span>
+                  <span className="font-bold text-[#FF6600] text-sm truncate block">{stageMap.get(selectedLead.current_stage_id || '') || 'Início'}</span>
                 </div>
                 <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
                   <span className="text-slate-400 block mb-0.5">Responsável</span>
                   <span className="font-semibold text-white truncate block">{profileMap.get(selectedLead.responsible_user_id || '') || 'Não atribuído'}</span>
                 </div>
+                {selectedLead.loss_reason && (
+                  <div className="p-3 bg-rose-950/40 rounded-xl border border-rose-800/60 col-span-2 sm:col-span-1">
+                    <span className="text-rose-300 block mb-0.5">Motivo da Perda</span>
+                    <span className="font-semibold text-rose-200 truncate block" title={selectedLead.loss_reason}>{selectedLead.loss_reason}</span>
+                  </div>
+                )}
               </div>
 
               {/* Interações */}
