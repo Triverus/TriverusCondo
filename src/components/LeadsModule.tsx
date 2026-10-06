@@ -29,6 +29,7 @@ import {
 } from '../lib/dateUtils.ts';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
 import NotesTimelineModal from './NotesTimelineModal.tsx';
+import { celebrateClientConversion } from '../lib/celebration.ts';
 
 interface LeadsModuleProps {
   currentProfile: UserProfile;
@@ -1020,6 +1021,15 @@ export default function LeadsModule({
           loss_reason: newLossReason,
         })
         .eq('id', leadId);
+
+      const isTargetClient = targetStage?.is_won || targetStageId === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
+      const prevStageObj = stages.find((s) => s.id === lead.current_stage_id);
+      const wasClient = prevStageObj?.is_won || lead.current_stage_id === 'stg_cliente' || prevStageObj?.name?.toLowerCase().includes('cliente');
+
+      if (isTargetClient && !wasClient) {
+        celebrateClientConversion();
+      }
+
       setStatusFeedback({ type: 'success', message: `Condomínio movido para ${targetStage?.name || 'novo estágio'}!` });
     } catch (err: any) {
       console.warn('Background stage sync notice:', err?.message || err);
@@ -1128,8 +1138,15 @@ export default function LeadsModule({
       const updated = { ...lead, current_stage_id: value, loss_reason: newLossReason };
       upsertLeadLocally(updated);
       saveLeadStageOverride(leadId, value, newLossReason);
+      const isTargetClient = targetStage?.is_won || value === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
+      const prevStageObj = stages.find((s) => s.id === lead.current_stage_id);
+      const wasClient = prevStageObj?.is_won || lead.current_stage_id === 'stg_cliente' || prevStageObj?.name?.toLowerCase().includes('cliente');
+
       try {
         await supabase.from('leads').update({ current_stage_id: value, loss_reason: newLossReason }).eq('id', leadId);
+        if (isTargetClient && !wasClient) {
+          celebrateClientConversion();
+        }
         setStatusFeedback({ type: 'success', message: 'Estágio do funil atualizado!' });
       } catch (err) {
         console.error(err);
@@ -1514,6 +1531,16 @@ export default function LeadsModule({
 
         upsertLeadLocally(localLead);
         clearDraft(getLeadEditDraftKey(selectedLead.id));
+
+        const targetStage = stages.find((s) => s.id === (formCurrentStageId || savedLead?.current_stage_id));
+        const isTargetClient = targetStage?.is_won || formCurrentStageId === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
+        const prevStageObj = selectedLead ? stages.find((s) => s.id === selectedLead.current_stage_id) : null;
+        const wasClient = selectedLead ? (prevStageObj?.is_won || selectedLead.current_stage_id === 'stg_cliente' || prevStageObj?.name?.toLowerCase().includes('cliente')) : false;
+
+        if (isTargetClient && !wasClient) {
+          celebrateClientConversion();
+        }
+
         setStatusFeedback({
           type: 'success',
           message: `Condomínio "${savedLead.name}" atualizado com sucesso!`,

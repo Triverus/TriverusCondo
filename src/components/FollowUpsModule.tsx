@@ -17,7 +17,10 @@ import {
   EditIcon,
   TrashIcon,
   PRESET_ROLES,
+  getStageCardClasses,
 } from './PipelineComponents.tsx';
+import { getStageVisualConfig } from '../lib/stageVisuals.ts';
+import { celebrateClientConversion } from '../lib/celebration.ts';
 import {
   getLeadFolderLink,
   saveLeadFolderLink,
@@ -119,9 +122,19 @@ export default function FollowUpsModule({
     try {
       if (field === 'stage') {
         if (!val) return;
+        const targetStage = stages.find((s) => s.id === val);
+        const isTargetClient = targetStage?.is_won || val === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
+        const prevStage = stages.find((s) => s.id === item.lead.current_stage_id);
+        const wasClient = prevStage?.is_won || item.lead.current_stage_id === 'stg_cliente' || prevStage?.name?.toLowerCase().includes('cliente');
+
         const updatedLead: Lead = { ...item.lead, current_stage_id: val };
         upsertLeadLocally(updatedLead);
         await supabase.from('leads').update({ current_stage_id: val }).eq('id', item.lead.id);
+
+        if (isTargetClient && !wasClient) {
+          celebrateClientConversion();
+        }
+
         setStatusFeedback({ type: 'success', message: 'Estágio do funil atualizado!' });
       } else if (field === 'temperature') {
         if (!val) return;
@@ -745,33 +758,27 @@ export default function FollowUpsModule({
   const getStageBadge = (stageId?: string | null) => {
     const stageName = stageId ? stageMap.get(stageId) || 'Início' : 'Início';
     const stageObj = stages.find((s) => s.id === stageId);
-    let dotClass = 'bg-slate-400';
-    let textClass = isLight ? 'text-slate-700' : 'text-slate-300';
-
-    if (stageObj?.is_won || stageName.toLowerCase().includes('cliente')) {
-      dotClass = 'bg-emerald-500';
-      textClass = isLight ? 'text-emerald-700' : 'text-emerald-400';
-    } else if (stageObj?.is_lost || stageName.toLowerCase().includes('perdid')) {
-      dotClass = 'bg-rose-500';
-      textClass = isLight ? 'text-rose-700' : 'text-rose-400';
-    } else if (stageName.toLowerCase().includes('reuni')) {
-      dotClass = 'bg-amber-400';
-      textClass = isLight ? 'text-amber-700' : 'text-amber-400';
-    } else if (stageName.toLowerCase().includes('proposta')) {
-      dotClass = 'bg-sky-400';
-      textClass = isLight ? 'text-sky-700' : 'text-sky-400';
-    } else if (stageName.toLowerCase().includes('negocia')) {
-      dotClass = 'bg-[#FF6600]';
-      textClass = isLight ? 'text-orange-700' : 'text-[#FF6600]';
-    } else if (stageName.toLowerCase().includes('contrato')) {
-      dotClass = 'bg-purple-400';
-      textClass = isLight ? 'text-purple-700' : 'text-purple-400';
-    }
+    const stageVis = getStageVisualConfig(stageId, stageName, stageObj?.is_won, stageObj?.is_lost);
 
     return (
-      <span className={`inline-flex items-center gap-1.5 text-xs font-bold ${textClass}`}>
-        <span className={`w-2 h-2 rounded-full ${dotClass}`} />
-        {stageName}
+      <span
+        className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[10px] font-bold border shadow-2xs"
+        style={
+          isLight
+            ? {
+                backgroundColor: stageVis.lightBadgeBg,
+                color: stageVis.lightBadgeText,
+                borderColor: stageVis.lightBadgeBorder,
+              }
+            : {
+                backgroundColor: stageVis.darkBadgeBg,
+                color: stageVis.darkBadgeText,
+                borderColor: stageVis.darkBadgeBorder,
+              }
+        }
+      >
+        <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: stageVis.color }} />
+        <span>{stageName}</span>
       </span>
     );
   };
@@ -1108,7 +1115,7 @@ export default function FollowUpsModule({
               <div
                 key={item.lead.id}
                 data-lead-id={item.lead.id}
-                className={`rounded-[22px] p-4 flex flex-col justify-between transition-all group ${getTemperatureCardBorder(item.lead.temperature)}`}
+                className={`rounded-[22px] p-4 flex flex-col justify-between transition-all group ${getStageCardClasses(item.lead.current_stage_id, item.stageName)}`}
               >
                 <div>
                   {/* Top: Condominium Name + Status Badge */}
