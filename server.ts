@@ -11,6 +11,19 @@ import {
   buildSystemPrompt,
   executeToolCall,
 } from './condoBackend.js';
+import {
+  getValidGoogleAccessToken,
+  getValidGoogleTokenDetails,
+  GoogleCalendarAuthError,
+  EXPIRATION_BUFFER_MS,
+} from './googleCalendarAuth.ts';
+
+export {
+  getValidGoogleAccessToken,
+  getValidGoogleTokenDetails,
+  GoogleCalendarAuthError,
+  EXPIRATION_BUFFER_MS,
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

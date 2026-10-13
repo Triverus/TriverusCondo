@@ -1,0 +1,350 @@
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { loadEnv } from 'vite';
+
+export const EXPIRATION_BUFFER_MS = 5 * 60 * 1000; // 5 minutos de margem de segurança preventiva
+
+export class GoogleCalendarAuthError extends Error {
+  code: string;
+  statusCode: number;
+  details?: Record<string, any>;
+
+  constructor(message: string, code: string, statusCode = 400, details?: Record<string, any>) {
+    super(message);
+    this.name = 'GoogleCalendarAuthError';
+    this.code = code;
+    this.statusCode = statusCode;
+    this.details = details;
+  }
+}
+
+export interface GoogleTokenDetails {
+  accessToken: string;
+  expiresAt: string | null;
+  googleEmail: string | null;
+  scope: string | null;
+  wasRefreshed: boolean;
+}
+
+export interface GetValidGoogleAccessTokenOptions {
+  supabaseClient?: SupabaseClient | any;
+  fetchFn?: typeof fetch;
+  nowFn?: () => number;
+  bufferMs?: number;
+  clientId?: string;
+  clientSecret?: string;
+}
+
+let cachedEnv: Record<string, string> | null = null;
+function getEnvValue(key: string): string {
+  if (process.env[key]) {
+    return process.env[key]!;
+  }
+  if (!cachedEnv) {
+    try {
+      cachedEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), '');
+    } catch {
+      cachedEnv = {};
+    }
+  }
+  return cachedEnv[key] || '';
+}
+
+function getAdminClient(): SupabaseClient | null {
+  const rawUrl = getEnvValue('VITE_SUPABASE_URL');
+  const serviceKey = getEnvValue('SUPABASE_SERVICE_ROLE_KEY');
+
+  if (!rawUrl || !serviceKey) {
+    return null;
+  }
+
+  return createClient(rawUrl.trim(), serviceKey.trim(), {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+/**
+ * Obtém os detalhes do token válido do Google Calendar para o usuário especificado.
+ * Executa o refresh automático de forma transparente caso esteja expirado ou dentro da margem de 5 minutos.
+ */
+export async function getValidGoogleTokenDetails(
+  userId: string,
+  options?: GetValidGoogleAccessTokenOptions
+): Promise<GoogleTokenDetails> {
+  const cleanUserId = typeof userId === 'string' ? userId.trim() : '';
+  if (!cleanUserId) {
+    throw new GoogleCalendarAuthError(
+      'Identificador de usuário (userId) obrigatório e não pode ser vazio.',
+      'invalid_user_id',
+      400
+    );
+  }
+
+  const nowFn = options?.nowFn || Date.now;
+  const bufferMs = typeof options?.bufferMs === 'number' ? options.bufferMs : EXPIRATION_BUFFER_MS;
+  const fetchFn = options?.fetchFn || fetch;
+
+  const supabase = options?.supabaseClient || getAdminClient();
+  if (!supabase) {
+    console.error('[GOOGLE_CALENDAR_AUTH] Cliente admin Supabase indisponível. Verifique SUPABASE_SERVICE_ROLE_KEY e VITE_SUPABASE_URL.');
+    throw new GoogleCalendarAuthError(
+      'Configuração do banco de dados indisponível no servidor.',
+      'missing_oauth_configuration',
+      500
+    );
+  }
+
+  // 1. Buscar conexão existente no banco
+  let connection: any = null;
+  try {
+    const { data, error } = await supabase
+      .from('google_calendar_connections')
+      .select('id, user_id, google_email, access_token, refresh_token, expires_at, token_type, scope')
+      .eq('user_id', cleanUserId)
+      .maybeSingle();
+
+    if (error) {
+      console.error('[GOOGLE_CALENDAR_AUTH] Erro ao buscar conexão no Supabase para o usuário:', {
+        user_id: cleanUserId,
+        error_code: error.code,
+        error_message: error.message,
+      });
+      throw new GoogleCalendarAuthError(
+        'Falha ao consultar conexão do Google Calendar no banco de dados.',
+        'calendar_database_error',
+        500,
+        { db_error_code: error.code }
+      );
+    }
+
+    connection = data;
+  } catch (err: any) {
+    if (err instanceof GoogleCalendarAuthError) throw err;
+    console.error('[GOOGLE_CALENDAR_AUTH] Exceção ao consultar conexão:', {
+      user_id: cleanUserId,
+      error_name: err?.name,
+      error_message: err?.message,
+    });
+    throw new GoogleCalendarAuthError(
+      'Erro ao consultar banco de dados.',
+      'calendar_database_error',
+      500
+    );
+  }
+
+  if (!connection) {
+    throw new GoogleCalendarAuthError(
+      'Usuário não possui conta do Google Calendar conectada.',
+      'google_calendar_not_connected',
+      404
+    );
+  }
+
+  if (!connection.access_token) {
+    throw new GoogleCalendarAuthError(
+      'Token de acesso do Google Calendar ausente na conexão do usuário.',
+      'missing_access_token',
+      400
+    );
+  }
+
+  // 2. Verificar expiração com margem de segurança (buffer)
+  const now = nowFn();
+  let isStillValid = false;
+
+  if (connection.expires_at) {
+    const expiresAtMs = new Date(connection.expires_at).getTime();
+    if (!Number.isNaN(expiresAtMs) && expiresAtMs - now > bufferMs) {
+      isStillValid = true;
+    }
+  }
+
+  if (isStillValid) {
+    return {
+      accessToken: connection.access_token,
+      expiresAt: connection.expires_at,
+      googleEmail: connection.google_email || null,
+      scope: connection.scope || null,
+      wasRefreshed: false,
+    };
+  }
+
+  // 3. Token expirado ou próximo de expirar: verificar refresh_token
+  const refreshToken = connection.refresh_token;
+  if (!refreshToken || typeof refreshToken !== 'string' || !refreshToken.trim()) {
+    console.warn('[GOOGLE_CALENDAR_AUTH] Token expirado mas conexão sem refresh_token disponível para o usuário:', {
+      user_id: cleanUserId,
+    });
+    throw new GoogleCalendarAuthError(
+      'Reautorização necessária: conexão sem refresh token disponível.',
+      'google_calendar_reauthorization_required',
+      401,
+      { reason: 'missing_refresh_token' }
+    );
+  }
+
+  // 4. Obter credenciais do Google OAuth
+  const clientId = options?.clientId !== undefined ? options.clientId : getEnvValue('GOOGLE_CLIENT_ID');
+  const clientSecret = options?.clientSecret !== undefined ? options.clientSecret : getEnvValue('GOOGLE_CLIENT_SECRET');
+
+  if (!clientId || !clientId.trim() || !clientSecret || !clientSecret.trim()) {
+    console.error('[GOOGLE_CALENDAR_AUTH] GOOGLE_CLIENT_ID ou GOOGLE_CLIENT_SECRET ausentes no ambiente.');
+    throw new GoogleCalendarAuthError(
+      'Configuração OAuth do servidor incompleta.',
+      'missing_oauth_configuration',
+      500
+    );
+  }
+
+  // 5. Renovar token junto à API do Google
+  console.log('[GOOGLE_CALENDAR_AUTH] Renovando access_token junto ao Google para user_id:', cleanUserId);
+
+  let tokenData: any = null;
+  let responseStatus = 0;
+
+  try {
+    const refreshParams = new URLSearchParams({
+      client_id: clientId,
+      client_secret: clientSecret,
+      refresh_token: refreshToken.trim(),
+      grant_type: 'refresh_token',
+    });
+
+    const tokenResponse = await fetchFn('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: refreshParams.toString(),
+    });
+
+    responseStatus = tokenResponse.status;
+    tokenData = await tokenResponse.json().catch(() => null);
+
+    if (!tokenResponse.ok || !tokenData || !tokenData.access_token) {
+      const googleError = tokenData?.error || 'token_refresh_failed';
+      const googleErrorDesc = tokenData?.error_description || 'Falha ao renovar token junto ao Google.';
+
+      console.warn('[GOOGLE_CALENDAR_AUTH] Falha na resposta de renovação do Google:', {
+        user_id: cleanUserId,
+        status: responseStatus,
+        google_error: googleError,
+      });
+
+      if (googleError === 'invalid_grant') {
+        throw new GoogleCalendarAuthError(
+          'Reautorização necessária: a permissão do Google Calendar foi revogada ou expirou.',
+          'google_calendar_reauthorization_required',
+          401,
+          { google_error: 'invalid_grant' }
+        );
+      }
+
+      throw new GoogleCalendarAuthError(
+        googleErrorDesc,
+        'google_token_refresh_failed',
+        responseStatus >= 400 && responseStatus < 600 ? responseStatus : 500,
+        { google_error: googleError }
+      );
+    }
+  } catch (netErr: any) {
+    if (netErr instanceof GoogleCalendarAuthError) throw netErr;
+    console.error('[GOOGLE_CALENDAR_AUTH] Erro de rede ou comunicação durante refresh do Google:', {
+      user_id: cleanUserId,
+      error_name: netErr?.name,
+      error_message: netErr?.message,
+    });
+    throw new GoogleCalendarAuthError(
+      'Falha de comunicação ao renovar token junto ao Google.',
+      'google_token_refresh_failed',
+      500
+    );
+  }
+
+  // 6. Atualizar o Supabase com o novo access_token e nova data de expiração
+  const newAccessToken: string = tokenData.access_token;
+  const expiresInSeconds = Number(tokenData.expires_in) || 3600;
+  const newExpiresAt = new Date(nowFn() + expiresInSeconds * 1000).toISOString();
+
+  const updateFields: Record<string, any> = {
+    access_token: newAccessToken,
+    expires_at: newExpiresAt,
+    updated_at: new Date(nowFn()).toISOString(),
+  };
+
+  // Se o Google retornar um novo refresh_token na renovação (rotação de refresh token), atualiza
+  if (tokenData.refresh_token && typeof tokenData.refresh_token === 'string') {
+    updateFields.refresh_token = tokenData.refresh_token.trim();
+  }
+  if (tokenData.scope && typeof tokenData.scope === 'string') {
+    updateFields.scope = tokenData.scope;
+  }
+  if (tokenData.token_type && typeof tokenData.token_type === 'string') {
+    updateFields.token_type = tokenData.token_type;
+  }
+
+  try {
+    const { error: updateError } = await supabase
+      .from('google_calendar_connections')
+      .update(updateFields)
+      .eq('user_id', cleanUserId);
+
+    if (updateError) {
+      console.error('[GOOGLE_CALENDAR_AUTH] Erro ao persistir novo token no Supabase:', {
+        user_id: cleanUserId,
+        error_code: updateError.code,
+        error_message: updateError.message,
+      });
+      throw new GoogleCalendarAuthError(
+        'Falha ao atualizar token renovado no banco de dados.',
+        'calendar_database_error',
+        500,
+        { db_error_code: updateError.code }
+      );
+    }
+  } catch (dbErr: any) {
+    if (dbErr instanceof GoogleCalendarAuthError) throw dbErr;
+    console.error('[GOOGLE_CALENDAR_AUTH] Exceção ao atualizar token no Supabase:', {
+      user_id: cleanUserId,
+      error_name: dbErr?.name,
+      error_message: dbErr?.message,
+    });
+    throw new GoogleCalendarAuthError(
+      'Falha ao atualizar token renovado no banco de dados.',
+      'calendar_database_error',
+      500
+    );
+  }
+
+  console.log('[GOOGLE_CALENDAR_AUTH] Token renovado e persistido com sucesso para user_id:', cleanUserId);
+
+  return {
+    accessToken: newAccessToken,
+    expiresAt: newExpiresAt,
+    googleEmail: connection.google_email || null,
+    scope: updateFields.scope || connection.scope || null,
+    wasRefreshed: true,
+  };
+}
+
+/**
+ * Função central server-side requerida pela integração.
+ * Retorna uma Promise resolvendo para o access_token válido (string).
+ *
+ * 1. Busca a conexão Google do user_id;
+ * 2. Verifica expires_at com margem de segurança de 5 minutos;
+ * 3. Se access_token ainda for válido: retorna o access_token atual sem chamadas externas;
+ * 4. Se estiver expirado ou próximo de expirar: usa refresh_token para obter novo access_token junto ao Google;
+ * 5. Atualiza o banco de dados;
+ * 6. Retorna o novo access_token válido.
+ */
+export async function getValidGoogleAccessToken(
+  userId: string,
+  options?: GetValidGoogleAccessTokenOptions
+): Promise<string> {
+  const details = await getValidGoogleTokenDetails(userId, options);
+  return details.accessToken;
+}
