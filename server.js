@@ -67,12 +67,42 @@ function getScopedSupabaseClient(token) {
 }
 
 function getAdminSupabaseClient() {
-  const supabaseUrl = process.env.VITE_SUPABASE_URL || SUPABASE_URL;
+  const rawUrl = process.env.VITE_SUPABASE_URL || SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!serviceKey || !serviceKey.trim() || !supabaseUrl || !supabaseUrl.trim()) {
+
+  const hasUrl = Boolean(rawUrl && rawUrl.trim());
+  const hasKey = Boolean(serviceKey && serviceKey.trim());
+  const keyLength = serviceKey ? serviceKey.trim().length : 0;
+
+  let parsedHost = null;
+  let parsedProtocol = null;
+  let urlError = null;
+
+  if (hasUrl) {
+    try {
+      const parsed = new URL(rawUrl.trim());
+      parsedHost = parsed.hostname;
+      parsedProtocol = parsed.protocol;
+    } catch (err) {
+      urlError = err && err.message ? err.message : 'Invalid URL format';
+    }
+  }
+
+  console.log('[SUPABASE_ADMIN_DIAG] Inicializando getAdminSupabaseClient:', {
+    has_vite_supabase_url: hasUrl,
+    url_protocol: parsedProtocol,
+    url_hostname: parsedHost,
+    url_parse_error: urlError,
+    has_service_role_key: hasKey,
+    service_role_key_length: keyLength,
+  });
+
+  if (!hasKey || !hasUrl || urlError) {
+    console.warn('[SUPABASE_ADMIN_DIAG] Abortando criação do cliente admin Supabase devido a parâmetros ausentes ou URL inválida.');
     return null;
   }
-  return createClient(supabaseUrl.trim(), serviceKey.trim(), {
+
+  return createClient(rawUrl.trim(), serviceKey.trim(), {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -94,6 +124,117 @@ function getOpenAIClient() {
 
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
+});
+
+// Endpoint seguro para teste de conectividade do Supabase Admin (sem expor segredos)
+app.get('/api/google/oauth/diag-supabase', async (req, res) => {
+  const rawUrl = process.env.VITE_SUPABASE_URL || SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  const hasUrl = Boolean(rawUrl && rawUrl.trim());
+  const hasKey = Boolean(serviceKey && serviceKey.trim());
+  const keyLength = serviceKey ? serviceKey.trim().length : 0;
+
+  let parsedHost = null;
+  let parsedProtocol = null;
+  let urlError = null;
+
+  if (hasUrl) {
+    try {
+      const parsed = new URL(rawUrl.trim());
+      parsedHost = parsed.hostname;
+      parsedProtocol = parsed.protocol;
+    } catch (err) {
+      urlError = err && err.message ? err.message : 'Invalid URL format';
+    }
+  }
+
+  const adminClient = getAdminSupabaseClient();
+  if (!adminClient) {
+    return res.status(500).json({
+      ok: false,
+      diagnostics: {
+        has_vite_supabase_url: hasUrl,
+        url_protocol: parsedProtocol,
+        url_hostname: parsedHost,
+        url_parse_error: urlError,
+        has_service_role_key: hasKey,
+        service_role_key_length: keyLength,
+      },
+      message: 'Cliente admin não pôde ser instanciado devido a URL inválida ou chave ausente.',
+    });
+  }
+
+  try {
+    const { data, error, count } = await adminClient
+      .from('google_calendar_connections')
+      .select('id', { count: 'exact', head: true });
+
+    if (error) {
+      return res.status(502).json({
+        ok: false,
+        diagnostics: {
+          has_vite_supabase_url: hasUrl,
+          url_protocol: parsedProtocol,
+          url_hostname: parsedHost,
+          url_parse_error: urlError,
+          has_service_role_key: hasKey,
+          service_role_key_length: keyLength,
+        },
+        supabase_error: {
+          message: error.message,
+          code: error.code,
+          details: error.details,
+          hint: error.hint,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      diagnostics: {
+        has_vite_supabase_url: hasUrl,
+        url_protocol: parsedProtocol,
+        url_hostname: parsedHost,
+        url_parse_error: urlError,
+        has_service_role_key: hasKey,
+        service_role_key_length: keyLength,
+      },
+      connectivity: 'success',
+      total_connections_count: count ?? 0,
+    });
+  } catch (err) {
+    console.error('[SUPABASE_ADMIN_DIAG] Exceção durante teste de conectividade:', {
+      name: err && err.name,
+      message: err && err.message,
+      code: err && err.code,
+      cause_name: err && err.cause ? err.cause.name : undefined,
+      cause_message: err && err.cause ? err.cause.message : undefined,
+      cause_code: err && err.cause ? err.cause.code : undefined,
+    });
+
+    return res.status(502).json({
+      ok: false,
+      diagnostics: {
+        has_vite_supabase_url: hasUrl,
+        url_protocol: parsedProtocol,
+        url_hostname: parsedHost,
+        url_parse_error: urlError,
+        has_service_role_key: hasKey,
+        service_role_key_length: keyLength,
+      },
+      network_error: {
+        name: err && err.name,
+        message: err && err.message,
+        code: err && err.code,
+        cause: err && err.cause ? {
+          name: err.cause.name,
+          message: err.cause.message,
+          code: err.cause.code,
+        } : null,
+      },
+    });
+  }
 });
 
 function createOAuthState(userId, secret) {
@@ -330,7 +471,7 @@ app.get('/api/google/oauth/callback', async (req, res) => {
 
     const adminSupabase = getAdminSupabaseClient();
     if (!adminSupabase) {
-      console.error('[GOOGLE_OAUTH] SUPABASE_SERVICE_ROLE_KEY não configurada no servidor.');
+      console.error('[GOOGLE_OAUTH] SUPABASE_SERVICE_ROLE_KEY ou VITE_SUPABASE_URL inválidos ou não configurados no servidor.');
       return res.status(500).json({
         success: false,
         error: 'calendar_connection_persist_failed',
@@ -340,14 +481,33 @@ app.get('/api/google/oauth/callback', async (req, res) => {
     // Regra: se o novo callback não trouxer refresh_token, preservar o refresh_token já existente
     let refreshTokenToPersist = tokenData.refresh_token || null;
     if (!refreshTokenToPersist) {
-      const { data: existingConn, error: existingFetchErr } = await adminSupabase
-        .from('google_calendar_connections')
-        .select('refresh_token')
-        .eq('user_id', authenticatedUserId)
-        .maybeSingle();
+      try {
+        console.log('[GOOGLE_OAUTH] Consultando conexão anterior para preservar refresh_token se existente...');
+        const { data: existingConn, error: existingFetchErr } = await adminSupabase
+          .from('google_calendar_connections')
+          .select('refresh_token')
+          .eq('user_id', authenticatedUserId)
+          .maybeSingle();
 
-      if (!existingFetchErr && existingConn?.refresh_token) {
-        refreshTokenToPersist = existingConn.refresh_token;
+        if (existingFetchErr) {
+          console.warn('[GOOGLE_OAUTH] Aviso na consulta de conexão existente:', {
+            error_message: existingFetchErr.message,
+            error_details: existingFetchErr.details,
+            error_hint: existingFetchErr.hint,
+            error_code: existingFetchErr.code,
+          });
+        } else if (existingConn && existingConn.refresh_token) {
+          refreshTokenToPersist = existingConn.refresh_token;
+          console.log('[GOOGLE_OAUTH] refresh_token anterior recuperado com sucesso.');
+        }
+      } catch (checkErr) {
+        console.error('[GOOGLE_OAUTH] Exceção ao consultar refresh_token prévio:', {
+          name: checkErr && checkErr.name,
+          message: checkErr && checkErr.message,
+          code: checkErr && checkErr.code,
+          cause_message: checkErr && checkErr.cause ? checkErr.cause.message : undefined,
+          cause_code: checkErr && checkErr.cause ? checkErr.cause.code : undefined,
+        });
       }
     }
 
@@ -365,12 +525,36 @@ app.get('/api/google/oauth/callback', async (req, res) => {
       expires_at: expiresAt,
     };
 
-    const { error: upsertError } = await adminSupabase
-      .from('google_calendar_connections')
-      .upsert(connectionPayload, { onConflict: 'user_id' });
+    console.log('[GOOGLE_OAUTH] Tentando upsert em google_calendar_connections para user_id:', authenticatedUserId);
 
-    if (upsertError) {
-      console.error('[GOOGLE_OAUTH] Falha ao persistir conexão no Supabase:', upsertError.message);
+    try {
+      const { error: upsertError } = await adminSupabase
+        .from('google_calendar_connections')
+        .upsert(connectionPayload, { onConflict: 'user_id' });
+
+      if (upsertError) {
+        console.error('[GOOGLE_OAUTH] Falha no Supabase ao persistir conexão:', {
+          stage: 'upsert_google_calendar_connections',
+          message: upsertError.message,
+          details: upsertError.details,
+          hint: upsertError.hint,
+          code: upsertError.code,
+        });
+        return res.status(500).json({
+          success: false,
+          error: 'calendar_connection_persist_failed',
+        });
+      }
+    } catch (upsertException) {
+      console.error('[GOOGLE_OAUTH] Falha ao persistir conexão no Supabase (exceção HTTP/rede):', {
+        stage: 'upsert_google_calendar_connections_fetch',
+        name: upsertException && upsertException.name,
+        message: upsertException && upsertException.message,
+        code: upsertException && upsertException.code,
+        cause_name: upsertException && upsertException.cause ? upsertException.cause.name : undefined,
+        cause_message: upsertException && upsertException.cause ? upsertException.cause.message : undefined,
+        cause_code: upsertException && upsertException.cause ? upsertException.cause.code : undefined,
+      });
       return res.status(500).json({
         success: false,
         error: 'calendar_connection_persist_failed',
