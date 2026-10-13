@@ -14,6 +14,7 @@ import {
 import {
   getValidGoogleAccessToken,
   getValidGoogleTokenDetails,
+  fetchUpcomingGoogleCalendarEvents,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 } from './googleCalendarAuth.ts';
@@ -21,6 +22,7 @@ import {
 export {
   getValidGoogleAccessToken,
   getValidGoogleTokenDetails,
+  fetchUpcomingGoogleCalendarEvents,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 };
@@ -677,6 +679,114 @@ app.get('/api/google/oauth/callback', async (req, res) => {
     return res.status(500).json({
       error: 'token_exchange_error',
       message: 'Erro interno ao comunicar com o servidor de autenticação do Google.',
+    });
+  }
+});
+
+// Endpoint autenticado para listar os próximos eventos da agenda do usuário conectado
+app.get('/api/google/calendar/events', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: 'unauthorized',
+      message: 'Cabeçalho Authorization: Bearer <token> obrigatório.',
+    });
+  }
+
+  const scopedSupabase = getScopedSupabaseClient(token);
+  let userId: string | null = null;
+  try {
+    const { data: userData, error: userError } = await scopedSupabase.auth.getUser(token);
+    if (userError || !userData?.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'unauthorized',
+        message: 'Token de autenticação inválido ou expirado.',
+      });
+    }
+    userId = userData.user.id;
+  } catch {
+    return res.status(401).json({
+      success: false,
+      error: 'unauthorized',
+      message: 'Falha ao validar sessão do usuário.',
+    });
+  }
+
+  if (!userId) {
+    return res.status(401).json({
+      success: false,
+      error: 'unauthorized',
+      message: 'Usuário não autenticado.',
+    });
+  }
+
+  let accessToken: string;
+  try {
+    accessToken = await getValidGoogleAccessToken(userId);
+  } catch (err: any) {
+    if (err instanceof GoogleCalendarAuthError) {
+      if (err.code === 'google_calendar_not_connected') {
+        return res.status(404).json({
+          success: false,
+          error: 'google_calendar_not_connected',
+          message: 'Usuário não possui conta do Google Calendar conectada.',
+        });
+      }
+      if (err.code === 'google_calendar_reauthorization_required') {
+        return res.status(401).json({
+          success: false,
+          error: 'google_calendar_reauthorization_required',
+          message: 'Reautorização do Google Calendar necessária.',
+        });
+      }
+    }
+
+    console.error('[GOOGLE_CALENDAR_EVENTS] Erro ao obter access_token para o usuário:', {
+      user_id: userId,
+      error_code: err?.code,
+    });
+    return res.status(500).json({
+      success: false,
+      error: 'google_calendar_events_fetch_failed',
+      message: 'Falha ao obter credenciais válidas para o Google Calendar.',
+    });
+  }
+
+  try {
+    const { count, events } = await fetchUpcomingGoogleCalendarEvents(accessToken);
+    return res.status(200).json({
+      success: true,
+      count,
+      events,
+    });
+  } catch (err: any) {
+    if (err instanceof GoogleCalendarAuthError) {
+      if (err.code === 'google_calendar_reauthorization_required') {
+        return res.status(401).json({
+          success: false,
+          error: 'google_calendar_reauthorization_required',
+          message: 'Sessão do Google Calendar expirada. Reautorização necessária.',
+        });
+      }
+      return res.status(err.statusCode || 500).json({
+        success: false,
+        error: err.code || 'google_calendar_events_fetch_failed',
+        message: err.message || 'Falha ao buscar eventos do Google Calendar.',
+      });
+    }
+
+    console.error('[GOOGLE_CALENDAR_EVENTS] Erro ao buscar eventos:', {
+      user_id: userId,
+      error_name: err?.name,
+    });
+    return res.status(500).json({
+      success: false,
+      error: 'google_calendar_events_fetch_failed',
+      message: 'Falha ao comunicar com o Google Calendar.',
     });
   }
 });

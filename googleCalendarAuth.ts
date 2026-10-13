@@ -348,3 +348,154 @@ export async function getValidGoogleAccessToken(
   const details = await getValidGoogleTokenDetails(userId, options);
   return details.accessToken;
 }
+
+export interface FormattedCalendarEvent {
+  id: string;
+  summary: string | null;
+  description: string | null;
+  location: string | null;
+  htmlLink: string | null;
+  status: string | null;
+  start: {
+    dateTime?: string;
+    date?: string;
+    timeZone?: string;
+  } | null;
+  end: {
+    dateTime?: string;
+    date?: string;
+    timeZone?: string;
+  } | null;
+  attendees: Array<{
+    email: string | null;
+    displayName: string | null;
+    responseStatus: string | null;
+    self: boolean;
+  }> | null;
+  organizer: {
+    email: string | null;
+    displayName: string | null;
+    self: boolean;
+  } | null;
+  hangoutLink: string | null;
+}
+
+export function formatGoogleCalendarEvent(item: any): FormattedCalendarEvent {
+  const start = item?.start
+    ? {
+        dateTime: item.start.dateTime || undefined,
+        date: item.start.date || undefined,
+        timeZone: item.start.timeZone || undefined,
+      }
+    : null;
+
+  const end = item?.end
+    ? {
+        dateTime: item.end.dateTime || undefined,
+        date: item.end.date || undefined,
+        timeZone: item.end.timeZone || undefined,
+      }
+    : null;
+
+  const attendees = Array.isArray(item?.attendees)
+    ? item.attendees.map((a: any) => ({
+        email: a.email || null,
+        displayName: a.displayName || null,
+        responseStatus: a.responseStatus || null,
+        self: Boolean(a.self),
+      }))
+    : null;
+
+  const organizer = item?.organizer
+    ? {
+        email: item.organizer.email || null,
+        displayName: item.organizer.displayName || null,
+        self: Boolean(item.organizer.self),
+      }
+    : null;
+
+  const hangoutLink =
+    typeof item?.hangoutLink === 'string'
+      ? item.hangoutLink
+      : typeof item?.conferenceData?.entryPoints?.[0]?.uri === 'string'
+      ? item.conferenceData.entryPoints[0].uri
+      : null;
+
+  return {
+    id: item?.id || '',
+    summary: item?.summary ?? null,
+    description: item?.description ?? null,
+    location: item?.location ?? null,
+    htmlLink: item?.htmlLink ?? null,
+    status: item?.status ?? null,
+    start,
+    end,
+    attendees,
+    organizer,
+    hangoutLink,
+  };
+}
+
+export async function fetchUpcomingGoogleCalendarEvents(
+  accessToken: string,
+  options?: {
+    maxResults?: number;
+    timeMin?: string;
+    fetchFn?: typeof fetch;
+  }
+): Promise<{ count: number; events: FormattedCalendarEvent[] }> {
+  const fetchFn = options?.fetchFn || fetch;
+  const maxResults = options?.maxResults ?? 20;
+  const timeMin = options?.timeMin || new Date().toISOString();
+
+  const googleUrl = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
+  googleUrl.searchParams.set('singleEvents', 'true');
+  googleUrl.searchParams.set('orderBy', 'startTime');
+  googleUrl.searchParams.set('timeMin', timeMin);
+  googleUrl.searchParams.set('maxResults', String(maxResults));
+
+  const response = await fetchFn(googleUrl.toString(), {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    const errorBody: any = await response.json().catch(() => null);
+    const googleErrorCode = errorBody?.error?.code || response.status;
+    const googleErrorMessage = errorBody?.error?.message || response.statusText;
+
+    console.error('[GOOGLE_CALENDAR_EVENTS] Falha na resposta da API Google Calendar:', {
+      status: response.status,
+      code: googleErrorCode,
+    });
+
+    if (response.status === 401) {
+      throw new GoogleCalendarAuthError(
+        'Reautorização do Google Calendar necessária.',
+        'google_calendar_reauthorization_required',
+        401,
+        { google_error_code: googleErrorCode }
+      );
+    }
+
+    throw new GoogleCalendarAuthError(
+      'Falha ao buscar eventos da agenda Google.',
+      'google_calendar_events_fetch_failed',
+      response.status >= 400 && response.status < 600 ? response.status : 500,
+      { google_error_code: googleErrorCode, message: googleErrorMessage }
+    );
+  }
+
+  const data: any = await response.json().catch(() => null);
+  const items: any[] = Array.isArray(data?.items) ? data.items : [];
+  const events = items.map(formatGoogleCalendarEvent);
+
+  return {
+    count: events.length,
+    events,
+  };
+}
+
