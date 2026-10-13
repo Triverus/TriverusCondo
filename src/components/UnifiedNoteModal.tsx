@@ -305,15 +305,41 @@ export default function UnifiedNoteModal({
             next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
             google_event_id: savedData.google_event_id || null,
           });
-          if (nextFollowUpAtIso && savedData.id) {
-            const sessionData = await supabase.auth.getSession();
-            const token = sessionData.data.session?.access_token;
-            if (token) {
-              fetch('/api/google/calendar/sync-interaction', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ interactionId: savedData.id }),
-              }).catch((e) => console.warn('Sync error:', e));
+
+          const hasFollowUp = Boolean(nextFollowUpAtIso || savedData.next_follow_up_at);
+          console.log('[FOLLOWUP_GOOGLE_SYNC_TRIGGER]', {
+            saved_interaction_id: savedData.id,
+            has_next_follow_up_at: hasFollowUp,
+            operation: 'update',
+            endpoint_called: true,
+          });
+
+          if (hasFollowUp && savedData.id) {
+            try {
+              const sessionData = await supabase.auth.getSession();
+              const token = sessionData.data.session?.access_token;
+              if (token) {
+                const syncRes = await fetch('/api/google/calendar/sync-interaction', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({ interactionId: savedData.id }),
+                });
+                const syncJson = await syncRes.json().catch(() => null);
+                console.log('[FOLLOWUP_GOOGLE_SYNC_RESULT]', {
+                  saved_interaction_id: savedData.id,
+                  http_status: syncRes.status,
+                  success: syncRes.ok,
+                  synced: syncJson?.synced ?? false,
+                  error_code: syncJson?.error || syncJson?.reason || null,
+                });
+              } else {
+                console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Token Supabase não encontrado na sessão.');
+              }
+            } catch (syncErr: any) {
+              console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
             }
           }
         }
@@ -331,15 +357,41 @@ export default function UnifiedNoteModal({
             next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
             google_event_id: savedData.google_event_id || null,
           });
-          if (nextFollowUpAtIso && savedData.id) {
-            const sessionData = await supabase.auth.getSession();
-            const token = sessionData.data.session?.access_token;
-            if (token) {
-              fetch('/api/google/calendar/sync-interaction', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ interactionId: savedData.id }),
-              }).catch((e) => console.warn('Sync error:', e));
+
+          const hasFollowUp = Boolean(nextFollowUpAtIso || savedData.next_follow_up_at);
+          console.log('[FOLLOWUP_GOOGLE_SYNC_TRIGGER]', {
+            saved_interaction_id: savedData.id,
+            has_next_follow_up_at: hasFollowUp,
+            operation: 'insert',
+            endpoint_called: true,
+          });
+
+          if (hasFollowUp && savedData.id) {
+            try {
+              const sessionData = await supabase.auth.getSession();
+              const token = sessionData.data.session?.access_token;
+              if (token) {
+                const syncRes = await fetch('/api/google/calendar/sync-interaction', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({ interactionId: savedData.id }),
+                });
+                const syncJson = await syncRes.json().catch(() => null);
+                console.log('[FOLLOWUP_GOOGLE_SYNC_RESULT]', {
+                  saved_interaction_id: savedData.id,
+                  http_status: syncRes.status,
+                  success: syncRes.ok,
+                  synced: syncJson?.synced ?? false,
+                  error_code: syncJson?.error || syncJson?.reason || null,
+                });
+              } else {
+                console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Token Supabase não encontrado na sessão.');
+              }
+            } catch (syncErr: any) {
+              console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
             }
           }
         }
