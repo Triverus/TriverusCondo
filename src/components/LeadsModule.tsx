@@ -2033,7 +2033,7 @@ export default function LeadsModule({
       const dateOnly = formInteractionNextFollowUpDate ? toDateInputValue(formInteractionNextFollowUpDate) : null;
       const nextAtIso = dateOnly ? buildSaoPauloIsoDateTime(dateOnly, '09:00') : null;
 
-      const payload = {
+      const payload: any = {
         lead_id: selectedLead.id,
         interaction_type: formInteractionType,
         occurred_at: occurredAtIso,
@@ -2041,10 +2041,10 @@ export default function LeadsModule({
         notes: formInteractionNotes.trim() || null,
         next_follow_up_date: dateOnly,
         next_follow_up_at: nextAtIso,
-        google_event_id: null,
       };
 
       if (interactionModalMode === 'create') {
+        payload.google_event_id = null;
         const savedData = await saveInteractionToSupabase('insert', payload);
         if (savedData) {
           upsertInteractionLocally({
@@ -2052,6 +2052,17 @@ export default function LeadsModule({
             interaction_type: formInteractionType || savedData.interaction_type,
           });
           clearDraft(getInteractionCreateDraftKey(selectedLead.id));
+          if (nextAtIso && savedData.id) {
+            const sessionData = await supabase.auth.getSession();
+            const token = sessionData.data.session?.access_token;
+            if (token) {
+              fetch('/api/google/calendar/sync-interaction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ interactionId: savedData.id }),
+              }).catch((e) => console.warn('Sync error:', e));
+            }
+          }
         }
         setStatusFeedback({ type: 'success', message: 'Interação registrada com sucesso!' });
       } else if (interactionModalMode === 'edit' && selectedInteraction) {
@@ -2061,6 +2072,17 @@ export default function LeadsModule({
             ...savedData,
             interaction_type: formInteractionType || savedData.interaction_type,
           });
+          if (nextAtIso && savedData.id) {
+            const sessionData = await supabase.auth.getSession();
+            const token = sessionData.data.session?.access_token;
+            if (token) {
+              fetch('/api/google/calendar/sync-interaction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ interactionId: savedData.id }),
+              }).catch((e) => console.warn('Sync error:', e));
+            }
+          }
         }
         setStatusFeedback({ type: 'success', message: 'Interação atualizada com sucesso!' });
       }
@@ -2411,7 +2433,7 @@ export default function LeadsModule({
       const dateOnly = noteFollowUpDate ? toDateInputValue(noteFollowUpDate) : null;
       const nextAtIso = dateOnly ? buildSaoPauloIsoDateTime(dateOnly, '09:00') : null;
 
-      const payload = {
+      const payload: any = {
         lead_id: validLeadId,
         interaction_type: noteType,
         occurred_at: occurredAtIso,
@@ -2419,7 +2441,6 @@ export default function LeadsModule({
         notes: noteContent.trim() || null,
         next_follow_up_date: dateOnly,
         next_follow_up_at: nextAtIso,
-        google_event_id: null,
       };
 
       let savedInteraction: Interaction | null = null;
@@ -2431,15 +2452,38 @@ export default function LeadsModule({
             ...savedInteraction,
             interaction_type: noteType || savedInteraction.interaction_type,
           });
+          if (nextAtIso && savedInteraction.id) {
+            const sessionData = await supabase.auth.getSession();
+            const token = sessionData.data.session?.access_token;
+            if (token) {
+              fetch('/api/google/calendar/sync-interaction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ interactionId: savedInteraction.id }),
+              }).catch((e) => console.warn('Sync error:', e));
+            }
+          }
         }
         setStatusFeedback({ type: 'success', message: 'Nota atualizada com sucesso!' });
       } else {
+        payload.google_event_id = null;
         savedInteraction = await saveInteractionToSupabase('insert', payload);
         if (savedInteraction) {
           upsertInteractionLocally({
             ...savedInteraction,
             interaction_type: noteType || savedInteraction.interaction_type,
           });
+          if (nextAtIso && savedInteraction.id) {
+            const sessionData = await supabase.auth.getSession();
+            const token = sessionData.data.session?.access_token;
+            if (token) {
+              fetch('/api/google/calendar/sync-interaction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ interactionId: savedInteraction.id }),
+              }).catch((e) => console.warn('Sync error:', e));
+            }
+          }
         }
         setStatusFeedback({ type: 'success', message: 'Nova nota registrada com sucesso!' });
       }

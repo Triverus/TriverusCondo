@@ -278,7 +278,7 @@ export default function UnifiedNoteModal({
         nextFollowUpDateOnly = toDateInputValue(formNextFollowUpDate);
       }
 
-      const payload = {
+      const payload: any = {
         lead_id: lead.id,
         interaction_type: formType,
         occurred_at: occurredAtIso,
@@ -286,8 +286,11 @@ export default function UnifiedNoteModal({
         notes: formNotes.trim() || null,
         next_follow_up_date: nextFollowUpDateOnly,
         next_follow_up_at: nextFollowUpAtIso,
-        google_event_id: null,
       };
+
+      if (!editingInteractionId) {
+        payload.google_event_id = null;
+      }
 
       if (editingInteractionId) {
         const savedData = await saveInteractionToSupabase('update', payload, editingInteractionId);
@@ -302,6 +305,17 @@ export default function UnifiedNoteModal({
             next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
             google_event_id: savedData.google_event_id || null,
           });
+          if (nextFollowUpAtIso && savedData.id) {
+            const sessionData = await supabase.auth.getSession();
+            const token = sessionData.data.session?.access_token;
+            if (token) {
+              fetch('/api/google/calendar/sync-interaction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ interactionId: savedData.id }),
+              }).catch((e) => console.warn('Sync error:', e));
+            }
+          }
         }
         if (onSuccessFeedback) onSuccessFeedback('Nota atualizada com sucesso!');
       } else {
@@ -317,6 +331,17 @@ export default function UnifiedNoteModal({
             next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
             google_event_id: savedData.google_event_id || null,
           });
+          if (nextFollowUpAtIso && savedData.id) {
+            const sessionData = await supabase.auth.getSession();
+            const token = sessionData.data.session?.access_token;
+            if (token) {
+              fetch('/api/google/calendar/sync-interaction', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                body: JSON.stringify({ interactionId: savedData.id }),
+              }).catch((e) => console.warn('Sync error:', e));
+            }
+          }
         }
         if (onSuccessFeedback) {
           onSuccessFeedback(

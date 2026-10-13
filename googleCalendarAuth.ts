@@ -499,3 +499,175 @@ export async function fetchUpcomingGoogleCalendarEvents(
   };
 }
 
+export async function createGoogleCalendarEventForInteraction(interactionId: string) {
+  const supabase = getAdminClient();
+  if (!supabase) {
+    console.warn('[CREATE_CALENDAR_EVENT] Supabase admin client indisponível.');
+    return { synced: false, reason: 'database_unavailable' };
+  }
+
+  // 1. Load interaction
+  const { data: interaction, error: intErr } = await supabase
+    .from('interactions')
+    .select('id, lead_id, interaction_type, notes, next_follow_up_at, responsible_user_id, google_event_id')
+    .eq('id', interactionId)
+    .single();
+
+  if (intErr || !interaction) {
+    console.warn('[CREATE_CALENDAR_EVENT] Interação não encontrada:', interactionId);
+    return { synced: false, reason: 'interaction_not_found', status: 404 };
+  }
+
+  // 2. Check if next_follow_up_at exists
+  if (!interaction.next_follow_up_at) {
+    return { synced: false, reason: 'no_next_follow_up_at' };
+  }
+
+  // 3. Check if google_event_id is already populated (Anti-duplicity)
+  if (interaction.google_event_id && interaction.google_event_id.trim()) {
+    return { synced: true, already_synced: true, googleEventId: interaction.google_event_id };
+  }
+
+  // 4. Responsible user ID
+  const responsibleUserId = interaction.responsible_user_id;
+  if (!responsibleUserId) {
+    return { synced: false, reason: 'no_responsible_user_id' };
+  }
+
+  // 5. Get valid Google access token for responsible user
+  let accessToken: string;
+  try {
+    accessToken = await getValidGoogleAccessToken(responsibleUserId);
+  } catch (err: any) {
+    console.warn('[CREATE_CALENDAR_EVENT] Responsável sem conexão Google válida:', {
+      responsible_user_id: responsibleUserId,
+      error_code: err?.code,
+      message: err?.message,
+    });
+    return { synced: false, reason: err?.code || 'google_calendar_not_connected' };
+  }
+
+  // 6. Load lead name & contact info
+  let leadName = 'Condomínio';
+  const { data: leadData } = await supabase
+    .from('leads')
+    .select('id, name')
+    .eq('id', interaction.lead_id)
+    .single();
+  if (leadData?.name) {
+    leadName = leadData.name;
+  }
+
+  // Responsible name
+  let responsibleName = 'Responsável';
+  const { data: profileData } = await supabase
+    .from('profiles')
+    .select('id, name')
+    .eq('id', responsibleUserId)
+    .single();
+  if (profileData?.name) {
+    responsibleName = profileData.name;
+  }
+
+  // Contact resolution via lead_contacts -> contacts (deterministic order by created_at ASC)
+  let primaryContact: any = null;
+  const { data: leadContactsData } = await supabase
+    .from('lead_contacts')
+    .select('contact_id')
+    .eq('lead_id', interaction.lead_id);
+
+  const contactIds = (leadContactsData || []).map((lc: any) => lc.contact_id).filter(Boolean);
+  if (contactIds.length > 0) {
+    const { data: contactsData } = await supabase
+      .from('contacts')
+      .select('id, name, role_title, phone, email, created_at')
+      .in('id', contactIds)
+      .order('created_at', { ascending: true });
+
+    if (contactsData && contactsData.length > 0) {
+      primaryContact = contactsData[0]; // Contato mais antigo (menor created_at), determinístico
+    }
+  }
+
+  // 7. Format title & description
+  const interactionTypeLabel = interaction.interaction_type || 'Compromisso';
+  const summary = `${interactionTypeLabel} — ${leadName}`;
+
+  const descLines: string[] = [];
+  if (leadName) descLines.push(`Condomínio: ${leadName}`);
+  if (interactionTypeLabel) descLines.push(`Tipo: ${interactionTypeLabel}`);
+  if (responsibleName) descLines.push(`Responsável: ${responsibleName}`);
+  if (primaryContact?.name) descLines.push(`Contato principal: ${primaryContact.name}`);
+  if (primaryContact?.role_title) descLines.push(`Cargo: ${primaryContact.role_title}`);
+  if (primaryContact?.phone) descLines.push(`Telefone: ${primaryContact.phone}`);
+  if (primaryContact?.email) descLines.push(`E-mail: ${primaryContact.email}`);
+  if (interaction.notes) descLines.push(`Observações: ${interaction.notes}`);
+
+  descLines.push('');
+  descLines.push('Abrir na Triverus:');
+  descLines.push('https://triveruscondo.com/app/leads');
+
+  const description = descLines.join('\n');
+
+  // 8. Time calculation (Duration 1 hour)
+  const startDate = new Date(interaction.next_follow_up_at);
+  if (Number.isNaN(startDate.getTime())) {
+    return { synced: false, reason: 'invalid_next_follow_up_at' };
+  }
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
+  const eventPayload = {
+    summary,
+    description,
+    start: {
+      dateTime: startDate.toISOString(),
+      timeZone: 'America/Sao_Paulo',
+    },
+    end: {
+      dateTime: endDate.toISOString(),
+      timeZone: 'America/Sao_Paulo',
+    },
+  };
+
+  // 9. Call Google Calendar API (POST events)
+  const googleRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(eventPayload),
+  });
+
+  if (!googleRes.ok) {
+    const errBody = await googleRes.json().catch(() => null);
+    console.error('[CREATE_CALENDAR_EVENT] Falha ao criar evento no Google:', {
+      status: googleRes.status,
+      error: errBody,
+    });
+    return { synced: false, reason: 'google_api_error', status: googleRes.status, details: errBody };
+  }
+
+  const eventData = await googleRes.json();
+  const googleEventId = eventData?.id;
+
+  if (!googleEventId) {
+    return { synced: false, reason: 'no_event_id_returned' };
+  }
+
+  // 10. Save google_event_id in public.interactions
+  const { error: updateErr } = await supabase
+    .from('interactions')
+    .update({ google_event_id: googleEventId })
+    .eq('id', interactionId);
+
+  if (updateErr) {
+    console.error('[CREATE_CALENDAR_EVENT] Erro ao salvar google_event_id no Supabase:', updateErr);
+    return { synced: false, reason: 'supabase_update_failed' };
+  }
+
+  return { synced: true, googleEventId };
+}
+
+
