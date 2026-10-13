@@ -335,9 +335,7 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     return { synced: false, reason: 'no_next_follow_up_at' };
   }
 
-  if (interaction.google_event_id && interaction.google_event_id.trim()) {
-    return { synced: true, already_synced: true, googleEventId: interaction.google_event_id };
-  }
+// Lógica de sincronização segue sem early-return.
 
   const responsibleUserId = interaction.responsible_user_id;
   if (!responsibleUserId) {
@@ -622,3 +620,27 @@ export async function updateGoogleCalendarEventForInteraction(interactionId) {
 
   return { synced: true, googleEventId };
 }
+
+export async function syncGoogleCalendarInteraction(interactionId) {
+  const supabase = getAdminClient();
+  if (!supabase) {
+    return { synced: false, reason: 'database_unavailable' };
+  }
+
+  const { data: interaction, error: intErr } = await supabase
+    .from('interactions')
+    .select('id, google_event_id')
+    .eq('id', interactionId)
+    .single();
+
+  if (intErr || !interaction) {
+    return { synced: false, reason: 'interaction_not_found', status: 404 };
+  }
+
+  if (interaction.google_event_id && interaction.google_event_id.trim()) {
+    return await updateGoogleCalendarEventForInteraction(interactionId);
+  } else {
+    return await createGoogleCalendarEventForInteraction(interactionId);
+  }
+}
+

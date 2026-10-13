@@ -17,6 +17,7 @@ import {
   fetchUpcomingGoogleCalendarEvents,
   createGoogleCalendarEventForInteraction,
   updateGoogleCalendarEventForInteraction,
+  syncGoogleCalendarInteraction,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 } from './googleCalendarAuth.js';
@@ -853,7 +854,7 @@ app.post('/api/google/calendar/sync-interaction', async (req, res) => {
   }
 
   try {
-    const syncResult = await createGoogleCalendarEventForInteraction(interactionId);
+    const syncResult = await syncGoogleCalendarInteraction(interactionId);
     if (syncResult && (syncResult.reason === 'interaction_not_found' || syncResult.status === 404)) {
       return res.status(404).json({
         success: false,

@@ -523,10 +523,6 @@ export async function createGoogleCalendarEventForInteraction(interactionId: str
     return { synced: false, reason: 'no_next_follow_up_at' };
   }
 
-  // 3. Check if google_event_id is already populated (Anti-duplicity)
-  if (interaction.google_event_id && interaction.google_event_id.trim()) {
-    return { synced: true, already_synced: true, googleEventId: interaction.google_event_id };
-  }
 
   // 4. Responsible user ID
   const responsibleUserId = interaction.responsible_user_id;
@@ -848,7 +844,9 @@ export async function updateGoogleCalendarEventForInteraction(interactionId: str
     error_code: null,
   });
 
-  return { synced: true, googleEventId };
+  return { synced: true, googleEventId: googleEventId };
+}
+
 export async function syncGoogleCalendarInteraction(interactionId: string) {
   const supabase = getAdminClient();
   if (!supabase) {
@@ -864,6 +862,8 @@ export async function syncGoogleCalendarInteraction(interactionId: string) {
   if (intErr || !interaction) {
     return { synced: false, reason: 'interaction_not_found', status: 404 };
   }
+
+  console.log('[DEBUG_SYNC_INTERACTION]', { interactionId, google_event_id: interaction.google_event_id });
 
   const startTime = Date.now();
   
