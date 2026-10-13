@@ -128,10 +128,10 @@ app.get('/api/health', (req, res) => {
 
 // Endpoint seguro para teste de conectividade do Supabase Admin (sem expor segredos)
 app.get('/api/google/oauth/diag-supabase', async (req, res) => {
-  const rawUrl = process.env.VITE_SUPABASE_URL || SUPABASE_URL;
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-  const hasUrl = Boolean(rawUrl && rawUrl.trim());
+  const hasUrl = Boolean(supabaseUrl && supabaseUrl.trim());
   const hasKey = Boolean(serviceKey && serviceKey.trim());
   const keyLength = serviceKey ? serviceKey.trim().length : 0;
 
@@ -141,7 +141,7 @@ app.get('/api/google/oauth/diag-supabase', async (req, res) => {
 
   if (hasUrl) {
     try {
-      const parsed = new URL(rawUrl.trim());
+      const parsed = new URL(supabaseUrl.trim());
       parsedHost = parsed.hostname;
       parsedProtocol = parsed.protocol;
     } catch (err) {
@@ -149,92 +149,200 @@ app.get('/api/google/oauth/diag-supabase', async (req, res) => {
     }
   }
 
-  const adminClient = getAdminSupabaseClient();
-  if (!adminClient) {
-    return res.status(500).json({
-      ok: false,
-      diagnostics: {
-        has_vite_supabase_url: hasUrl,
-        url_protocol: parsedProtocol,
-        url_hostname: parsedHost,
-        url_parse_error: urlError,
-        has_service_role_key: hasKey,
-        service_role_key_length: keyLength,
-      },
-      message: 'Cliente admin não pôde ser instanciado devido a URL inválida ou chave ausente.',
+  // 1. TESTE HTTP DIRETO usando fetch nativo do Node 22 (sem supabase-js)
+  let directResult = null;
+  if (!hasUrl || !hasKey || urlError) {
+    console.warn('[SUPABASE_DIRECT_DIAG] Parâmetros insuficientes para teste direto:', {
+      stage: 'validation',
+      has_vite_supabase_url: hasUrl,
+      has_service_role_key: hasKey,
+      url_parse_error: urlError,
     });
-  }
+    directResult = {
+      tested: false,
+      error: 'Parâmetros ausentes ou URL inválida',
+    };
+  } else {
+    const cleanBaseUrl = supabaseUrl.trim().replace(/\/+$/, '');
+    const directEndpoint = `${cleanBaseUrl}/rest/v1/google_calendar_connections?select=id&limit=1`;
+    console.log('[SUPABASE_DIRECT_DIAG] Iniciando teste direto com fetch nativo:', {
+      stage: 'direct_fetch_start',
+      hostname: parsedHost,
+    });
 
-  try {
-    const { data, error, count } = await adminClient
-      .from('google_calendar_connections')
-      .select('id', { count: 'exact', head: true });
-
-    if (error) {
-      return res.status(502).json({
-        ok: false,
-        diagnostics: {
-          has_vite_supabase_url: hasUrl,
-          url_protocol: parsedProtocol,
-          url_hostname: parsedHost,
-          url_parse_error: urlError,
-          has_service_role_key: hasKey,
-          service_role_key_length: keyLength,
-        },
-        supabase_error: {
-          message: error.message,
-          code: error.code,
-          details: error.details,
-          hint: error.hint,
+    try {
+      const fetchResponse = await fetch(directEndpoint, {
+        method: 'GET',
+        headers: {
+          apikey: serviceKey.trim(),
+          Authorization: `Bearer ${serviceKey.trim()}`,
         },
       });
+
+      let responseBody = null;
+      let errorBodyText = null;
+      const contentType = fetchResponse.headers.get('content-type') || '';
+      try {
+        if (contentType.includes('application/json')) {
+          responseBody = await fetchResponse.json();
+          if (!fetchResponse.ok) {
+            errorBodyText = JSON.stringify(responseBody);
+          }
+        } else {
+          const text = await fetchResponse.text();
+          if (!fetchResponse.ok) {
+            errorBodyText = text.slice(0, 500);
+          }
+        }
+      } catch (readErr) {
+        errorBodyText = `Falha ao ler corpo: ${readErr && readErr.message}`;
+      }
+
+      console.log('[SUPABASE_DIRECT_DIAG] Resposta recebida no teste direto:', {
+        stage: 'direct_fetch_response',
+        hostname: parsedHost,
+        http_status: fetchResponse.status,
+        response_ok: fetchResponse.ok,
+        response_status_text: fetchResponse.statusText,
+        error_body: errorBodyText,
+      });
+
+      directResult = {
+        tested: true,
+        ok: fetchResponse.ok,
+        status: fetchResponse.status,
+        statusText: fetchResponse.statusText,
+        error_body: errorBodyText,
+        data_sample_count: Array.isArray(responseBody) ? responseBody.length : null,
+      };
+    } catch (fetchErr) {
+      const causeDetails = fetchErr && fetchErr.cause
+        ? {
+            name: fetchErr.cause.name,
+            message: fetchErr.cause.message,
+            code: fetchErr.cause.code,
+            syscall: fetchErr.cause.syscall,
+            hostname: fetchErr.cause.hostname,
+            address: fetchErr.cause.address,
+            port: fetchErr.cause.port,
+          }
+        : null;
+
+      console.error('[SUPABASE_DIRECT_DIAG] Falha no teste direto com fetch nativo:', {
+        stage: 'direct_fetch_error',
+        hostname: parsedHost,
+        error_name: fetchErr && fetchErr.name,
+        error_message: fetchErr && fetchErr.message,
+        cause: causeDetails,
+      });
+
+      directResult = {
+        tested: true,
+        ok: false,
+        error_name: fetchErr && fetchErr.name,
+        error_message: fetchErr && fetchErr.message,
+        cause: causeDetails,
+      };
     }
-
-    return res.status(200).json({
-      ok: true,
-      diagnostics: {
-        has_vite_supabase_url: hasUrl,
-        url_protocol: parsedProtocol,
-        url_hostname: parsedHost,
-        url_parse_error: urlError,
-        has_service_role_key: hasKey,
-        service_role_key_length: keyLength,
-      },
-      connectivity: 'success',
-      total_connections_count: count ?? 0,
-    });
-  } catch (err) {
-    console.error('[SUPABASE_ADMIN_DIAG] Exceção durante teste de conectividade:', {
-      name: err && err.name,
-      message: err && err.message,
-      code: err && err.code,
-      cause_name: err && err.cause ? err.cause.name : undefined,
-      cause_message: err && err.cause ? err.cause.message : undefined,
-      cause_code: err && err.cause ? err.cause.code : undefined,
-    });
-
-    return res.status(502).json({
-      ok: false,
-      diagnostics: {
-        has_vite_supabase_url: hasUrl,
-        url_protocol: parsedProtocol,
-        url_hostname: parsedHost,
-        url_parse_error: urlError,
-        has_service_role_key: hasKey,
-        service_role_key_length: keyLength,
-      },
-      network_error: {
-        name: err && err.name,
-        message: err && err.message,
-        code: err && err.code,
-        cause: err && err.cause ? {
-          name: err.cause.name,
-          message: err.cause.message,
-          code: err.cause.code,
-        } : null,
-      },
-    });
   }
+
+  // 2. TESTE COM SUPABASE-JS para fins de comparação
+  let supabaseJsResult = null;
+  const adminClient = getAdminSupabaseClient();
+  if (!adminClient) {
+    supabaseJsResult = {
+      tested: false,
+      message: 'Cliente supabase-js não instanciado.',
+    };
+  } else {
+    try {
+      console.log('[SUPABASE_JS_DIAG] Iniciando teste com supabase-js:', {
+        stage: 'supabase_js_start',
+        hostname: parsedHost,
+      });
+      const { data, error, count } = await adminClient
+        .from('google_calendar_connections')
+        .select('id', { count: 'exact', head: true });
+
+      if (error) {
+        console.warn('[SUPABASE_JS_DIAG] Resposta de erro do supabase-js:', {
+          stage: 'supabase_js_error_response',
+          hostname: parsedHost,
+          message: error.message,
+          code: error.code,
+        });
+        supabaseJsResult = {
+          tested: true,
+          ok: false,
+          supabase_error: {
+            message: error.message,
+            code: error.code,
+            details: error.details,
+            hint: error.hint,
+          },
+        };
+      } else {
+        console.log('[SUPABASE_JS_DIAG] Sucesso no supabase-js:', {
+          stage: 'supabase_js_success',
+          hostname: parsedHost,
+          count: count ?? 0,
+        });
+        supabaseJsResult = {
+          tested: true,
+          ok: true,
+          count: count ?? 0,
+        };
+      }
+    } catch (jsErr) {
+      const causeDetails = jsErr && jsErr.cause
+        ? {
+            name: jsErr.cause.name,
+            message: jsErr.cause.message,
+            code: jsErr.cause.code,
+            syscall: jsErr.cause.syscall,
+            hostname: jsErr.cause.hostname,
+            address: jsErr.cause.address,
+            port: jsErr.cause.port,
+          }
+        : null;
+
+      console.error('[SUPABASE_JS_DIAG] Exceção de rede no supabase-js:', {
+        stage: 'supabase_js_network_exception',
+        hostname: parsedHost,
+        error_name: jsErr && jsErr.name,
+        error_message: jsErr && jsErr.message,
+        cause: causeDetails,
+      });
+
+      supabaseJsResult = {
+        tested: true,
+        ok: false,
+        network_error: {
+          name: jsErr && jsErr.name,
+          message: jsErr && jsErr.message,
+          code: jsErr && jsErr.code,
+          cause: causeDetails,
+        },
+      };
+    }
+  }
+
+  const overallOk = Boolean((directResult && directResult.ok) || (supabaseJsResult && supabaseJsResult.ok));
+  const responseStatus = overallOk ? 200 : directResult && directResult.status ? directResult.status : 502;
+
+  return res.status(responseStatus).json({
+    ok: overallOk,
+    diagnostics: {
+      has_vite_supabase_url: hasUrl,
+      url_protocol: parsedProtocol,
+      url_hostname: parsedHost,
+      url_parse_error: urlError,
+      has_service_role_key: hasKey,
+      service_role_key_length: keyLength,
+    },
+    direct_fetch_test: directResult,
+    supabase_js_test: supabaseJsResult,
+  });
 });
 
 function createOAuthState(userId, secret) {
