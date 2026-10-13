@@ -60,6 +60,101 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+app.get('/api/google/oauth/start', (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID || loadedEnv.GOOGLE_CLIENT_ID;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || loadedEnv.GOOGLE_REDIRECT_URI;
+
+  if (!clientId || !redirectUri) {
+    return res.status(500).json({
+      error: 'Configuração OAuth incompleta.',
+      message: 'As variáveis de ambiente GOOGLE_CLIENT_ID e GOOGLE_REDIRECT_URI são obrigatórias.',
+    });
+  }
+
+  const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  authUrl.searchParams.set('response_type', 'code');
+  authUrl.searchParams.set('client_id', clientId);
+  authUrl.searchParams.set('redirect_uri', redirectUri);
+  authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/calendar.events');
+  authUrl.searchParams.set('access_type', 'offline');
+  authUrl.searchParams.set('prompt', 'consent');
+
+  return res.redirect(authUrl.toString());
+});
+
+app.get('/api/google/oauth/callback', async (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID || loadedEnv.GOOGLE_CLIENT_ID;
+  const clientSecret = process.env.GOOGLE_CLIENT_SECRET || loadedEnv.GOOGLE_CLIENT_SECRET;
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI || loadedEnv.GOOGLE_REDIRECT_URI;
+
+  if (!clientId || !clientSecret || !redirectUri) {
+    return res.status(500).json({
+      error: 'Configuração OAuth incompleta.',
+      message: 'As variáveis de ambiente GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REDIRECT_URI são obrigatórias.',
+    });
+  }
+
+  const { code, error, error_description } = req.query;
+
+  if (error) {
+    const errorMsg = typeof error === 'string' ? error : 'oauth_error';
+    const message = typeof error_description === 'string' ? error_description : 'Autorização recusada ou cancelada pelo usuário.';
+    return res.status(400).json({
+      error: errorMsg,
+      message,
+    });
+  }
+
+  if (!code || typeof code !== 'string') {
+    return res.status(400).json({
+      error: 'missing_authorization_code',
+    });
+  }
+
+  try {
+    const tokenParams = new URLSearchParams({
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: 'authorization_code',
+    });
+
+    const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: tokenParams.toString(),
+    });
+
+    const tokenData: any = await tokenResponse.json().catch(() => null);
+
+    if (!tokenResponse.ok || !tokenData) {
+      const googleError = tokenData?.error || 'token_exchange_failed';
+      const googleErrorDesc = tokenData?.error_description || 'Falha ao trocar código de autorização por tokens junto ao Google.';
+      const statusCode = tokenResponse.status >= 400 && tokenResponse.status < 600 ? tokenResponse.status : 500;
+      return res.status(statusCode).json({
+        error: googleError,
+        message: googleErrorDesc,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Google Calendar autorizado com sucesso',
+      has_access_token: Boolean(tokenData.access_token),
+      has_refresh_token: Boolean(tokenData.refresh_token),
+      expires_in: tokenData.expires_in ?? null,
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      error: 'token_exchange_error',
+      message: 'Erro interno ao comunicar com o servidor de autenticação do Google.',
+    });
+  }
+});
+
 app.get('/api/condo/health', async (req, res) => {
   const openai = getOpenAIClient();
 

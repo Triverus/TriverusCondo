@@ -5,6 +5,8 @@ export const CRM_CACHE_KEY = 'triverus:crm-cache:v1';
 export const TEMP_OVERRIDES_KEY = 'triverus:temperature-overrides:v1';
 export const STAGE_OVERRIDES_KEY = 'triverus:stage-overrides:v1';
 export const LOSS_REASON_OVERRIDES_KEY = 'triverus:loss-reason-overrides:v1';
+export const CONDO_TYPE_OVERRIDES_KEY = 'triverus:condo-type-overrides:v1';
+export const PRIMARY_CONTACT_OVERRIDES_KEY = 'triverus:primary-contact-overrides:v1';
 export const INTERACTION_TYPE_OVERRIDES_KEY = 'triverus:interaction-type-overrides:v1';
 export const CRM_CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutos
 
@@ -68,6 +70,72 @@ export function getLeadLossReasonOverrides(): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+/**
+ * Lê os overrides locais de tipo de condomínio (quando o usuário seleciona "Outro" e digita um valor customizado).
+ */
+export function getLeadCondominiumTypeOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(CONDO_TYPE_OVERRIDES_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Salva o override local de tipo de condomínio no localStorage.
+ */
+export function saveLeadCondominiumTypeOverride(leadId: string, condominiumType: string): void {
+  try {
+    if (!leadId || !condominiumType) return;
+    const current = getLeadCondominiumTypeOverrides();
+    current[leadId] = condominiumType;
+    localStorage.setItem(CONDO_TYPE_OVERRIDES_KEY, JSON.stringify(current));
+  } catch (err) {
+    console.warn('[CRM Cache] Falha ao salvar override de tipo de condomínio:', err);
+  }
+}
+
+/**
+ * Lê os overrides locais de contato primário por lead.
+ */
+export function getLeadPrimaryContactOverrides(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(PRIMARY_CONTACT_OVERRIDES_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) || {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Salva o contato primário de um lead no localStorage.
+ */
+export function saveLeadPrimaryContactOverride(leadId: string, contactId: string): void {
+  try {
+    if (!leadId || !contactId) return;
+    const current = getLeadPrimaryContactOverrides();
+    current[leadId] = contactId;
+    localStorage.setItem(PRIMARY_CONTACT_OVERRIDES_KEY, JSON.stringify(current));
+  } catch (err) {
+    console.warn('[CRM Cache] Falha ao salvar override de contato primário:', err);
+  }
+}
+
+/**
+ * Remove o override de contato primário ao desvincular ou excluir.
+ */
+export function deleteLeadPrimaryContactOverride(leadId: string): void {
+  try {
+    if (!leadId) return;
+    const current = getLeadPrimaryContactOverrides();
+    delete current[leadId];
+    localStorage.setItem(PRIMARY_CONTACT_OVERRIDES_KEY, JSON.stringify(current));
+  } catch {}
 }
 
 /**
@@ -139,8 +207,15 @@ export function loadCRMCache(): CRMPersistentData | null {
     const tempOverrides = getLeadTemperatureOverrides();
     const stageOverrides = getLeadStageOverrides();
     const lossReasonOverrides = getLeadLossReasonOverrides();
+    const condoTypeOverrides = getLeadCondominiumTypeOverrides();
 
-    if (parsed.leads && (Object.keys(tempOverrides).length > 0 || Object.keys(stageOverrides).length > 0 || Object.keys(lossReasonOverrides).length > 0)) {
+    if (
+      parsed.leads &&
+      (Object.keys(tempOverrides).length > 0 ||
+        Object.keys(stageOverrides).length > 0 ||
+        Object.keys(lossReasonOverrides).length > 0 ||
+        Object.keys(condoTypeOverrides).length > 0)
+    ) {
       parsed.leads = parsed.leads.map((l: Lead) => {
         let updated = { ...l };
         if (tempOverrides[l.id]) {
@@ -151,6 +226,11 @@ export function loadCRMCache(): CRMPersistentData | null {
         }
         if (lossReasonOverrides[l.id] !== undefined) {
           updated.loss_reason = lossReasonOverrides[l.id];
+        }
+        if (condoTypeOverrides[l.id]) {
+          updated.condominium_type = condoTypeOverrides[l.id];
+        } else if (l.lead_source && l.lead_source.startsWith('custom_type:')) {
+          updated.condominium_type = l.lead_source.slice('custom_type:'.length);
         }
         return updated;
       });
@@ -179,11 +259,18 @@ export function loadCRMCache(): CRMPersistentData | null {
 export function saveCRMCache(data: Omit<CRMPersistentData, 'version' | 'cachedAt'>): void {
   try {
     const tempOverrides = getLeadTemperatureOverrides();
+    const condoTypeOverrides = getLeadCondominiumTypeOverrides();
     const leadsWithOverrides = data.leads.map((l) => {
+      let updated = { ...l };
       if (tempOverrides[l.id]) {
-        return { ...l, temperature: tempOverrides[l.id] };
+        updated.temperature = tempOverrides[l.id];
       }
-      return l;
+      if (condoTypeOverrides[l.id]) {
+        updated.condominium_type = condoTypeOverrides[l.id];
+      } else if (l.lead_source && l.lead_source.startsWith('custom_type:')) {
+        updated.condominium_type = l.lead_source.slice('custom_type:'.length);
+      }
+      return updated;
     });
 
     const intOverrides = getInteractionTypeOverrides();

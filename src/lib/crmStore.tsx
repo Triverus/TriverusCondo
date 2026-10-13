@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { supabase } from './supabase.ts';
 import type { UserProfile } from '../App.tsx';
+import { formatProperName } from './contactAdapter.ts';
 import {
   loadCRMCache,
   saveCRMCache,
@@ -9,6 +10,11 @@ import {
   getLeadStageOverrides,
   saveLeadStageOverride,
   getLeadLossReasonOverrides,
+  getLeadCondominiumTypeOverrides,
+  saveLeadCondominiumTypeOverride,
+  getLeadPrimaryContactOverrides,
+  saveLeadPrimaryContactOverride,
+  deleteLeadPrimaryContactOverride,
   getInteractionTypeOverrides,
   saveInteractionTypeOverride,
   type CRMPersistentData,
@@ -59,11 +65,107 @@ export const DEFAULT_PIPELINE_STAGES: PipelineStage[] = [
   { id: 'stg_perdido', name: 'Perdido', position: 7, is_won: false, is_lost: true },
 ];
 
-export const DEFAULT_TEAM_PROFILES: UserProfile[] = [
-  { id: 'usr_edson', full_name: 'Edson', role: 'member' },
-  { id: 'usr_jailma', full_name: 'Jailma', role: 'member' },
-  { id: 'usr_rogerio', full_name: 'Rogerio', role: 'member' },
-];
+export const OFFICIAL_SERVICE_NAMES = [
+  'Auditoria Detectiva',
+  'Auditoria Preventiva',
+  'Consultoria',
+  'Conselheiro Fiscal',
+  'Triverus Academy',
+] as const;
+
+export function normalizeServiceName(rawName?: string | null): string {
+  const trimmed = (rawName || '').trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === 'consultoria condominial' || lower === 'consultoria') {
+    return 'Consultoria';
+  }
+  if (
+    lower === 'conselho fiscal profissional' ||
+    lower === 'conselheiro fiscal' ||
+    lower === 'conselho fiscal'
+  ) {
+    return 'Conselheiro Fiscal';
+  }
+  if (lower === 'auditoria detectiva') {
+    return 'Auditoria Detectiva';
+  }
+  if (lower === 'auditoria preventiva') {
+    return 'Auditoria Preventiva';
+  }
+  if (lower === 'triverus academy') {
+    return 'Triverus Academy';
+  }
+  return trimmed;
+}
+
+export function normalizeAndSortServices(
+  rawServices: ServiceItem[],
+  syncRenamesToSupabase = false
+): ServiceItem[] {
+  const byId = new Map<string, ServiceItem>();
+  const seenNames = new Set<string>();
+
+  for (const srv of rawServices || []) {
+    if (!srv || !srv.id) continue;
+    const rawLabel = (srv.name || srv.title || '').trim();
+    const normalizedName = normalizeServiceName(rawLabel);
+    if (!normalizedName) continue;
+
+    if (syncRenamesToSupabase && srv.name !== normalizedName) {
+      (async () => {
+        try {
+          await supabase
+            .from('services')
+            .update({ name: normalizedName })
+            .eq('id', srv.id);
+        } catch (err) {
+          console.warn('Service rename sync notice:', err);
+        }
+      })();
+    }
+
+    const nameKey = normalizedName.toLowerCase();
+    if (!byId.has(srv.id) && !seenNames.has(nameKey)) {
+      seenNames.add(nameKey);
+      byId.set(srv.id, {
+        ...srv,
+        name: normalizedName,
+      });
+    }
+  }
+
+  const orderMap = new Map<string, number>(
+    OFFICIAL_SERVICE_NAMES.map((name, idx) => [name.toLowerCase(), idx])
+  );
+
+  return Array.from(byId.values()).sort((a, b) => {
+    const nameA = (a.name || a.title || '').toLowerCase();
+    const nameB = (b.name || b.title || '').toLowerCase();
+    const idxA = orderMap.has(nameA) ? orderMap.get(nameA)! : 999;
+    const idxB = orderMap.has(nameB) ? orderMap.get(nameB)! : 999;
+    if (idxA !== idxB) return idxA - idxB;
+    return nameA.localeCompare(nameB);
+  });
+}
+
+export function deduplicateProfiles(rawProfiles: UserProfile[]): UserProfile[] {
+  const profileMapById = new Map<string, UserProfile>();
+  for (const p of rawProfiles || []) {
+    if (!p || !p.id) continue;
+    // Do not include legacy hardcoded non-UUID entries (usr_edson, usr_jailma, usr_rogerio)
+    if (String(p.id).startsWith('usr_')) continue;
+    if (!profileMapById.has(p.id)) {
+      const formattedName = formatProperName(p.full_name ? p.full_name.trim() : null);
+      profileMapById.set(p.id, {
+        id: p.id,
+        full_name: formattedName || null,
+        role: p.role || null,
+        email: p.email || null,
+      });
+    }
+  }
+  return Array.from(profileMapById.values());
+}
 
 export interface ServiceItem {
   id: string;
@@ -117,15 +219,17 @@ interface CRMContextType {
   profileMap: Map<string, string>;
   serviceMap: Map<string, string>;
   leadMap: Map<string, Lead>;
-  refreshAll: (silent?: boolean) => Promise<void>;
+  refreshAll: (silent?: boolean, force?: boolean) => Promise<void>;
   upsertLeadLocally: (lead: Lead, serviceIds?: string[]) => void;
   upsertContactLocally: (contact: Contact, leadIds?: string[]) => void;
+  unlinkLeadContactLocally: (leadId: string, contactId: string) => void;
   upsertInteractionLocally: (interaction: Interaction) => void;
   deleteContactLocally: (contactId: string) => void;
   deleteInteractionLocally: (interactionId: string) => void;
   deleteLeadLocally: (leadId: string) => void;
   getLeadServices: (leadId: string) => string[];
   getContactsForLead: (leadId: string) => Contact[];
+  getPrimaryContactForLead: (leadId: string) => Contact | null;
   getContactLeadIds: (contactId: string) => string[];
   getInteractionsForLead: (leadId: string) => Interaction[];
 }
@@ -150,8 +254,8 @@ export function CRMProvider({
   // ETAPA 2: Inicializar o estado com o cache para renderizar no frame 0 sem spinner
   const [leads, setLeads] = useState<Lead[]>(() => cached?.leads || []);
   const [stages, setStages] = useState<PipelineStage[]>(() => (cached?.stages && cached.stages.length > 0) ? cached.stages : DEFAULT_PIPELINE_STAGES);
-  const [profiles, setProfiles] = useState<UserProfile[]>(() => (cached?.profiles && cached.profiles.length > 0) ? cached.profiles : (currentProfile ? [currentProfile] : []));
-  const [services, setServices] = useState<ServiceItem[]>(() => cached?.services || []);
+  const [profiles, setProfiles] = useState<UserProfile[]>(() => deduplicateProfiles(cached?.profiles || []));
+  const [services, setServices] = useState<ServiceItem[]>(() => normalizeAndSortServices(cached?.services || [], false));
   const [leadServices, setLeadServices] = useState<LeadServiceRelation[]>(() => cached?.leadServices || []);
   const [contacts, setContacts] = useState<Contact[]>(() => cached?.contacts || []);
   const [leadContacts, setLeadContacts] = useState<LeadContactRelation[]>(() => cached?.leadContacts || []);
@@ -165,8 +269,8 @@ export function CRMProvider({
   const loadingPromiseRef = useRef<Promise<void> | null>(null);
 
   // Parallel optimized data fetching with in-flight deduplication
-  const refreshAll = useCallback(async (silent = false) => {
-    if (loadingPromiseRef.current) {
+  const refreshAll = useCallback(async (silent = false, force = false) => {
+    if (loadingPromiseRef.current && !force) {
       return loadingPromiseRef.current;
     }
     if (!silent && !hasLoadedOnceRef.current && !hasCachedData) {
@@ -190,8 +294,8 @@ export function CRMProvider({
           interactionsRes,
         ] = await Promise.all([
           supabase.from('pipeline_stages').select('id, name, position, is_won, is_lost').order('position', { ascending: true }),
-          supabase.from('profiles').select('id, full_name, role'),
-          supabase.from('services').select('id, name, title'),
+          supabase.from('profiles').select('*'),
+          supabase.from('services').select('*'),
           supabase
             .from('leads')
             .select('id, name, cnpj, condominium_type, administrator, unit_count, address, city, lead_source, temperature, current_stage_id, responsible_user_id, loss_reason, created_at')
@@ -205,8 +309,19 @@ export function CRMProvider({
             .order('occurred_at', { ascending: false }),
         ]);
 
-        const nextProfiles = profilesRes.data || [];
-        const nextServices = servicesRes.data || [];
+        const rawProfiles = profilesRes.data || [];
+        rawProfiles.forEach(async (p) => {
+          if (p.full_name) {
+            const formatted = formatProperName(p.full_name);
+            if (formatted !== p.full_name) {
+              try {
+                await supabase.from('profiles').update({ full_name: formatted }).eq('id', p.id);
+              } catch {}
+            }
+          }
+        });
+        const nextProfiles = deduplicateProfiles(rawProfiles);
+        const nextServices = normalizeAndSortServices(servicesRes.data || [], true);
         const nextLeads = leadsRes.data || [];
         const nextLeadServices = leadServicesRes.data || [];
         const nextContacts = contactsRes.data || [];
@@ -263,19 +378,16 @@ export function CRMProvider({
 
         setStages(nextStages);
 
-        // Merge fetched profiles with default team profiles (Edson, Jailma, Rogerio)
-        const fetchedProfiles = profilesRes.data || [];
-        const profileMapById = new Map<string, UserProfile>();
-        DEFAULT_TEAM_PROFILES.forEach((p) => profileMapById.set(p.id, p));
-        if (currentProfile) profileMapById.set(currentProfile.id, currentProfile);
-        fetchedProfiles.forEach((p) => profileMapById.set(p.id, p));
-        const mergedProfiles = Array.from(profileMapById.values());
-        setProfiles(mergedProfiles);
+        // Source profiles exclusively from public.profiles deduplicated by profile.id
+        if (profilesRes.data) {
+          setProfiles(nextProfiles);
+        }
 
         if (servicesRes.data) setServices(nextServices);
         if (leadsRes.data) {
           const stageOverrides = getLeadStageOverrides();
           const lossOverrides = getLeadLossReasonOverrides();
+          const condoTypeOverrides = getLeadCondominiumTypeOverrides();
           const defaultStageId = nextStages[0]?.id || '';
 
           const validStageIds = new Set(nextStages.map((s) => s.id));
@@ -295,6 +407,11 @@ export function CRMProvider({
 
             if (lossOverrides[lead.id] !== undefined) {
               updated.loss_reason = lossOverrides[lead.id];
+            }
+            if (condoTypeOverrides[lead.id]) {
+              updated.condominium_type = condoTypeOverrides[lead.id];
+            } else if (lead.lead_source && lead.lead_source.startsWith('custom_type:')) {
+              updated.condominium_type = lead.lead_source.slice('custom_type:'.length);
             }
             return updated;
           });
@@ -378,7 +495,10 @@ export function CRMProvider({
 
   const profileMap = useMemo(() => {
     const map = new Map<string, string>();
-    profiles.forEach((p) => map.set(p.id, p.full_name || 'Sem nome'));
+    profiles.forEach((p) => {
+      const displayName = formatProperName(p.full_name) || p.email || 'Sem nome';
+      map.set(p.id, displayName);
+    });
     return map;
   }, [profiles]);
 
@@ -414,6 +534,21 @@ export function CRMProvider({
     [leadContacts, contacts]
   );
 
+  const getPrimaryContactForLead = useCallback(
+    (leadId: string): Contact | null => {
+      const linked = getContactsForLead(leadId);
+      if (linked.length === 0) return null;
+      const primaryOverrides = getLeadPrimaryContactOverrides();
+      const preferredId = primaryOverrides[leadId];
+      if (preferredId) {
+        const found = linked.find((c) => c.id === preferredId);
+        if (found) return found;
+      }
+      return linked[0];
+    },
+    [getContactsForLead]
+  );
+
   const getContactLeadIds = useCallback(
     (contactId: string): string[] => {
       return leadContacts
@@ -436,6 +571,9 @@ export function CRMProvider({
   const upsertLeadLocally = useCallback((lead: Lead, serviceIds?: string[]) => {
     if (lead.id && lead.temperature) {
       saveLeadTemperatureOverride(lead.id, lead.temperature);
+    }
+    if (lead.id && lead.condominium_type) {
+      saveLeadCondominiumTypeOverride(lead.id, lead.condominium_type);
     }
     setLeads((prev) => {
       const idx = prev.findIndex((l) => l.id === lead.id);
@@ -467,13 +605,20 @@ export function CRMProvider({
       return [...prev, contact].sort((a, b) => a.name.localeCompare(b.name));
     });
 
-    if (leadIds) {
+    if (leadIds && leadIds.length > 0) {
       setLeadContacts((prev) => {
-        const filtered = prev.filter((lc) => lc.contact_id !== contact.id);
+        const existingOther = prev.filter(
+          (lc) => !(lc.contact_id === contact.id && leadIds.includes(lc.lead_id))
+        );
         const added = leadIds.map((lId) => ({ lead_id: lId, contact_id: contact.id }));
-        return [...filtered, ...added];
+        return [...existingOther, ...added];
       });
     }
+  }, []);
+
+  const unlinkLeadContactLocally = useCallback((leadId: string, contactId: string) => {
+    setLeadContacts((prev) => prev.filter((lc) => !(lc.lead_id === leadId && lc.contact_id === contactId)));
+    deleteLeadPrimaryContactOverride(leadId);
   }, []);
 
   const upsertInteractionLocally = useCallback((interaction: Interaction) => {
@@ -529,12 +674,14 @@ export function CRMProvider({
       refreshAll,
       upsertLeadLocally,
       upsertContactLocally,
+      unlinkLeadContactLocally,
       upsertInteractionLocally,
       deleteContactLocally,
       deleteInteractionLocally,
       deleteLeadLocally,
       getLeadServices,
       getContactsForLead,
+      getPrimaryContactForLead,
       getContactLeadIds,
       getInteractionsForLead,
     }),
@@ -557,12 +704,14 @@ export function CRMProvider({
       refreshAll,
       upsertLeadLocally,
       upsertContactLocally,
+      unlinkLeadContactLocally,
       upsertInteractionLocally,
       deleteContactLocally,
       deleteInteractionLocally,
       deleteLeadLocally,
       getLeadServices,
       getContactsForLead,
+      getPrimaryContactForLead,
       getContactLeadIds,
       getInteractionsForLead,
     ]

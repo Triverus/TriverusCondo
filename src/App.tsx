@@ -10,11 +10,13 @@ import FollowUpsModule from './components/FollowUpsModule.tsx';
 import { CondoFloatingButton } from './components/CondoAssistant/CondoFloatingButton.tsx';
 import { CondoDrawer } from './components/CondoAssistant/CondoDrawer.tsx';
 import ProfileAvatar from './components/ProfileAvatar.tsx';
+import { formatProperName } from './lib/contactAdapter.ts';
 
 export interface UserProfile {
   id: string;
   full_name: string | null;
   role: string | null;
+  email?: string | null;
 }
 
 const CACHED_PROFILE_KEY = 'triverus:cached-profile';
@@ -118,9 +120,10 @@ export default function App() {
         if (cached && cached.id === userId) {
           setProfile(cached);
         } else if (!profileRef.current) {
+          const rawName = sessionRef.current?.user?.user_metadata?.full_name || sessionRef.current?.user?.email?.split('@')[0] || 'Usuário';
           const fallbackUser: UserProfile = {
             id: userId,
-            full_name: sessionRef.current?.user?.user_metadata?.full_name || sessionRef.current?.user?.email?.split('@')[0] || 'Usuário',
+            full_name: formatProperName(rawName),
             role: 'Administrador',
           };
           setProfile(fallbackUser);
@@ -128,9 +131,10 @@ export default function App() {
         }
       } else if (!data) {
         console.warn('Perfil não encontrado em public.profiles. Criando perfil padrão...');
+        const rawName = sessionRef.current?.user?.user_metadata?.full_name || sessionRef.current?.user?.email?.split('@')[0] || 'Usuário';
         const fallbackUser: UserProfile = {
           id: userId,
-          full_name: sessionRef.current?.user?.user_metadata?.full_name || sessionRef.current?.user?.email?.split('@')[0] || 'Usuário',
+          full_name: formatProperName(rawName),
           role: 'Administrador',
         };
         setProfile(fallbackUser);
@@ -145,7 +149,7 @@ export default function App() {
       } else {
         const userProf: UserProfile = {
           id: data.id,
-          full_name: data.full_name,
+          full_name: formatProperName(data.full_name),
           role: data.role,
         };
         setProfile((prev) => {

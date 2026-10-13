@@ -2,8 +2,17 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabase.ts';
 import type { UserProfile } from '../App.tsx';
 import { useCRM, type Lead, type PipelineStage, type ServiceItem, type Contact, type Interaction } from '../lib/crmStore.tsx';
-import { saveLeadStageOverride } from '../lib/crmCache.ts';
+import { saveLeadStageOverride, saveLeadCondominiumTypeOverride, saveLeadPrimaryContactOverride } from '../lib/crmCache.ts';
 import { saveDraft, loadDraft, clearDraft, hasDraft } from '../lib/draftStorage.ts';
+import {
+  type ContactFormState,
+  PRESET_ROLES,
+  formatPhoneMask,
+  normalizePhoneFull,
+  normalizeEmail,
+} from '../lib/contactAdapter.ts';
+import { resolveOrCreateContact, saveOrLinkContact, type ContactSaveResult } from '../lib/contactService.ts';
+import ContactFields from './ContactFields.tsx';
 import {
   WhatsAppIcon,
   EmailIcon,
@@ -50,21 +59,48 @@ export const INTERACTION_TYPES = [
   'Outro',
 ] as const;
 
-export const PRESET_ROLES = [
-  'Síndico',
-  'Subsíndico',
-  'Conselheiro',
-  'Representante da administradora',
-  'Gerente Predial',
-  'Outro',
-];
+export { PRESET_ROLES };
 
-const CONDOMINIUM_TYPES = [
+export const STANDARD_CONDOMINIUM_TYPES = [
   'Residencial',
   'Comercial',
   'Associação de Moradores',
   'Misto',
-];
+] as const;
+
+const CONDOMINIUM_TYPES = [
+  ...STANDARD_CONDOMINIUM_TYPES,
+  'Outro',
+] as const;
+
+function parseCondominiumTypeState(rawType?: string | null): { preset: string; custom: string } {
+  const trimmed = (rawType || 'Residencial').trim();
+  if (!trimmed) return { preset: 'Residencial', custom: '' };
+  if ((STANDARD_CONDOMINIUM_TYPES as readonly string[]).includes(trimmed)) {
+    return { preset: trimmed, custom: '' };
+  }
+  return {
+    preset: 'Outro',
+    custom: trimmed === 'Outro' ? '' : trimmed,
+  };
+}
+
+export function sanitizeCondominiumTypeForDB(type?: string | null): string {
+  const trimmed = (type || '').trim();
+  if ((STANDARD_CONDOMINIUM_TYPES as readonly string[]).includes(trimmed)) {
+    return trimmed;
+  }
+  return 'Residencial';
+}
+
+function normalizePhoneForMatch(phone?: string | null): string {
+  if (!phone) return '';
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length > 11 && digits.startsWith('55')) {
+    return digits.slice(2);
+  }
+  return digits;
+}
 
 export const TEMPERATURE_OPTIONS = ['Frio', 'Morno', 'Quente', 'Cliente'] as const;
 
@@ -161,6 +197,13 @@ interface LeadDraftData {
   formName: string;
   formCnpj: string;
   formCondominiumType: string;
+  formCustomCondominiumType?: string;
+  formContactName?: string;
+  formContactRole?: string;
+  formCustomContactRole?: string;
+  formContactEmail?: string;
+  formContactPhone?: string;
+  formSelectedServiceIds?: string[];
   formAdministrator: string;
   formUnitCount: string;
   formAddress: string;
@@ -304,12 +347,15 @@ export default function LeadsModule({
     refreshAll,
     upsertLeadLocally,
     upsertContactLocally,
+    unlinkLeadContactLocally,
     upsertInteractionLocally,
     deleteContactLocally,
     deleteInteractionLocally,
     deleteLeadLocally,
     getLeadServices,
     getContactsForLead,
+    getPrimaryContactForLead,
+    getContactLeadIds,
     getInteractionsForLead,
   } = useCRM();
 
@@ -658,16 +704,18 @@ export default function LeadsModule({
   const [noteSaving, setNoteSaving] = useState(false);
   const [noteError, setNoteError] = useState<string | null>(null);
 
-  // Shared Confirmation Modal for Deletions
+  // Shared Confirmation Modal for Deletions / Unlinking
   const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
     open: boolean;
     title: string;
     message: string;
+    confirmLabel?: string;
     onConfirm: () => Promise<void>;
   }>({
     open: false,
     title: '',
     message: '',
+    confirmLabel: 'Confirmar exclusão',
     onConfirm: async () => {},
   });
   const [isDeletingItem, setIsDeletingItem] = useState(false);
@@ -679,12 +727,20 @@ export default function LeadsModule({
 
   // Quiz Steps (1 to 6)
   const [quizStep, setQuizStep] = useState(1);
-  const totalQuizSteps = 5;
+  const totalQuizSteps = 6;
 
   // Form States
   const [formName, setFormName] = useState('');
   const [formCnpj, setFormCnpj] = useState('');
+  const [formContactId, setFormContactId] = useState<string | null>(null);
+  const [formContactName, setFormContactName] = useState('');
+  const [formContactRole, setFormContactRole] = useState('Síndico');
+  const [formCustomContactRole, setFormCustomContactRole] = useState('');
+  const [formContactEmail, setFormContactEmail] = useState('');
+  const [formContactPhone, setFormContactPhone] = useState('');
   const [formCondominiumType, setFormCondominiumType] = useState('Residencial');
+  const [formCustomCondominiumType, setFormCustomCondominiumType] = useState('');
+  const [formSelectedServiceIds, setFormSelectedServiceIds] = useState<string[]>([]);
   const [formAdministrator, setFormAdministrator] = useState('');
   const [formUnitCount, setFormUnitCount] = useState('');
   const [formAddress, setFormAddress] = useState('');
@@ -731,7 +787,13 @@ export default function LeadsModule({
     if (createDraft && createDraft.formName?.trim()) {
       setFormName(createDraft.formName || '');
       setFormCnpj(createDraft.formCnpj || '');
-      setFormCondominiumType(createDraft.formCondominiumType || 'Residencial');
+      setFormContactName(createDraft.formContactName || '');
+      setFormContactEmail(createDraft.formContactEmail || '');
+      setFormContactPhone(createDraft.formContactPhone || '');
+      const parsedType = parseCondominiumTypeState(createDraft.formCondominiumType);
+      setFormCondominiumType(parsedType.preset);
+      setFormCustomCondominiumType(createDraft.formCustomCondominiumType ?? parsedType.custom);
+      setFormSelectedServiceIds(createDraft.formSelectedServiceIds || []);
       setFormAdministrator(createDraft.formAdministrator || '');
       setFormUnitCount(createDraft.formUnitCount || '');
       setFormAddress(createDraft.formAddress || '');
@@ -752,7 +814,12 @@ export default function LeadsModule({
         quizStep,
         formName,
         formCnpj,
+        formContactName,
+        formContactEmail,
+        formContactPhone,
         formCondominiumType,
+        formCustomCondominiumType,
+        formSelectedServiceIds,
         formAdministrator,
         formUnitCount,
         formAddress,
@@ -761,7 +828,15 @@ export default function LeadsModule({
         formCurrentStageId,
         formResponsibleUserId,
       };
-      if (formName.trim() || formCnpj.trim() || formAdministrator.trim() || formUnitCount.trim()) {
+      if (
+        formName.trim() ||
+        formCnpj.trim() ||
+        formContactName.trim() ||
+        formContactEmail.trim() ||
+        formContactPhone.trim() ||
+        formAdministrator.trim() ||
+        formUnitCount.trim()
+      ) {
         saveDraft(DRAFT_LEAD_CREATE_KEY, data);
       }
     } else if (modalMode === 'edit' && selectedLead) {
@@ -769,7 +844,12 @@ export default function LeadsModule({
         quizStep,
         formName,
         formCnpj,
+        formContactName,
+        formContactEmail,
+        formContactPhone,
         formCondominiumType,
+        formCustomCondominiumType,
+        formSelectedServiceIds,
         formAdministrator,
         formUnitCount,
         formAddress,
@@ -786,7 +866,12 @@ export default function LeadsModule({
     quizStep,
     formName,
     formCnpj,
+    formContactName,
+    formContactEmail,
+    formContactPhone,
     formCondominiumType,
+    formCustomCondominiumType,
+    formSelectedServiceIds,
     formAdministrator,
     formUnitCount,
     formAddress,
@@ -1267,7 +1352,16 @@ export default function LeadsModule({
     if (draft && draft.formName?.trim()) {
       setFormName(draft.formName || '');
       setFormCnpj(draft.formCnpj || '');
-      setFormCondominiumType(draft.formCondominiumType || 'Residencial');
+      setFormContactId(null);
+      setFormContactName(draft.formContactName || '');
+      setFormContactRole('Síndico');
+      setFormCustomContactRole('');
+      setFormContactEmail(draft.formContactEmail || '');
+      setFormContactPhone(draft.formContactPhone ? formatPhoneMask(draft.formContactPhone) : '');
+      const parsedType = parseCondominiumTypeState(draft.formCondominiumType);
+      setFormCondominiumType(parsedType.preset);
+      setFormCustomCondominiumType(draft.formCustomCondominiumType ?? parsedType.custom);
+      setFormSelectedServiceIds(draft.formSelectedServiceIds || []);
       setFormAdministrator(draft.formAdministrator || '');
       setFormUnitCount(draft.formUnitCount || '');
       setFormAddress(draft.formAddress || '');
@@ -1280,7 +1374,15 @@ export default function LeadsModule({
     } else {
       setFormName('');
       setFormCnpj('');
+      setFormContactId(null);
+      setFormContactName('');
+      setFormContactRole('Síndico');
+      setFormCustomContactRole('');
+      setFormContactEmail('');
+      setFormContactPhone('');
       setFormCondominiumType('Residencial');
+      setFormCustomCondominiumType('');
+      setFormSelectedServiceIds([]);
       setFormAdministrator('');
       setFormUnitCount('');
       setFormAddress('');
@@ -1295,29 +1397,92 @@ export default function LeadsModule({
     setModalMode('create');
   };
 
-  const handleOpenEdit = (lead: Lead) => {
+  const handleOpenEdit = async (lead: Lead) => {
     setFormError(null);
     setSelectedLead(lead);
     setActiveMenuLeadId(null);
+
+    const linkedServiceIds = getLeadServices(lead.id);
+    let primaryContact = getPrimaryContactForLead(lead.id);
+
+    // Fallback de alta precisão: se não estiver no store local ainda, consulta direto no Supabase
+    if (!primaryContact) {
+      try {
+        const { data: lcRows } = await supabase
+          .from('lead_contacts')
+          .select('contact_id')
+          .eq('lead_id', lead.id);
+
+        if (lcRows && lcRows.length > 0) {
+          const contactIds = lcRows.map((r) => r.contact_id);
+          const { data: cRows } = await supabase
+            .from('contacts')
+            .select('id, name, role_title, phone, email, created_at')
+            .in('id', contactIds);
+
+          if (cRows && cRows.length > 0) {
+            primaryContact = cRows[0];
+            cRows.forEach((c) => upsertContactLocally(c, [lead.id]));
+          }
+        }
+      } catch (err) {
+        console.warn('Consulta de contatos no Supabase em handleOpenEdit:', err);
+      }
+    }
 
     const editDraft = loadDraft<LeadDraftData>(getLeadEditDraftKey(lead.id));
     if (editDraft && editDraft.formName) {
       setFormName(editDraft.formName);
       setFormCnpj(editDraft.formCnpj || '');
-      setFormCondominiumType(editDraft.formCondominiumType || 'Residencial');
+      setFormContactId(primaryContact?.id || null);
+      setFormContactName(editDraft.formContactName || (primaryContact?.name || ''));
+      const isPresetRole = (PRESET_ROLES as readonly string[]).includes(primaryContact?.role_title || '');
+      setFormContactRole(isPresetRole ? (primaryContact?.role_title || 'Síndico') : 'Outro');
+      setFormCustomContactRole(isPresetRole ? '' : (primaryContact?.role_title || ''));
+      setFormContactEmail(editDraft.formContactEmail || (primaryContact?.email || ''));
+      setFormContactPhone(
+        editDraft.formContactPhone
+          ? formatPhoneMask(editDraft.formContactPhone)
+          : primaryContact?.phone
+          ? formatPhoneMask(primaryContact.phone)
+          : ''
+      );
+      const parsedType = parseCondominiumTypeState(editDraft.formCondominiumType);
+      setFormCondominiumType(parsedType.preset);
+      setFormCustomCondominiumType(editDraft.formCustomCondominiumType ?? parsedType.custom);
+      setFormSelectedServiceIds(editDraft.formSelectedServiceIds ?? linkedServiceIds);
       setFormAdministrator(editDraft.formAdministrator || '');
       setFormUnitCount(editDraft.formUnitCount || '');
       setFormAddress(editDraft.formAddress || '');
       setFormCity(editDraft.formCity || '');
       setFormTemperature((editDraft.formTemperature as 'Frio' | 'Morno' | 'Quente' | 'Cliente') || 'Morno');
       setFormCurrentStageId(editDraft.formCurrentStageId || '');
-      setFormResponsibleUserId(editDraft.formResponsibleUserId || currentProfile.id);
+      setFormResponsibleUserId(editDraft.formResponsibleUserId ?? (lead.responsible_user_id || ''));
       setQuizStep(editDraft.quizStep || 1);
       setIsRestoredDraft(true);
     } else {
       setFormName(lead.name || '');
       setFormCnpj(lead.cnpj || '');
-      setFormCondominiumType(lead.condominium_type || 'Residencial');
+      if (primaryContact) {
+        setFormContactId(primaryContact.id);
+        setFormContactName(primaryContact.name || '');
+        const isPreset = (PRESET_ROLES as readonly string[]).includes(primaryContact.role_title || '');
+        setFormContactRole(isPreset ? (primaryContact.role_title || 'Síndico') : 'Outro');
+        setFormCustomContactRole(isPreset ? '' : (primaryContact.role_title || ''));
+        setFormContactEmail(primaryContact.email || '');
+        setFormContactPhone(primaryContact.phone ? formatPhoneMask(primaryContact.phone) : '');
+      } else {
+        setFormContactId(null);
+        setFormContactName('');
+        setFormContactRole('Síndico');
+        setFormCustomContactRole('');
+        setFormContactEmail('');
+        setFormContactPhone('');
+      }
+      const parsedType = parseCondominiumTypeState(lead.condominium_type);
+      setFormCondominiumType(parsedType.preset);
+      setFormCustomCondominiumType(parsedType.custom);
+      setFormSelectedServiceIds(linkedServiceIds);
       setFormAdministrator(lead.administrator || '');
       setFormUnitCount(lead.unit_count != null ? String(lead.unit_count) : '');
       setFormAddress(lead.address || '');
@@ -1325,7 +1490,8 @@ export default function LeadsModule({
       setFormTemperature((lead.temperature as 'Frio' | 'Morno' | 'Quente' | 'Cliente') || 'Morno');
       const stageId = lead.current_stage_id || (stages.length > 0 ? stages[0].id : '');
       setFormCurrentStageId(stageId);
-      setFormResponsibleUserId(lead.responsible_user_id || currentProfile.id);
+      setFormLossReason(lead.loss_reason || '');
+      setFormResponsibleUserId(lead.responsible_user_id || '');
       setQuizStep(1);
       setIsRestoredDraft(false);
     }
@@ -1345,6 +1511,13 @@ export default function LeadsModule({
     setFormError(null);
     setQuizStep(1);
     setIsRestoredDraft(false);
+    // Reset contato do formulário
+    setFormContactId(null);
+    setFormContactName('');
+    setFormContactRole('Síndico');
+    setFormCustomContactRole('');
+    setFormContactEmail('');
+    setFormContactPhone('');
   };
 
   const handleDiscardLeadDraft = () => {
@@ -1359,8 +1532,23 @@ export default function LeadsModule({
 
   const handleNextQuizStep = () => {
     setFormError(null);
-    if (quizStep === 1 && !formName.trim()) {
-      setFormError('Informe o nome do condomínio para avançar.');
+    if (quizStep === 1) {
+      if (!formName.trim()) {
+        setFormError('Informe o nome do condomínio para avançar.');
+        return;
+      }
+    }
+    if (quizStep === 2) {
+      const hasContactAny = Boolean(
+        formContactName.trim() || formContactEmail.trim() || formContactPhone.trim()
+      );
+      if (hasContactAny && !formContactName.trim()) {
+        setFormError('Informe o nome do contato ou deixe os campos de contato em branco.');
+        return;
+      }
+    }
+    if (quizStep === 3 && formCondominiumType === 'Outro' && !formCustomCondominiumType.trim()) {
+      setFormError('Especifique o tipo de condomínio.');
       return;
     }
     if (quizStep < totalQuizSteps) {
@@ -1389,6 +1577,28 @@ export default function LeadsModule({
       return;
     }
 
+    const cName = formContactName.trim();
+    const cEmail = formContactEmail.trim().toLowerCase();
+    const cPhone = formContactPhone.trim();
+    const hasContactInput = Boolean(cName || cEmail || cPhone);
+
+    if (hasContactInput && !cName) {
+      setQuizStep(1);
+      setFormError('Informe o nome do contato ou deixe os campos de contato em branco.');
+      return;
+    }
+
+    let finalCondominiumType = formCondominiumType || 'Residencial';
+    if (formCondominiumType === 'Outro') {
+      const customTrimmed = formCustomCondominiumType.trim();
+      if (!customTrimmed) {
+        setQuizStep(2);
+        setFormError('Especifique o tipo de condomínio ao selecionar "Outro".');
+        return;
+      }
+      finalCondominiumType = customTrimmed;
+    }
+
     let unitCountNum: number | null = null;
     const unitCountTrimmed = formUnitCount.trim();
     if (unitCountTrimmed) {
@@ -1405,7 +1615,7 @@ export default function LeadsModule({
 
     const stageIdToUse = formCurrentStageId || (stages.length > 0 ? stages[0].id : null);
     let dbStageId = isValidUUID(stageIdToUse) ? stageIdToUse : (stages.find((s) => isValidUUID(s.id))?.id || null);
-    
+
     // Fallback: Se não temos um UUID de estágio válido no estado local, busca o primeiro estágio do Supabase
     if (!dbStageId) {
       try {
@@ -1421,8 +1631,13 @@ export default function LeadsModule({
       } catch {}
     }
 
+    // Preserve responsible_user_id when editing; only default to currentProfile on create
     const validResponsibleId = isValidUUID(formResponsibleUserId)
       ? formResponsibleUserId
+      : modalMode === 'edit'
+      ? isValidUUID(selectedLead?.responsible_user_id)
+        ? selectedLead!.responsible_user_id!
+        : null
       : isValidUUID(currentProfile?.id)
       ? currentProfile.id
       : null;
@@ -1434,7 +1649,7 @@ export default function LeadsModule({
       const leadPayload = {
         name: formName.trim(),
         cnpj: formCnpj.trim() || null,
-        condominium_type: formCondominiumType || 'Residencial',
+        condominium_type: finalCondominiumType,
         administrator: formAdministrator.trim() || null,
         unit_count: unitCountNum ?? 0,
         address: formAddress.trim() || null,
@@ -1446,6 +1661,9 @@ export default function LeadsModule({
 
       let savedLead: Lead | null = null;
 
+      // 1 & 2 & 3. Criar / Atualizar lead e obter savedLead.id
+      const isCustomCondoType = !(STANDARD_CONDOMINIUM_TYPES as readonly string[]).includes(finalCondominiumType);
+
       if (modalMode === 'create') {
         const { data: createdLead, error: createError } = await supabase
           .from('leads')
@@ -1454,9 +1672,9 @@ export default function LeadsModule({
           .single();
 
         if (createError) {
-          // Se falhou por chave estrangeira, sintaxe de UUID ou check constraint, tenta fallback com valores padronizados
           const fallbackPayload = {
             ...leadPayload,
+            condominium_type: sanitizeCondominiumTypeForDB(finalCondominiumType),
             temperature: 'Morno',
             current_stage_id: dbStageId,
             responsible_user_id: validResponsibleId,
@@ -1467,8 +1685,22 @@ export default function LeadsModule({
             .select()
             .single();
 
-          if (retryError) throw retryError;
-          savedLead = retryLead;
+          if (retryError) {
+            const safeFallbackPayload = {
+              ...fallbackPayload,
+              condominium_type: 'Residencial',
+            };
+            const { data: finalRetryLead, error: finalRetryError } = await supabase
+              .from('leads')
+              .insert([safeFallbackPayload])
+              .select()
+              .single();
+
+            if (finalRetryError) throw finalRetryError;
+            savedLead = finalRetryLead;
+          } else {
+            savedLead = retryLead;
+          }
         } else {
           savedLead = createdLead;
         }
@@ -1476,20 +1708,6 @@ export default function LeadsModule({
         if (!savedLead) {
           throw new Error('Não foi possível obter o condomínio criado do banco de dados.');
         }
-
-        // Preserve user's chosen temperature in local state and cache
-        const localLead: Lead = {
-          ...savedLead,
-          temperature: formTemperature || savedLead.temperature,
-          current_stage_id: formCurrentStageId || savedLead.current_stage_id,
-        };
-
-        upsertLeadLocally(localLead);
-        clearDraft(DRAFT_LEAD_CREATE_KEY);
-        setStatusFeedback({
-          type: 'success',
-          message: `Condomínio "${savedLead.name}" salvo com sucesso no banco!`,
-        });
       } else if (modalMode === 'edit' && selectedLead) {
         const { data: updatedLead, error: updateError } = await supabase
           .from('leads')
@@ -1501,6 +1719,7 @@ export default function LeadsModule({
         if (updateError) {
           const fallbackPayload = {
             ...leadPayload,
+            condominium_type: sanitizeCondominiumTypeForDB(finalCondominiumType),
             temperature: 'Morno',
             current_stage_id: dbStageId,
             responsible_user_id: validResponsibleId,
@@ -1512,8 +1731,23 @@ export default function LeadsModule({
             .select()
             .single();
 
-          if (retryError) throw retryError;
-          savedLead = retryLead;
+          if (retryError) {
+            const safeFallbackPayload = {
+              ...fallbackPayload,
+              condominium_type: 'Residencial',
+            };
+            const { data: finalRetryLead, error: finalRetryError } = await supabase
+              .from('leads')
+              .update(safeFallbackPayload)
+              .eq('id', selectedLead.id)
+              .select()
+              .single();
+
+            if (finalRetryError) throw finalRetryError;
+            savedLead = finalRetryLead;
+          } else {
+            savedLead = retryLead;
+          }
         } else {
           savedLead = updatedLead;
         }
@@ -1521,33 +1755,191 @@ export default function LeadsModule({
         if (!savedLead) {
           throw new Error('Não foi possível atualizar o condomínio no banco de dados.');
         }
+      }
 
-        // Preserve user's chosen temperature in local state and cache
-        const localLead: Lead = {
-          ...savedLead,
-          temperature: formTemperature || savedLead.temperature,
-          current_stage_id: formCurrentStageId || savedLead.current_stage_id,
+      if (!savedLead) {
+        throw new Error('Erro inesperado ao salvar condomínio.');
+      }
+
+      // Persistir override local e metadado em lead_source quando o tipo de condomínio for personalizado ("Outro")
+      saveLeadCondominiumTypeOverride(savedLead.id, finalCondominiumType);
+      if (isCustomCondoType) {
+        try {
+          await supabase
+            .from('leads')
+            .update({ lead_source: `custom_type:${finalCondominiumType}` })
+            .eq('id', savedLead.id);
+        } catch {}
+      } else if (savedLead.lead_source && savedLead.lead_source.startsWith('custom_type:')) {
+        try {
+          await supabase
+            .from('leads')
+            .update({ lead_source: null })
+            .eq('id', savedLead.id);
+        } catch {}
+      }
+
+      let contactRelationFailed = false;
+      let servicesRelationFailed = false;
+
+      // 4 & 5. Se houver contato preenchido na Etapa 1: salvar/vincular contact e lead_contacts
+      if (hasContactInput) {
+        const contactFormState: ContactFormState = {
+          id: formContactId || undefined,
+          name: cName,
+          roleTitle: formContactRole,
+          customRoleTitle: formCustomContactRole,
+          phone: cPhone,
+          email: cEmail,
         };
 
-        upsertLeadLocally(localLead);
+        const contactResult = await resolveOrCreateContact({
+          leadId: savedLead.id,
+          leadName: savedLead.name,
+          contactState: contactFormState,
+          existingContacts: contacts,
+          isPrimary: true,
+        });
+
+        if (!contactResult.success) {
+          console.error('Erro ao vincular contato ao condomínio:', contactResult.error);
+          contactRelationFailed = true;
+        } else {
+          upsertContactLocally(contactResult.contact, [savedLead.id]);
+        }
+      } else if (!hasContactInput && formContactId && modalMode === 'edit') {
+        try {
+          await supabase
+            .from('lead_contacts')
+            .delete()
+            .eq('lead_id', savedLead.id)
+            .eq('contact_id', formContactId);
+          unlinkLeadContactLocally(savedLead.id, formContactId);
+        } catch (e) {
+          console.warn('Aviso ao desvincular contato removido no lead:', e);
+        }
+      }
+
+      // 6. Criar / sincronizar vínculos em public.lead_services
+      const validSelectedServiceIds = Array.from(
+        new Set(formSelectedServiceIds.filter((id) => isValidUUID(id)))
+      );
+
+      if (modalMode === 'create') {
+        if (validSelectedServiceIds.length > 0) {
+          try {
+            const rowsToInsert = validSelectedServiceIds.map((serviceId) => ({
+              lead_id: savedLead!.id,
+              service_id: serviceId,
+            }));
+            const { error: insertServicesErr } = await supabase
+              .from('lead_services')
+              .insert(rowsToInsert);
+            if (insertServicesErr) throw insertServicesErr;
+          } catch (srvErr) {
+            console.error('Erro ao vincular serviços ao condomínio:', srvErr);
+            servicesRelationFailed = true;
+          }
+        }
+      } else if (modalMode === 'edit' && selectedLead) {
+        try {
+          const { data: currentRows, error: fetchLsErr } = await supabase
+            .from('lead_services')
+            .select('lead_id, service_id')
+            .eq('lead_id', savedLead.id);
+
+          if (fetchLsErr) throw fetchLsErr;
+
+          const existingServiceIds = (currentRows || []).map((r) => r.service_id);
+          const toAdd = validSelectedServiceIds.filter((id) => !existingServiceIds.includes(id));
+          const toRemove = existingServiceIds.filter((id) => !validSelectedServiceIds.includes(id));
+
+          if (toRemove.length > 0) {
+            const { error: delLsErr } = await supabase
+              .from('lead_services')
+              .delete()
+              .eq('lead_id', savedLead.id)
+              .in('service_id', toRemove);
+            if (delLsErr) throw delLsErr;
+          }
+
+          if (toAdd.length > 0) {
+            const { error: addLsErr } = await supabase
+              .from('lead_services')
+              .insert(
+                toAdd.map((serviceId) => ({
+                  lead_id: savedLead!.id,
+                  service_id: serviceId,
+                }))
+              );
+            if (addLsErr) throw addLsErr;
+          }
+        } catch (srvErr) {
+          console.error('Erro ao sincronizar serviços do condomínio:', srvErr);
+          servicesRelationFailed = true;
+        }
+      }
+
+      const localLead: Lead = {
+        ...savedLead,
+        condominium_type: finalCondominiumType,
+        temperature: formTemperature || savedLead.temperature,
+        current_stage_id: formCurrentStageId || savedLead.current_stage_id,
+        created_at: savedLead.created_at || selectedLead?.created_at || new Date().toISOString(),
+      };
+
+      upsertLeadLocally(localLead, validSelectedServiceIds);
+
+      if (modalMode === 'create') {
+        clearDraft(DRAFT_LEAD_CREATE_KEY);
+      } else if (modalMode === 'edit' && selectedLead) {
         clearDraft(getLeadEditDraftKey(selectedLead.id));
 
         const targetStage = stages.find((s) => s.id === (formCurrentStageId || savedLead?.current_stage_id));
-        const isTargetClient = targetStage?.is_won || formCurrentStageId === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
-        const prevStageObj = selectedLead ? stages.find((s) => s.id === selectedLead.current_stage_id) : null;
-        const wasClient = selectedLead ? (prevStageObj?.is_won || selectedLead.current_stage_id === 'stg_cliente' || prevStageObj?.name?.toLowerCase().includes('cliente')) : false;
+        const isTargetClient =
+          targetStage?.is_won ||
+          formCurrentStageId === 'stg_cliente' ||
+          targetStage?.name?.toLowerCase().includes('cliente');
+        const prevStageObj = selectedLead
+          ? stages.find((s) => s.id === selectedLead.current_stage_id)
+          : null;
+        const wasClient = selectedLead
+          ? prevStageObj?.is_won ||
+            selectedLead.current_stage_id === 'stg_cliente' ||
+            prevStageObj?.name?.toLowerCase().includes('cliente')
+          : false;
 
         if (isTargetClient && !wasClient) {
           celebrateClientConversion();
         }
+      }
 
+      if (contactRelationFailed && servicesRelationFailed) {
+        setStatusFeedback({
+          type: 'error',
+          message: 'Condomínio salvo, mas houve erro ao vincular contato e serviços.',
+        });
+      } else if (contactRelationFailed) {
+        setStatusFeedback({
+          type: 'error',
+          message: 'Condomínio salvo, mas o contato não pôde ser vinculado.',
+        });
+      } else if (servicesRelationFailed) {
+        setStatusFeedback({
+          type: 'error',
+          message: 'Condomínio salvo, mas houve erro ao vincular serviços.',
+        });
+      } else {
         setStatusFeedback({
           type: 'success',
-          message: `Condomínio "${savedLead.name}" atualizado com sucesso!`,
+          message:
+            modalMode === 'create'
+              ? `Condomínio "${savedLead.name}" salvo com sucesso no banco!`
+              : `Condomínio "${savedLead.name}" atualizado com sucesso!`,
         });
       }
 
-      refreshAll(true);
+      await refreshAll(true, true);
       handleCloseModal();
     } catch (err: any) {
       console.error('Erro ao salvar condomínio:', err);
@@ -1680,7 +2072,7 @@ export default function LeadsModule({
   };
 
   const handleOpenEditWhatsAppContact = (contact: Contact) => {
-    const isStandardRole = PRESET_ROLES.includes(contact.role_title || '');
+    const isStandardRole = (PRESET_ROLES as readonly string[]).includes(contact.role_title || '');
     setWhatsappPopover((prev) => ({
       ...prev,
       mode: 'edit',
@@ -1741,82 +2133,45 @@ export default function LeadsModule({
       return;
     }
 
-    const finalRole = waRole === 'Outro' ? waCustomRole.trim() || null : waRole;
     setWaSaving(true);
 
     try {
-      const contactPayload = {
+      const contactFormState: ContactFormState = {
+        id: whatsappPopover.editingContactId || undefined,
         name: waName.trim(),
-        role_title: finalRole,
+        roleTitle: waRole,
+        customRoleTitle: waCustomRole,
         phone: waPhone.trim(),
+        email: '',
       };
 
-      let savedContact: Contact = {
-        id: whatsappPopover.editingContactId || `cnt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        ...contactPayload,
-        created_at: new Date().toISOString(),
-      };
+      const result = await resolveOrCreateContact({
+        leadId: whatsappPopover.lead.id,
+        leadName: whatsappPopover.lead.name,
+        contactState: contactFormState,
+        existingContacts: contacts,
+        isPrimary: getContactsForLead(whatsappPopover.lead.id).length === 0,
+      });
 
-      if (whatsappPopover.mode === 'edit' && whatsappPopover.editingContactId) {
-        try {
-          const { data, error } = await supabase
-            .from('contacts')
-            .update(contactPayload)
-            .eq('id', whatsappPopover.editingContactId)
-            .select()
-            .maybeSingle();
-
-          if (!error && data) {
-            savedContact = data;
-          }
-        } catch (err) {
-          console.warn('Supabase update contact notice:', err);
-        }
-        upsertContactLocally(savedContact, [whatsappPopover.lead.id]);
-        setStatusFeedback({
-          type: 'success',
-          message: `Contato "${savedContact.name}" atualizado com sucesso!`,
-        });
-      } else {
-        try {
-          const { data: createdContact, error: createError } = await supabase
-            .from('contacts')
-            .insert([contactPayload])
-            .select()
-            .maybeSingle();
-
-          if (!createError && createdContact) {
-            savedContact = createdContact;
-            await supabase
-              .from('lead_contacts')
-              .insert([{ lead_id: whatsappPopover.lead.id, contact_id: createdContact.id }]);
-          }
-        } catch (err) {
-          console.warn('Supabase insert contact notice:', err);
-        }
-
-        upsertContactLocally(savedContact, [whatsappPopover.lead.id]);
-        setStatusFeedback({
-          type: 'success',
-          message: `Contato "${savedContact.name}" adicionado com sucesso!`,
-        });
+      if (!result.success) {
+        setWaError(result.error || 'Erro ao salvar contato.');
+        setWaSaving(false);
+        return;
       }
 
+      upsertContactLocally(result.contact, [whatsappPopover.lead.id]);
+      setStatusFeedback({
+        type: 'success',
+        message: result.reused
+          ? `Contato "${result.contact.name}" vinculado a este condomínio!`
+          : `Contato "${result.contact.name}" adicionado com sucesso!`,
+      });
+
+      await refreshAll(true, true);
       setWhatsappPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }));
     } catch (err: any) {
       console.error('Error saving WhatsApp contact:', err);
-      const fallbackContact: Contact = {
-        id: whatsappPopover.editingContactId || `cnt_${Date.now()}`,
-        name: waName.trim(),
-        role_title: finalRole,
-        phone: waPhone.trim(),
-      };
-      upsertContactLocally(fallbackContact, [whatsappPopover.lead.id]);
-      setStatusFeedback({
-        type: 'success',
-        message: `Contato "${fallbackContact.name}" salvo com sucesso!`,
-      });
-      setWhatsappPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }));
+      setWaError(err?.message || 'Erro ao salvar contato.');
     } finally {
       setWaSaving(false);
     }
@@ -1844,7 +2199,7 @@ export default function LeadsModule({
   };
 
   const handleOpenEditEmailContact = (contact: Contact) => {
-    const isStandardRole = PRESET_ROLES.includes(contact.role_title || '');
+    const isStandardRole = (PRESET_ROLES as readonly string[]).includes(contact.role_title || '');
     setEmailPopover((prev) => ({
       ...prev,
       mode: 'edit',
@@ -1884,105 +2239,68 @@ export default function LeadsModule({
       return;
     }
 
-    const finalRole = emRole === 'Outro' ? emCustomRole.trim() || null : emRole;
     setEmSaving(true);
 
     try {
-      const contactPayload = {
+      const contactFormState: ContactFormState = {
+        id: emailPopover.editingContactId || undefined,
         name: emName.trim(),
-        role_title: finalRole,
+        roleTitle: emRole,
+        customRoleTitle: emCustomRole,
+        phone: '',
         email: emailTrimmed,
       };
 
-      let savedContact: Contact = {
-        id: emailPopover.editingContactId || `cnt_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-        ...contactPayload,
-        created_at: new Date().toISOString(),
-      };
+      const result = await resolveOrCreateContact({
+        leadId: emailPopover.lead.id,
+        leadName: emailPopover.lead.name,
+        contactState: contactFormState,
+        existingContacts: contacts,
+        isPrimary: getContactsForLead(emailPopover.lead.id).length === 0,
+      });
 
-      if (emailPopover.mode === 'edit' && emailPopover.editingContactId) {
-        try {
-          const { data, error } = await supabase
-            .from('contacts')
-            .update(contactPayload)
-            .eq('id', emailPopover.editingContactId)
-            .select()
-            .maybeSingle();
-
-          if (!error && data) {
-            savedContact = data;
-          }
-        } catch (err) {
-          console.warn('Supabase update contact notice:', err);
-        }
-        upsertContactLocally(savedContact, [emailPopover.lead.id]);
-        setStatusFeedback({
-          type: 'success',
-          message: `Contato "${savedContact.name}" atualizado com sucesso!`,
-        });
-      } else {
-        try {
-          const { data: createdContact, error: createError } = await supabase
-            .from('contacts')
-            .insert([contactPayload])
-            .select()
-            .maybeSingle();
-
-          if (!createError && createdContact) {
-            savedContact = createdContact;
-            await supabase
-              .from('lead_contacts')
-              .insert([{ lead_id: emailPopover.lead.id, contact_id: createdContact.id }]);
-          }
-        } catch (err) {
-          console.warn('Supabase insert contact notice:', err);
-        }
-
-        upsertContactLocally(savedContact, [emailPopover.lead.id]);
-        setStatusFeedback({
-          type: 'success',
-          message: `Contato "${savedContact.name}" adicionado com sucesso!`,
-        });
+      if (!result.success) {
+        setEmError(result.error || 'Erro ao salvar contato.');
+        setEmSaving(false);
+        return;
       }
 
+      upsertContactLocally(result.contact, [emailPopover.lead.id]);
+      setStatusFeedback({
+        type: 'success',
+        message: result.reused
+          ? `Contato "${result.contact.name}" vinculado a este condomínio!`
+          : `Contato "${result.contact.name}" adicionado com sucesso!`,
+      });
+
+      await refreshAll(true, true);
       setEmailPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }));
     } catch (err: any) {
       console.error('Error saving Email contact:', err);
-      const fallbackContact: Contact = {
-        id: emailPopover.editingContactId || `cnt_${Date.now()}`,
-        name: emName.trim(),
-        role_title: finalRole,
-        email: emailTrimmed,
-      };
-      upsertContactLocally(fallbackContact, [emailPopover.lead.id]);
-      setStatusFeedback({
-        type: 'success',
-        message: `Contato "${fallbackContact.name}" salvo com sucesso!`,
-      });
-      setEmailPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }));
+      setEmError(err?.message || 'Erro ao salvar contato.');
     } finally {
       setEmSaving(false);
     }
   };
 
-  // Contact Delete with confirmation
+  // Contact Unlink from Condominium (NÃO apaga de public.contacts)
   const handleRequestDeleteContact = (contact: Contact, leadId: string) => {
     setDeleteConfirmModal({
       open: true,
-      title: 'Excluir contato',
-      message: `Tem certeza que deseja excluir o contato "${contact.name}"? Essa ação não poderá ser desfeita.`,
+      title: 'Desvincular contato',
+      message: `Desvincular ${contact.name} deste condomínio? O contato continuará disponível caso esteja vinculado a outros condomínios.`,
+      confirmLabel: 'Desvincular',
       onConfirm: async () => {
         setIsDeletingItem(true);
         try {
           await supabase.from('lead_contacts').delete().match({ lead_id: leadId, contact_id: contact.id });
-          await supabase.from('contacts').delete().eq('id', contact.id);
-          deleteContactLocally(contact.id);
-          refreshAll(true);
-          setStatusFeedback({ type: 'success', message: 'Contato excluído com sucesso.' });
+          unlinkLeadContactLocally(leadId, contact.id);
+          await refreshAll(true, true);
+          setStatusFeedback({ type: 'success', message: `Contato "${contact.name}" desvinculado deste condomínio com sucesso.` });
           setDeleteConfirmModal((prev) => ({ ...prev, open: false }));
         } catch (err: any) {
-          console.error('Error deleting contact:', err);
-          setStatusFeedback({ type: 'error', message: 'Erro ao excluir contato.' });
+          console.error('Error unlinking contact:', err);
+          setStatusFeedback({ type: 'error', message: 'Erro ao desvincular contato deste condomínio.' });
         } finally {
           setIsDeletingItem(false);
         }
@@ -2435,7 +2753,7 @@ export default function LeadsModule({
                             <button
                               type="button"
                               onClick={() => handleRequestDeleteContact(contact, whatsappPopover.lead!.id)}
-                              title="Excluir contato"
+                              title="Desvincular contato deste condomínio"
                               className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
                             >
                               <TrashIcon className="w-3.5 h-3.5" />
@@ -2622,7 +2940,7 @@ export default function LeadsModule({
                             <button
                               type="button"
                               onClick={() => handleRequestDeleteContact(contact, emailPopover.lead!.id)}
-                              title="Excluir contato"
+                              title="Desvincular contato deste condomínio"
                               className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
                             >
                               <TrashIcon className="w-3.5 h-3.5" />
@@ -2897,7 +3215,7 @@ export default function LeadsModule({
                 disabled={isDeletingItem}
                 className="px-4 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-50"
               >
-                {isDeletingItem ? 'Excluindo...' : 'Confirmar exclusão'}
+                {deleteConfirmModal.confirmLabel || (isDeletingItem ? 'Processando...' : 'Confirmar')}
               </button>
             </div>
           </div>
@@ -3071,6 +3389,85 @@ export default function LeadsModule({
 
               {quizStep === 2 && (
                 <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-base font-bold text-white mb-1">Contato Principal</h3>
+                      <p className="text-xs text-slate-400">Adicione um contato vinculado ao condomínio. Esta etapa é opcional.</p>
+                    </div>
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">Opcional</span>
+                  </div>
+
+                  <div className="space-y-3 pt-2">
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1.5">Nome do contato</label>
+                      <input
+                        type="text"
+                        value={formContactName}
+                        onChange={(e) => setFormContactName(e.target.value)}
+                        placeholder="Ex: Carlos Síndico ou Aldair"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1.5">Vínculo / Cargo</label>
+                      <select
+                        value={formContactRole}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setFormContactRole(val);
+                          if (val !== 'Outro') setFormCustomContactRole('');
+                        }}
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                      >
+                        {PRESET_ROLES.map((role) => (
+                          <option key={role} value={role}>
+                            {role}
+                          </option>
+                        ))}
+                      </select>
+                      {formContactRole === 'Outro' && (
+                        <div className="mt-2">
+                          <input
+                            type="text"
+                            value={formCustomContactRole}
+                            onChange={(e) => setFormCustomContactRole(e.target.value)}
+                            placeholder="Especifique o cargo (ex: Gestor Predial, Tesoureiro...)"
+                            className="w-full px-4 py-2 bg-slate-950 border border-amber-500/60 focus:border-amber-500 rounded-xl text-white text-xs focus:outline-none"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1.5">WhatsApp / Telefone</label>
+                        <input
+                          type="text"
+                          value={formContactPhone}
+                          onChange={(e) => setFormContactPhone(formatPhoneMask(e.target.value))}
+                          placeholder="(11) 98765-4321"
+                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-slate-300 mb-1.5">E-mail</label>
+                        <input
+                          type="email"
+                          value={formContactEmail}
+                          onChange={(e) => setFormContactEmail(e.target.value)}
+                          placeholder="contato@exemplo.com"
+                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {quizStep === 3 && (
+                <div className="space-y-4">
                   <div>
                     <h3 className="text-base font-bold text-white mb-1">Características</h3>
                     <p className="text-xs text-slate-400">Tipo e unidades.</p>
@@ -3091,6 +3488,21 @@ export default function LeadsModule({
                       </button>
                     ))}
                   </div>
+
+                  {formCondominiumType === 'Outro' && (
+                    <div>
+                      <label className="block text-xs font-medium text-slate-300 mb-1.5">Especifique *</label>
+                      <input
+                        type="text"
+                        autoFocus
+                        value={formCustomCondominiumType}
+                        onChange={(e) => setFormCustomCondominiumType(e.target.value)}
+                        placeholder="Ex: Sindicato"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-indigo-500/60 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                      />
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-xs font-medium text-slate-300 mb-1.5">Número de Unidades</label>
                     <input
@@ -3105,7 +3517,7 @@ export default function LeadsModule({
                 </div>
               )}
 
-              {quizStep === 3 && (
+              {quizStep === 4 && (
                 <div className="space-y-4">
                   <div>
                     <h3 className="text-base font-bold text-white mb-1">Localização & Administradora</h3>
@@ -3130,10 +3542,60 @@ export default function LeadsModule({
                       className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
                     />
                   </div>
+
+                  {/* Nova Seção: SERVIÇOS (Seleção Múltipla) */}
+                  <div className="pt-3 border-t border-slate-800/80 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                        Serviços
+                      </span>
+                      <span className="text-[11px] text-slate-500">Seleção múltipla (opcional)</span>
+                    </div>
+
+                    {services.length === 0 ? (
+                      <p className="text-xs text-slate-500 py-2">Nenhum serviço disponível no momento.</p>
+                    ) : (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {services.map((srv) => {
+                          const srvLabel = srv.name || srv.title || 'Serviço';
+                          const isChecked = formSelectedServiceIds.includes(srv.id);
+                          return (
+                            <button
+                              key={srv.id}
+                              type="button"
+                              onClick={() => {
+                                setFormSelectedServiceIds((prev) =>
+                                  prev.includes(srv.id)
+                                    ? prev.filter((id) => id !== srv.id)
+                                    : [...prev, srv.id]
+                                );
+                              }}
+                              className={`p-2.5 rounded-xl border text-left text-xs font-medium cursor-pointer transition-all flex items-center gap-2.5 ${
+                                isChecked
+                                  ? 'bg-indigo-600/20 border-indigo-500 text-indigo-200'
+                                  : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                              }`}
+                            >
+                              <span
+                                className={`w-4 h-4 rounded flex items-center justify-center border text-[10px] font-bold shrink-0 transition-colors ${
+                                  isChecked
+                                    ? 'bg-indigo-600 border-indigo-500 text-white'
+                                    : 'bg-slate-900 border-slate-700 text-transparent'
+                                }`}
+                              >
+                                ✓
+                              </span>
+                              <span className="truncate">{srvLabel}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
-              {quizStep === 4 && (
+              {quizStep === 5 && (
                 <div className="space-y-4">
                   <div>
                     <h3 className="text-base font-bold text-white mb-1">Estágio Comercial & Responsável</h3>
@@ -3193,24 +3655,64 @@ export default function LeadsModule({
                       onChange={(e) => setFormResponsibleUserId(e.target.value)}
                       className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
                     >
-                      {profiles.map((p) => (
-                        <option key={p.id} value={p.id}>{p.full_name || 'Usuário'}</option>
-                      ))}
+                      <option value="">Não atribuído</option>
+                      {profiles.map((p) => {
+                        const primaryName = p.full_name && p.full_name.trim() ? p.full_name.trim() : (p.email || 'Usuário');
+                        const secondaryEmail = p.full_name && p.full_name.trim() && p.email ? ` (${p.email})` : '';
+                        return (
+                          <option key={p.id} value={p.id}>
+                            {primaryName}{secondaryEmail}
+                          </option>
+                        );
+                      })}
                     </select>
                   </div>
                 </div>
               )}
 
-              {quizStep === 5 && (
+              {quizStep === 6 && (
                 <div className="space-y-3 text-xs">
                   <h3 className="text-base font-bold text-white mb-2">Revisão</h3>
                   <div className="p-3.5 bg-slate-950 rounded-xl border border-slate-800 space-y-2">
                     <div className="flex justify-between"><span>Nome:</span><strong className="text-white">{formName}</strong></div>
                     {formCnpj && <div className="flex justify-between"><span>CNPJ:</span><strong className="text-white">{formCnpj}</strong></div>}
-                    <div className="flex justify-between"><span>Tipo:</span><strong className="text-white">{formCondominiumType}</strong></div>
+                    <div className="flex justify-between">
+                      <span>Contato Principal:</span>
+                      <strong className="text-white">
+                        {(formContactName.trim() || formContactEmail.trim() || formContactPhone.trim()) ? (
+                          [
+                            formContactName.trim(),
+                            (formContactRole === 'Outro' ? formCustomContactRole.trim() : formContactRole),
+                            formContactPhone.trim(),
+                            formContactEmail.trim(),
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')
+                        ) : (
+                          <span className="text-slate-500 font-normal">Contato principal: não informado</span>
+                        )}
+                      </strong>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Tipo:</span>
+                      <strong className="text-white">
+                        {formCondominiumType === 'Outro' ? (formCustomCondominiumType.trim() || 'Outro') : formCondominiumType}
+                      </strong>
+                    </div>
                     {formUnitCount && <div className="flex justify-between"><span>Unidades:</span><strong className="text-white">{formUnitCount}</strong></div>}
                     <div className="flex justify-between"><span>Cidade:</span><strong className="text-white">{formCity || '-'}</strong></div>
                     {formAdministrator && <div className="flex justify-between"><span>Administradora:</span><strong className="text-white">{formAdministrator}</strong></div>}
+                    {formSelectedServiceIds.length > 0 && (
+                      <div className="flex justify-between gap-2">
+                        <span>Serviços:</span>
+                        <strong className="text-indigo-300 text-right">
+                          {formSelectedServiceIds
+                            .map((id) => serviceMap.get(id))
+                            .filter(Boolean)
+                            .join(', ')}
+                        </strong>
+                      </div>
+                    )}
                     <div className="flex justify-between"><span>Estágio Comercial:</span><strong className="text-[#FF6600]">{stageMap.get(formCurrentStageId) || 'Início'}</strong></div>
                     {formLossReason && <div className="flex justify-between"><span>Motivo da Perda:</span><strong className="text-rose-400">{formLossReason}</strong></div>}
                     <div className="flex justify-between"><span>Responsável:</span><strong className="text-white">{profileMap.get(formResponsibleUserId) || 'Não atribuído'}</strong></div>

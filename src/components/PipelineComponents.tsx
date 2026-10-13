@@ -926,6 +926,13 @@ export function LeadCard({
             )}
           </div>
         )}
+
+        {/* Data de Cadastro (leads.created_at) - Metadado discreto e somente leitura */}
+        {lead.created_at && (
+          <div className={`pt-1.5 text-[10px] truncate ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
+            Cadastrado em {formatDateBR(lead.created_at)}
+          </div>
+        )}
       </div>
 
       {/* Card Quick Actions Footer: Left Contact Icons + Right Isolated "+" Button */}
