@@ -2073,14 +2073,21 @@ export default function LeadsModule({
             interaction_type: formInteractionType || savedData.interaction_type,
           });
           if (nextAtIso && savedData.id) {
-            const sessionData = await supabase.auth.getSession();
-            const token = sessionData.data.session?.access_token;
-            if (token) {
-              fetch('/api/google/calendar/sync-interaction', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ interactionId: savedData.id }),
-              }).catch((e) => console.warn('Sync error:', e));
+            try {
+              const sessionData = await supabase.auth.getSession();
+              const token = sessionData.data.session?.access_token;
+              if (token) {
+                await fetch('/api/google/calendar/update-interaction', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({ interactionId: savedData.id }),
+                });
+              }
+            } catch (err) {
+              console.warn('Update sync error:', err);
             }
           }
         }
@@ -2453,14 +2460,21 @@ export default function LeadsModule({
             interaction_type: noteType || savedInteraction.interaction_type,
           });
           if (nextAtIso && savedInteraction.id) {
-            const sessionData = await supabase.auth.getSession();
-            const token = sessionData.data.session?.access_token;
-            if (token) {
-              fetch('/api/google/calendar/sync-interaction', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ interactionId: savedInteraction.id }),
-              }).catch((e) => console.warn('Sync error:', e));
+            try {
+              const sessionData = await supabase.auth.getSession();
+              const token = sessionData.data.session?.access_token;
+              if (token) {
+                await fetch('/api/google/calendar/update-interaction', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                  },
+                  body: JSON.stringify({ interactionId: savedInteraction.id }),
+                });
+              }
+            } catch (err) {
+              console.warn('Update sync error:', err);
             }
           }
         }

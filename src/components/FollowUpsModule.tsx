@@ -218,6 +218,25 @@ export default function FollowUpsModule({
         setStatusFeedback({ type: 'success', message: 'Responsável atualizado!' });
       }
 
+      if (['date', 'time', 'notes', 'responsible'].includes(field) && item.latestInteraction?.id) {
+        try {
+          const sessionData = await supabase.auth.getSession();
+          const token = sessionData.data.session?.access_token;
+          if (token) {
+            await fetch('/api/google/calendar/update-interaction', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+              },
+              body: JSON.stringify({ interactionId: item.latestInteraction.id }),
+            });
+          }
+        } catch (e) {
+          console.warn('Quick edit update sync error:', e);
+        }
+      }
+
       setQuickEdit(null);
       refreshAll(true);
     } catch (err) {

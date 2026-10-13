@@ -589,25 +589,9 @@ export async function createGoogleCalendarEventForInteraction(interactionId: str
     }
   }
 
-  // 7. Format title & description
-  const interactionTypeLabel = interaction.interaction_type || 'Compromisso';
-  const summary = `${interactionTypeLabel} — ${leadName}`;
-
-  const descLines: string[] = [];
-  if (leadName) descLines.push(`Condomínio: ${leadName}`);
-  if (interactionTypeLabel) descLines.push(`Tipo: ${interactionTypeLabel}`);
-  if (responsibleName) descLines.push(`Responsável: ${responsibleName}`);
-  if (primaryContact?.name) descLines.push(`Contato principal: ${primaryContact.name}`);
-  if (primaryContact?.role_title) descLines.push(`Cargo: ${primaryContact.role_title}`);
-  if (primaryContact?.phone) descLines.push(`Telefone: ${primaryContact.phone}`);
-  if (primaryContact?.email) descLines.push(`E-mail: ${primaryContact.email}`);
-  if (interaction.notes) descLines.push(`Observações: ${interaction.notes}`);
-
-  descLines.push('');
-  descLines.push('Abrir na Triverus:');
-  descLines.push('https://triveruscondo.com/app/leads');
-
-  const description = descLines.join('\n');
+  // 7. Format title & description using shared builders
+  const summary = buildEventSummary(interaction.interaction_type, leadName);
+  const description = buildEventDescription(leadName, interaction.interaction_type, responsibleName, primaryContact, interaction.notes);
 
   // 8. Time calculation (Duration 1 hour)
   const startDate = new Date(interaction.next_follow_up_at);
@@ -669,5 +653,203 @@ export async function createGoogleCalendarEventForInteraction(interactionId: str
 
   return { synced: true, googleEventId };
 }
+
+export function buildEventSummary(interactionType?: string | null, leadName?: string | null): string {
+  const typeLabel = (interactionType || 'Compromisso').trim();
+  const condoName = (leadName || 'Condomínio').trim();
+  return `${typeLabel} — ${condoName}`;
+}
+
+export function buildEventDescription(
+  leadName?: string | null,
+  interactionType?: string | null,
+  responsibleName?: string | null,
+  primaryContact?: { name?: string | null; role_title?: string | null; phone?: string | null; email?: string | null } | null,
+  notes?: string | null
+): string {
+  const descLines: string[] = [];
+  if (leadName) descLines.push(`Condomínio: ${leadName}`);
+  if (interactionType) descLines.push(`Tipo: ${interactionType}`);
+  if (responsibleName) descLines.push(`Responsável: ${responsibleName}`);
+  if (primaryContact?.name) descLines.push(`Contato principal: ${primaryContact.name}`);
+  if (primaryContact?.role_title) descLines.push(`Cargo: ${primaryContact.role_title}`);
+  if (primaryContact?.phone) descLines.push(`Telefone: ${primaryContact.phone}`);
+  if (primaryContact?.email) descLines.push(`E-mail: ${primaryContact.email}`);
+  if (notes) descLines.push(`Observações: ${notes}`);
+
+  descLines.push('');
+  descLines.push('Abrir na Triverus:');
+  descLines.push('https://triveruscondo.com/app/leads');
+
+  return descLines.join('\n');
+}
+
+export async function updateGoogleCalendarEventForInteraction(interactionId: string) {
+  const supabase = getAdminClient();
+  if (!supabase) {
+    console.warn('[UPDATE_CALENDAR_EVENT] Supabase admin client indisponível.');
+    return { synced: false, reason: 'database_unavailable' };
+  }
+
+  const { data: interaction, error: intErr } = await supabase
+    .from('interactions')
+    .select('id, lead_id, interaction_type, notes, next_follow_up_at, responsible_user_id, google_event_id')
+    .eq('id', interactionId)
+    .single();
+
+  if (intErr || !interaction) {
+    console.warn('[UPDATE_CALENDAR_EVENT] Interação não encontrada:', interactionId);
+    return { synced: false, reason: 'interaction_not_found', status: 404 };
+  }
+
+  const hasGoogleEventId = Boolean(interaction.google_event_id && interaction.google_event_id.trim());
+  const hasNextFollowUpAt = Boolean(interaction.next_follow_up_at);
+
+  console.log('[FOLLOWUP_GOOGLE_UPDATE_TRIGGER]', {
+    interaction_id: interactionId,
+    has_google_event_id: hasGoogleEventId,
+    has_next_follow_up_at: hasNextFollowUpAt,
+    operation: 'update',
+  });
+
+  if (!hasNextFollowUpAt) {
+    return { synced: false, reason: 'no_next_follow_up_at' };
+  }
+
+  if (!hasGoogleEventId) {
+    return await createGoogleCalendarEventForInteraction(interactionId);
+  }
+
+  const responsibleUserId = interaction.responsible_user_id;
+  if (!responsibleUserId) {
+    return { synced: false, reason: 'no_responsible_user_id' };
+  }
+
+  let accessToken: string;
+  try {
+    accessToken = await getValidGoogleAccessToken(responsibleUserId);
+  } catch (err: any) {
+    console.warn('[UPDATE_CALENDAR_EVENT] Responsável sem conexão Google válida:', {
+      responsible_user_id: responsibleUserId,
+      error_code: err?.code,
+      message: err?.message,
+    });
+    console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
+      interaction_id: interactionId,
+      http_status: 401,
+      success: false,
+      error_code: err?.code || 'google_calendar_not_connected',
+    });
+    return { synced: false, reason: err?.code || 'google_calendar_not_connected' };
+  }
+
+  let leadName = 'Condomínio';
+  const { data: leadData } = await supabase
+    .from('leads')
+    .select('id, name')
+    .eq('id', interaction.lead_id)
+    .single();
+  if (leadData?.name) {
+    leadName = leadData.name;
+  }
+
+  let responsibleName = 'Responsável';
+  const { data: profileData } = await supabase
+    .from('profiles')
+    .select('id, name')
+    .eq('id', responsibleUserId)
+    .single();
+  if (profileData?.name) {
+    responsibleName = profileData.name;
+  }
+
+  let primaryContact: any = null;
+  const { data: leadContactsData } = await supabase
+    .from('lead_contacts')
+    .select('contact_id')
+    .eq('lead_id', interaction.lead_id);
+
+  const contactIds = (leadContactsData || []).map((lc: any) => lc.contact_id).filter(Boolean);
+  if (contactIds.length > 0) {
+    const { data: contactsData } = await supabase
+      .from('contacts')
+      .select('id, name, role_title, phone, email, created_at')
+      .in('id', contactIds)
+      .order('created_at', { ascending: true });
+
+    if (contactsData && contactsData.length > 0) {
+      primaryContact = contactsData[0];
+    }
+  }
+
+  const summary = buildEventSummary(interaction.interaction_type, leadName);
+  const description = buildEventDescription(leadName, interaction.interaction_type, responsibleName, primaryContact, interaction.notes);
+
+  const startDate = new Date(interaction.next_follow_up_at);
+  if (Number.isNaN(startDate.getTime())) {
+    return { synced: false, reason: 'invalid_next_follow_up_at' };
+  }
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
+  const eventPayload = {
+    summary,
+    description,
+    start: {
+      dateTime: startDate.toISOString(),
+      timeZone: 'America/Sao_Paulo',
+    },
+    end: {
+      dateTime: endDate.toISOString(),
+      timeZone: 'America/Sao_Paulo',
+    },
+  };
+
+  const googleEventId = interaction.google_event_id.trim();
+  const googleUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(googleEventId)}`;
+
+  const googleRes = await fetch(googleUrl, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(eventPayload),
+  });
+
+  if (!googleRes.ok) {
+    const errBody = await googleRes.json().catch(() => null);
+    const status = googleRes.status;
+
+    console.error('[UPDATE_CALENDAR_EVENT] Falha ao atualizar evento no Google:', {
+      status,
+      error: errBody,
+      google_event_id: googleEventId,
+    });
+
+    console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
+      interaction_id: interactionId,
+      http_status: status,
+      success: false,
+      error_code: status === 404 ? 'google_event_not_found' : 'google_api_error',
+    });
+
+    if (status === 404) {
+      return { synced: false, reason: 'google_event_not_found', status: 404, details: errBody };
+    }
+
+    return { synced: false, reason: 'google_api_error', status, details: errBody };
+  }
+
+  console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
+    interaction_id: interactionId,
+    http_status: googleRes.status,
+    success: true,
+    error_code: null,
+  });
+
+  return { synced: true, googleEventId };
+}
+
 
 

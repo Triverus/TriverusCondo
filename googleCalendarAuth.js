@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 export const EXPIRATION_BUFFER_MS = 5 * 60 * 1000; // 5 minutos de margem de segurança preventiva
 
 export class GoogleCalendarAuthError extends Error {
-  constructor(message, code, statusCode = 400, details) {
+  constructor(message, code, statusCode = 400, details = undefined) {
     super(message);
     this.name = 'GoogleCalendarAuthError';
     this.code = code;
@@ -13,7 +13,10 @@ export class GoogleCalendarAuthError extends Error {
 }
 
 function getEnvValue(key) {
-  return process.env[key] || '';
+  if (process.env[key]) {
+    return process.env[key];
+  }
+  return '';
 }
 
 function getAdminClient() {
@@ -33,10 +36,7 @@ function getAdminClient() {
   });
 }
 
-/**
- * Obtém os detalhes do token válido do Google Calendar para o usuário especificado.
- */
-export async function getValidGoogleTokenDetails(userId, options) {
+export async function getValidGoogleTokenDetails(userId, options = {}) {
   const cleanUserId = typeof userId === 'string' ? userId.trim() : '';
   if (!cleanUserId) {
     throw new GoogleCalendarAuthError(
@@ -46,13 +46,12 @@ export async function getValidGoogleTokenDetails(userId, options) {
     );
   }
 
-  const nowFn = options?.nowFn || Date.now;
-  const bufferMs = typeof options?.bufferMs === 'number' ? options.bufferMs : EXPIRATION_BUFFER_MS;
-  const fetchFn = options?.fetchFn || fetch;
+  const nowFn = options.nowFn || Date.now;
+  const bufferMs = typeof options.bufferMs === 'number' ? options.bufferMs : EXPIRATION_BUFFER_MS;
+  const fetchFn = options.fetchFn || fetch;
 
-  const supabase = options?.supabaseClient || getAdminClient();
+  const supabase = options.supabaseClient || getAdminClient();
   if (!supabase) {
-    console.error('[GOOGLE_CALENDAR_AUTH] Cliente admin Supabase indisponível. Verifique SUPABASE_SERVICE_ROLE_KEY e VITE_SUPABASE_URL.');
     throw new GoogleCalendarAuthError(
       'Configuração do banco de dados indisponível no servidor.',
       'missing_oauth_configuration',
@@ -60,259 +59,139 @@ export async function getValidGoogleTokenDetails(userId, options) {
     );
   }
 
-  // 1. Buscar conexão existente no banco
-  let connection = null;
-  try {
-    const { data, error } = await supabase
-      .from('google_calendar_connections')
-      .select('id, user_id, google_email, access_token, refresh_token, expires_at, token_type, scope')
-      .eq('user_id', cleanUserId)
-      .maybeSingle();
+  const { data: conn, error: connErr } = await supabase
+    .from('google_calendar_connections')
+    .select('*')
+    .eq('user_id', cleanUserId)
+    .single();
 
-    if (error) {
-      console.error('[GOOGLE_CALENDAR_AUTH] Erro ao buscar conexão no Supabase para o usuário:', {
-        user_id: cleanUserId,
-        error_code: error.code,
-        error_message: error.message,
-      });
-      throw new GoogleCalendarAuthError(
-        'Falha ao consultar conexão do Google Calendar no banco de dados.',
-        'calendar_database_error',
-        500,
-        { db_error_code: error.code }
-      );
-    }
-
-    connection = data;
-  } catch (err) {
-    if (err instanceof GoogleCalendarAuthError) throw err;
-    console.error('[GOOGLE_CALENDAR_AUTH] Exceção ao consultar conexão:', {
-      user_id: cleanUserId,
-      error_name: err?.name,
-      error_message: err?.message,
-    });
+  if (connErr || !conn) {
     throw new GoogleCalendarAuthError(
-      'Erro ao consultar banco de dados.',
-      'calendar_database_error',
-      500
-    );
-  }
-
-  if (!connection) {
-    throw new GoogleCalendarAuthError(
-      'Usuário não possui conta do Google Calendar conectada.',
+      'Conta Google Calendar não conectada para este usuário.',
       'google_calendar_not_connected',
       404
     );
   }
 
-  if (!connection.access_token) {
+  const accessToken = conn.access_token;
+  const refreshToken = conn.refresh_token;
+  const expiresAt = conn.expires_at ? new Date(conn.expires_at).getTime() : null;
+  const googleEmail = conn.google_email || null;
+  const scope = conn.scope || null;
+
+  if (!refreshToken) {
     throw new GoogleCalendarAuthError(
-      'Token de acesso do Google Calendar ausente na conexão do usuário.',
-      'missing_access_token',
-      400
-    );
-  }
-
-  // 2. Verificar expiração com margem de segurança (buffer)
-  const now = nowFn();
-  let isStillValid = false;
-
-  if (connection.expires_at) {
-    const expiresAtMs = new Date(connection.expires_at).getTime();
-    if (!Number.isNaN(expiresAtMs) && expiresAtMs - now > bufferMs) {
-      isStillValid = true;
-    }
-  }
-
-  if (isStillValid) {
-    return {
-      accessToken: connection.access_token,
-      expiresAt: connection.expires_at,
-      googleEmail: connection.google_email || null,
-      scope: connection.scope || null,
-      wasRefreshed: false,
-    };
-  }
-
-  // 3. Token expirado ou próximo de expirar: verificar refresh_token
-  const refreshToken = connection.refresh_token;
-  if (!refreshToken || typeof refreshToken !== 'string' || !refreshToken.trim()) {
-    console.warn('[GOOGLE_CALENDAR_AUTH] Token expirado mas conexão sem refresh_token disponível para o usuário:', {
-      user_id: cleanUserId,
-    });
-    throw new GoogleCalendarAuthError(
-      'Reautorização necessária: conexão sem refresh token disponível.',
+      'Refresh token do Google ausente. Reautorização necessária.',
       'google_calendar_reauthorization_required',
-      401,
-      { reason: 'missing_refresh_token' }
+      401
     );
   }
 
-  // 4. Obter credenciais do Google OAuth
-  const clientId = options?.clientId !== undefined ? options.clientId : getEnvValue('GOOGLE_CLIENT_ID');
-  const clientSecret = options?.clientSecret !== undefined ? options.clientSecret : getEnvValue('GOOGLE_CLIENT_SECRET');
+  const now = nowFn();
+  const isExpired = expiresAt ? now + bufferMs >= expiresAt : false;
 
-  if (!clientId || !clientId.trim() || !clientSecret || !clientSecret.trim()) {
-    console.error('[GOOGLE_CALENDAR_AUTH] GOOGLE_CLIENT_ID ou GOOGLE_CLIENT_SECRET ausentes no ambiente.');
-    throw new GoogleCalendarAuthError(
-      'Configuração OAuth do servidor incompleta.',
-      'missing_oauth_configuration',
-      500
-    );
-  }
+  if (!accessToken || isExpired) {
+    const clientId = options.clientId || getEnvValue('GOOGLE_CLIENT_ID');
+    const clientSecret = options.clientSecret || getEnvValue('GOOGLE_CLIENT_SECRET');
 
-  // 5. Renovar token junto à API do Google
-  console.log('[GOOGLE_CALENDAR_AUTH] Renovando access_token junto ao Google para user_id:', cleanUserId);
+    if (!clientId || !clientSecret) {
+      throw new GoogleCalendarAuthError(
+        'Credenciais do Google OAuth ausentes no servidor.',
+        'missing_oauth_configuration',
+        500
+      );
+    }
 
-  let tokenData = null;
-  let responseStatus = 0;
-
-  try {
-    const refreshParams = new URLSearchParams({
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken.trim(),
-      grant_type: 'refresh_token',
-    });
-
-    const tokenResponse = await fetchFn('https://oauth2.googleapis.com/token', {
+    const tokenRes = await fetchFn('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
-      body: refreshParams.toString(),
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        grant_type: 'refresh_token',
+      }),
     });
 
-    responseStatus = tokenResponse.status;
-    tokenData = await tokenResponse.json().catch(() => null);
-
-    if (!tokenResponse.ok || !tokenData || !tokenData.access_token) {
-      const googleError = tokenData?.error || 'token_refresh_failed';
-      const googleErrorDesc = tokenData?.error_description || 'Falha ao renovar token junto ao Google.';
-
-      console.warn('[GOOGLE_CALENDAR_AUTH] Falha na resposta de renovação do Google:', {
-        user_id: cleanUserId,
-        status: responseStatus,
-        google_error: googleError,
-      });
-
-      if (googleError === 'invalid_grant') {
+    if (!tokenRes.ok) {
+      const errBody = await tokenRes.json().catch(() => null);
+      if (tokenRes.status === 400 || tokenRes.status === 401) {
         throw new GoogleCalendarAuthError(
-          'Reautorização necessária: a permissão do Google Calendar foi revogada ou expirou.',
+          'Falha ao atualizar token do Google. Reautorização necessária.',
           'google_calendar_reauthorization_required',
           401,
-          { google_error: 'invalid_grant' }
+          { google_error: errBody }
         );
       }
-
       throw new GoogleCalendarAuthError(
-        googleErrorDesc,
-        'google_token_refresh_failed',
-        responseStatus >= 400 && responseStatus < 600 ? responseStatus : 500,
-        { google_error: googleError }
+        'Falha na comunicação com o servidor OAuth do Google.',
+        'google_oauth_refresh_failed',
+        502,
+        { google_error: errBody }
       );
     }
-  } catch (netErr) {
-    if (netErr instanceof GoogleCalendarAuthError) throw netErr;
-    console.error('[GOOGLE_CALENDAR_AUTH] Erro de rede ou comunicação durante refresh do Google:', {
-      user_id: cleanUserId,
-      error_name: netErr?.name,
-      error_message: netErr?.message,
-    });
-    throw new GoogleCalendarAuthError(
-      'Falha de comunicação ao renovar token junto ao Google.',
-      'google_token_refresh_failed',
-      500
-    );
-  }
 
-  // 6. Atualizar o Supabase com o novo access_token e nova data de expiração
-  const newAccessToken = tokenData.access_token;
-  const expiresInSeconds = Number(tokenData.expires_in) || 3600;
-  const newExpiresAt = new Date(nowFn() + expiresInSeconds * 1000).toISOString();
+    const tokenData = await tokenRes.json();
+    const newAccessToken = tokenData.access_token;
+    const expiresIn = tokenData.expires_in || 3600;
+    const newExpiresAt = new Date(now + expiresIn * 1000).toISOString();
+    const newScope = tokenData.scope || scope;
 
-  const updateFields = {
-    access_token: newAccessToken,
-    expires_at: newExpiresAt,
-    updated_at: new Date(nowFn()).toISOString(),
-  };
+    const updatePayload = {
+      access_token: newAccessToken,
+      expires_at: newExpiresAt,
+      scope: newScope,
+      updated_at: new Date().toISOString(),
+    };
 
-  if (tokenData.refresh_token && typeof tokenData.refresh_token === 'string') {
-    updateFields.refresh_token = tokenData.refresh_token.trim();
-  }
-  if (tokenData.scope && typeof tokenData.scope === 'string') {
-    updateFields.scope = tokenData.scope;
-  }
-  if (tokenData.token_type && typeof tokenData.token_type === 'string') {
-    updateFields.token_type = tokenData.token_type;
-  }
-
-  try {
-    const { error: updateError } = await supabase
+    await supabase
       .from('google_calendar_connections')
-      .update(updateFields)
+      .update(updatePayload)
       .eq('user_id', cleanUserId);
 
-    if (updateError) {
-      console.error('[GOOGLE_CALENDAR_AUTH] Erro ao persistir novo token no Supabase:', {
-        user_id: cleanUserId,
-        error_code: updateError.code,
-        error_message: updateError.message,
-      });
-      throw new GoogleCalendarAuthError(
-        'Falha ao atualizar token renovado no banco de dados.',
-        'calendar_database_error',
-        500,
-        { db_error_code: updateError.code }
-      );
-    }
-  } catch (dbErr) {
-    if (dbErr instanceof GoogleCalendarAuthError) throw dbErr;
-    console.error('[GOOGLE_CALENDAR_AUTH] Exceção ao atualizar token no Supabase:', {
-      user_id: cleanUserId,
-      error_name: dbErr?.name,
-      error_message: dbErr?.message,
-    });
-    throw new GoogleCalendarAuthError(
-      'Falha ao atualizar token renovado no banco de dados.',
-      'calendar_database_error',
-      500
-    );
+    return {
+      accessToken: newAccessToken,
+      expiresAt: newExpiresAt,
+      googleEmail,
+      scope: newScope,
+      wasRefreshed: true,
+    };
   }
 
-  console.log('[GOOGLE_CALENDAR_AUTH] Token renovado e persistido com sucesso para user_id:', cleanUserId);
-
   return {
-    accessToken: newAccessToken,
-    expiresAt: newExpiresAt,
-    googleEmail: connection.google_email || null,
-    scope: updateFields.scope || connection.scope || null,
-    wasRefreshed: true,
+    accessToken,
+    expiresAt: conn.expires_at || null,
+    googleEmail,
+    scope,
+    wasRefreshed: false,
   };
 }
 
-export async function getValidGoogleAccessToken(userId, options) {
+export async function getValidGoogleAccessToken(userId, options = {}) {
   const details = await getValidGoogleTokenDetails(userId, options);
   return details.accessToken;
 }
 
 export function formatGoogleCalendarEvent(item) {
-  const start = item?.start
-    ? {
-        dateTime: item.start.dateTime || undefined,
-        date: item.start.date || undefined,
-        timeZone: item.start.timeZone || undefined,
-      }
-    : null;
+  const startDateTime = item?.start?.dateTime || item?.start?.date || null;
+  const endDateTime = item?.end?.dateTime || item?.end?.date || null;
+  const isAllDay = Boolean(item?.start?.date && !item?.start?.dateTime);
 
-  const end = item?.end
-    ? {
-        dateTime: item.end.dateTime || undefined,
-        date: item.end.date || undefined,
-        timeZone: item.end.timeZone || undefined,
-      }
-    : null;
+  const start = {
+    dateTime: startDateTime,
+    date: item?.start?.date || null,
+    timeZone: item?.start?.timeZone || null,
+    isAllDay,
+  };
+
+  const end = {
+    dateTime: endDateTime,
+    date: item?.end?.date || null,
+    timeZone: item?.end?.timeZone || null,
+    isAllDay,
+  };
 
   const attendees = Array.isArray(item?.attendees)
     ? item.attendees.map((a) => ({
@@ -353,10 +232,10 @@ export function formatGoogleCalendarEvent(item) {
   };
 }
 
-export async function fetchUpcomingGoogleCalendarEvents(accessToken, options) {
-  const fetchFn = options?.fetchFn || fetch;
-  const maxResults = options?.maxResults ?? 20;
-  const timeMin = options?.timeMin || new Date().toISOString();
+export async function fetchUpcomingGoogleCalendarEvents(accessToken, options = {}) {
+  const fetchFn = options.fetchFn || fetch;
+  const maxResults = options.maxResults ?? 20;
+  const timeMin = options.timeMin || new Date().toISOString();
 
   const googleUrl = new URL('https://www.googleapis.com/calendar/v3/calendars/primary/events');
   googleUrl.searchParams.set('singleEvents', 'true');
@@ -376,11 +255,6 @@ export async function fetchUpcomingGoogleCalendarEvents(accessToken, options) {
     const errorBody = await response.json().catch(() => null);
     const googleErrorCode = errorBody?.error?.code || response.status;
     const googleErrorMessage = errorBody?.error?.message || response.statusText;
-
-    console.error('[GOOGLE_CALENDAR_EVENTS] Falha na resposta da API Google Calendar:', {
-      status: response.status,
-      code: googleErrorCode,
-    });
 
     if (response.status === 401) {
       throw new GoogleCalendarAuthError(
@@ -409,6 +283,36 @@ export async function fetchUpcomingGoogleCalendarEvents(accessToken, options) {
   };
 }
 
+export function buildEventSummary(interactionType, leadName) {
+  const typeLabel = (interactionType || 'Compromisso').trim();
+  const condoName = (leadName || 'Condomínio').trim();
+  return `${typeLabel} — ${condoName}`;
+}
+
+export function buildEventDescription(
+  leadName = null,
+  interactionType = null,
+  responsibleName = null,
+  primaryContact = null,
+  notes = null
+) {
+  const descLines = [];
+  if (leadName) descLines.push(`Condomínio: ${leadName}`);
+  if (interactionType) descLines.push(`Tipo: ${interactionType}`);
+  if (responsibleName) descLines.push(`Responsável: ${responsibleName}`);
+  if (primaryContact?.name) descLines.push(`Contato principal: ${primaryContact.name}`);
+  if (primaryContact?.role_title) descLines.push(`Cargo: ${primaryContact.role_title}`);
+  if (primaryContact?.phone) descLines.push(`Telefone: ${primaryContact.phone}`);
+  if (primaryContact?.email) descLines.push(`E-mail: ${primaryContact.email}`);
+  if (notes) descLines.push(`Observações: ${notes}`);
+
+  descLines.push('');
+  descLines.push('Abrir na Triverus:');
+  descLines.push('https://triveruscondo.com/app/leads');
+
+  return descLines.join('\n');
+}
+
 export async function createGoogleCalendarEventForInteraction(interactionId) {
   const supabase = getAdminClient();
   if (!supabase) {
@@ -416,7 +320,6 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     return { synced: false, reason: 'database_unavailable' };
   }
 
-  // 1. Load interaction
   const { data: interaction, error: intErr } = await supabase
     .from('interactions')
     .select('id, lead_id, interaction_type, notes, next_follow_up_at, responsible_user_id, google_event_id')
@@ -428,23 +331,19 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     return { synced: false, reason: 'interaction_not_found', status: 404 };
   }
 
-  // 2. Check if next_follow_up_at exists
   if (!interaction.next_follow_up_at) {
     return { synced: false, reason: 'no_next_follow_up_at' };
   }
 
-  // 3. Check if google_event_id is already populated (Anti-duplicity)
   if (interaction.google_event_id && interaction.google_event_id.trim()) {
     return { synced: true, already_synced: true, googleEventId: interaction.google_event_id };
   }
 
-  // 4. Responsible user ID
   const responsibleUserId = interaction.responsible_user_id;
   if (!responsibleUserId) {
     return { synced: false, reason: 'no_responsible_user_id' };
   }
 
-  // 5. Get valid Google access token for responsible user
   let accessToken;
   try {
     accessToken = await getValidGoogleAccessToken(responsibleUserId);
@@ -457,7 +356,6 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     return { synced: false, reason: err?.code || 'google_calendar_not_connected' };
   }
 
-  // 6. Load lead name & contact info
   let leadName = 'Condomínio';
   const { data: leadData } = await supabase
     .from('leads')
@@ -468,7 +366,6 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     leadName = leadData.name;
   }
 
-  // Responsible name
   let responsibleName = 'Responsável';
   const { data: profileData } = await supabase
     .from('profiles')
@@ -479,7 +376,6 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     responsibleName = profileData.name;
   }
 
-  // Contact resolution via lead_contacts -> contacts (deterministic order by created_at ASC)
   let primaryContact = null;
   const { data: leadContactsData } = await supabase
     .from('lead_contacts')
@@ -495,31 +391,13 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
       .order('created_at', { ascending: true });
 
     if (contactsData && contactsData.length > 0) {
-      primaryContact = contactsData[0]; // Contato mais antigo (menor created_at), determinístico
+      primaryContact = contactsData[0];
     }
   }
 
-  // 7. Format title & description
-  const interactionTypeLabel = interaction.interaction_type || 'Compromisso';
-  const summary = `${interactionTypeLabel} — ${leadName}`;
+  const summary = buildEventSummary(interaction.interaction_type, leadName);
+  const description = buildEventDescription(leadName, interaction.interaction_type, responsibleName, primaryContact, interaction.notes);
 
-  const descLines = [];
-  if (leadName) descLines.push(`Condomínio: ${leadName}`);
-  if (interactionTypeLabel) descLines.push(`Tipo: ${interactionTypeLabel}`);
-  if (responsibleName) descLines.push(`Responsável: ${responsibleName}`);
-  if (primaryContact?.name) descLines.push(`Contato principal: ${primaryContact.name}`);
-  if (primaryContact?.role_title) descLines.push(`Cargo: ${primaryContact.role_title}`);
-  if (primaryContact?.phone) descLines.push(`Telefone: ${primaryContact.phone}`);
-  if (primaryContact?.email) descLines.push(`E-mail: ${primaryContact.email}`);
-  if (interaction.notes) descLines.push(`Observações: ${interaction.notes}`);
-
-  descLines.push('');
-  descLines.push('Abrir na Triverus:');
-  descLines.push('https://triveruscondo.com/app/leads');
-
-  const description = descLines.join('\n');
-
-  // 8. Time calculation (Duration 1 hour)
   const startDate = new Date(interaction.next_follow_up_at);
   if (Number.isNaN(startDate.getTime())) {
     return { synced: false, reason: 'invalid_next_follow_up_at' };
@@ -539,7 +417,6 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     },
   };
 
-  // 9. Call Google Calendar API (POST events)
   const googleRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
     method: 'POST',
     headers: {
@@ -566,7 +443,6 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     return { synced: false, reason: 'no_event_id_returned' };
   }
 
-  // 10. Save google_event_id in public.interactions
   const { error: updateErr } = await supabase
     .from('interactions')
     .update({ google_event_id: googleEventId })
@@ -576,6 +452,173 @@ export async function createGoogleCalendarEventForInteraction(interactionId) {
     console.error('[CREATE_CALENDAR_EVENT] Erro ao salvar google_event_id no Supabase:', updateErr);
     return { synced: false, reason: 'supabase_update_failed' };
   }
+
+  return { synced: true, googleEventId };
+}
+
+export async function updateGoogleCalendarEventForInteraction(interactionId) {
+  const supabase = getAdminClient();
+  if (!supabase) {
+    console.warn('[UPDATE_CALENDAR_EVENT] Supabase admin client indisponível.');
+    return { synced: false, reason: 'database_unavailable' };
+  }
+
+  const { data: interaction, error: intErr } = await supabase
+    .from('interactions')
+    .select('id, lead_id, interaction_type, notes, next_follow_up_at, responsible_user_id, google_event_id')
+    .eq('id', interactionId)
+    .single();
+
+  if (intErr || !interaction) {
+    console.warn('[UPDATE_CALENDAR_EVENT] Interação não encontrada:', interactionId);
+    return { synced: false, reason: 'interaction_not_found', status: 404 };
+  }
+
+  const hasGoogleEventId = Boolean(interaction.google_event_id && interaction.google_event_id.trim());
+  const hasNextFollowUpAt = Boolean(interaction.next_follow_up_at);
+
+  console.log('[FOLLOWUP_GOOGLE_UPDATE_TRIGGER]', {
+    interaction_id: interactionId,
+    has_google_event_id: hasGoogleEventId,
+    has_next_follow_up_at: hasNextFollowUpAt,
+    operation: 'update',
+  });
+
+  if (!hasNextFollowUpAt) {
+    return { synced: false, reason: 'no_next_follow_up_at' };
+  }
+
+  if (!hasGoogleEventId) {
+    return await createGoogleCalendarEventForInteraction(interactionId);
+  }
+
+  const responsibleUserId = interaction.responsible_user_id;
+  if (!responsibleUserId) {
+    return { synced: false, reason: 'no_responsible_user_id' };
+  }
+
+  let accessToken;
+  try {
+    accessToken = await getValidGoogleAccessToken(responsibleUserId);
+  } catch (err) {
+    console.warn('[UPDATE_CALENDAR_EVENT] Responsável sem conexão Google válida:', {
+      responsible_user_id: responsibleUserId,
+      error_code: err?.code,
+      message: err?.message,
+    });
+    console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
+      interaction_id: interactionId,
+      http_status: 401,
+      success: false,
+      error_code: err?.code || 'google_calendar_not_connected',
+    });
+    return { synced: false, reason: err?.code || 'google_calendar_not_connected' };
+  }
+
+  let leadName = 'Condomínio';
+  const { data: leadData } = await supabase
+    .from('leads')
+    .select('id, name')
+    .eq('id', interaction.lead_id)
+    .single();
+  if (leadData?.name) {
+    leadName = leadData.name;
+  }
+
+  let responsibleName = 'Responsável';
+  const { data: profileData } = await supabase
+    .from('profiles')
+    .select('id, name')
+    .eq('id', responsibleUserId)
+    .single();
+  if (profileData?.name) {
+    responsibleName = profileData.name;
+  }
+
+  let primaryContact = null;
+  const { data: leadContactsData } = await supabase
+    .from('lead_contacts')
+    .select('contact_id')
+    .eq('lead_id', interaction.lead_id);
+
+  const contactIds = (leadContactsData || []).map((lc) => lc.contact_id).filter(Boolean);
+  if (contactIds.length > 0) {
+    const { data: contactsData } = await supabase
+      .from('contacts')
+      .select('id, name, role_title, phone, email, created_at')
+      .in('id', contactIds)
+      .order('created_at', { ascending: true });
+
+    if (contactsData && contactsData.length > 0) {
+      primaryContact = contactsData[0];
+    }
+  }
+
+  const summary = buildEventSummary(interaction.interaction_type, leadName);
+  const description = buildEventDescription(leadName, interaction.interaction_type, responsibleName, primaryContact, interaction.notes);
+
+  const startDate = new Date(interaction.next_follow_up_at);
+  if (Number.isNaN(startDate.getTime())) {
+    return { synced: false, reason: 'invalid_next_follow_up_at' };
+  }
+  const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+
+  const eventPayload = {
+    summary,
+    description,
+    start: {
+      dateTime: startDate.toISOString(),
+      timeZone: 'America/Sao_Paulo',
+    },
+    end: {
+      dateTime: endDate.toISOString(),
+      timeZone: 'America/Sao_Paulo',
+    },
+  };
+
+  const googleEventId = interaction.google_event_id.trim();
+  const googleUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(googleEventId)}`;
+
+  const googleRes = await fetch(googleUrl, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(eventPayload),
+  });
+
+  if (!googleRes.ok) {
+    const errBody = await googleRes.json().catch(() => null);
+    const status = googleRes.status;
+
+    console.error('[UPDATE_CALENDAR_EVENT] Falha ao atualizar evento no Google:', {
+      status,
+      error: errBody,
+      google_event_id: googleEventId,
+    });
+
+    console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
+      interaction_id: interactionId,
+      http_status: status,
+      success: false,
+      error_code: status === 404 ? 'google_event_not_found' : 'google_api_error',
+    });
+
+    if (status === 404) {
+      return { synced: false, reason: 'google_event_not_found', status: 404, details: errBody };
+    }
+
+    return { synced: false, reason: 'google_api_error', status, details: errBody };
+  }
+
+  console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
+    interaction_id: interactionId,
+    http_status: googleRes.status,
+    success: true,
+    error_code: null,
+  });
 
   return { synced: true, googleEventId };
 }

@@ -319,7 +319,7 @@ export default function UnifiedNoteModal({
               const sessionData = await supabase.auth.getSession();
               const token = sessionData.data.session?.access_token;
               if (token) {
-                const syncRes = await fetch('/api/google/calendar/sync-interaction', {
+                const syncRes = await fetch('/api/google/calendar/update-interaction', {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/json',
@@ -328,7 +328,7 @@ export default function UnifiedNoteModal({
                   body: JSON.stringify({ interactionId: savedData.id }),
                 });
                 const syncJson = await syncRes.json().catch(() => null);
-                console.log('[FOLLOWUP_GOOGLE_SYNC_RESULT]', {
+                console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
                   saved_interaction_id: savedData.id,
                   http_status: syncRes.status,
                   success: syncRes.ok,
@@ -336,10 +336,10 @@ export default function UnifiedNoteModal({
                   error_code: syncJson?.error || syncJson?.reason || null,
                 });
               } else {
-                console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Token Supabase não encontrado na sessão.');
+                console.warn('[FOLLOWUP_GOOGLE_UPDATE_RESULT] Token Supabase não encontrado na sessão.');
               }
             } catch (syncErr: any) {
-              console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
+              console.warn('[FOLLOWUP_GOOGLE_UPDATE_RESULT] Exceção na chamada de update:', syncErr?.message);
             }
           }
         }
