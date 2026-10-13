@@ -1,5 +1,7 @@
 const FOLLOWUP_TIMES_STORAGE_KEY = 'triverus:followup-times:v1';
 
+export const BRAZIL_TIMEZONE = 'America/Sao_Paulo';
+
 /**
  * Parses a date or ISO string safely without UTC-midnight timezone shift.
  * Ensures "YYYY-MM-DD" or "YYYY-MM-DDT00:00:00Z" always represents that exact calendar day in local time.
@@ -40,11 +42,76 @@ export function parseCalendarDate(dateStr?: string | null): Date | null {
 }
 
 /**
+ * Constrói string ISO 8601 com offset explícito para o fuso brasileiro (America/Sao_Paulo: UTC-3).
+ * Exemplo: ("2026-10-25", "14:30") -> "2026-10-25T14:30:00-03:00"
+ */
+export function buildSaoPauloIsoDateTime(dateInput: string, timeInput?: string | null): string {
+  const cleanDate = toDateInputValue(dateInput) || dateInput.trim().slice(0, 10);
+  const rawTime = (timeInput || '').trim();
+  const cleanTime = rawTime && /^\d{2}:\d{2}/.test(rawTime) ? rawTime.slice(0, 5) : '09:00';
+  return `${cleanDate}T${cleanTime}:00-03:00`;
+}
+
+/**
+ * Extrai o horário (HH:mm) formatado no fuso America/Sao_Paulo a partir de um timestamp ISO.
+ */
+export function extractSaoPauloTime(dateStr?: string | null): string | null {
+  if (!dateStr) return null;
+  const trimmed = dateStr.trim();
+  if (!trimmed) return null;
+
+  // Se for apenas data pura "YYYY-MM-DD", não contém horário
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return null;
+  }
+
+  // Timestamp ISO com fuso (Z ou offset)
+  if (trimmed.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    try {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        return new Intl.DateTimeFormat('pt-BR', {
+          timeZone: BRAZIL_TIMEZONE,
+          hour: '2-digit',
+          minute: '2-digit',
+          hour12: false,
+        }).format(d);
+      }
+    } catch {}
+  }
+
+  // Local ISO com "T" ou espaço
+  const localMatch = trimmed.match(/[T\s](\d{2}:\d{2})/);
+  if (localMatch && localMatch[1] !== '00:00') {
+    return localMatch[1];
+  }
+
+  return null;
+}
+
+/**
  * Extracts "YYYY-MM-DD" in local calendar representation from any date string.
+ * Se o valor for um timestamp ISO completo com offset/Z, converte para a data no fuso de São Paulo.
  */
 export function toDateInputValue(dateStr?: string | null): string {
   if (!dateStr) return '';
   const trimmed = dateStr.trim();
+  if (!trimmed) return '';
+
+  if (trimmed.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    try {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        return new Intl.DateTimeFormat('en-CA', {
+          timeZone: BRAZIL_TIMEZONE,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+        }).format(d);
+      }
+    } catch {}
+  }
+
   const prefixMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
   if (prefixMatch && (!trimmed.includes('T') || trimmed.includes('T00:00'))) {
     return prefixMatch[1];
@@ -61,7 +128,25 @@ export function toDateInputValue(dateStr?: string | null): string {
  * Formats any date string to Brazilian format DD/MM/YYYY without timezone day-shift.
  */
 export function formatDateBR(dateStr?: string | null): string {
-  const d = parseCalendarDate(dateStr);
+  if (!dateStr) return '-';
+  const trimmed = dateStr.trim();
+  if (!trimmed) return '-';
+
+  if (trimmed.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    try {
+      const d = new Date(trimmed);
+      if (!isNaN(d.getTime())) {
+        return new Intl.DateTimeFormat('pt-BR', {
+          timeZone: BRAZIL_TIMEZONE,
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        }).format(d);
+      }
+    } catch {}
+  }
+
+  const d = parseCalendarDate(trimmed);
   if (!d) return dateStr || '-';
   return d.toLocaleDateString('pt-BR', {
     day: '2-digit',
@@ -72,6 +157,7 @@ export function formatDateBR(dateStr?: string | null): string {
 
 /**
  * Persists custom follow-up time (HH:mm) so it survives even if Postgres column is DATE-only.
+ * Mantido como compatibilidade temporária para follow-ups legados.
  */
 export function saveFollowUpTime(interactionId: string | undefined | null, leadId: string | undefined | null, timeStr: string): void {
   if (!timeStr) return;
@@ -85,7 +171,10 @@ export function saveFollowUpTime(interactionId: string | undefined | null, leadI
 }
 
 /**
- * Reads the follow-up time (HH:mm) from the date string or local persistence fallback.
+ * Reads the follow-up time (HH:mm) with priority:
+ * 1. Timestamp oficial (com timezone America/Sao_Paulo)
+ * 2. Fallback para localStorage legado
+ * 3. Fallback final '09:00'
  */
 export function getFollowUpTime(
   dateStr?: string | null,
@@ -93,10 +182,8 @@ export function getFollowUpTime(
   leadId?: string | null
 ): string {
   if (dateStr) {
-    const timeMatch = dateStr.trim().match(/[T\s](\d{2}:\d{2})/);
-    if (timeMatch && timeMatch[1] !== '00:00') {
-      return timeMatch[1];
-    }
+    const spTime = extractSaoPauloTime(dateStr);
+    if (spTime) return spTime;
   }
   try {
     const raw = localStorage.getItem(FOLLOWUP_TIMES_STORAGE_KEY);
@@ -111,6 +198,49 @@ export function getFollowUpTime(
     }
   } catch {}
   return '09:00';
+}
+
+/**
+ * Resolve data (YYYY-MM-DD) e horário (HH:mm) com hierarquia oficial:
+ * 1. next_follow_up_at do banco (oficial timestamptz)
+ * 2. next_follow_up_date (banco) + localStorage legado
+ * 3. Fallback final
+ */
+export function resolveFollowUpDateAndTime(
+  nextFollowUpAt?: string | null,
+  nextFollowUpDate?: string | null,
+  interactionId?: string | null,
+  leadId?: string | null
+): { date: string; time: string; source: 'database' | 'localStorage' | 'fallback' } {
+  // 1. Prioridade absoluta: next_follow_up_at do banco
+  if (nextFollowUpAt && String(nextFollowUpAt).trim() !== '') {
+    const date = toDateInputValue(nextFollowUpAt);
+    const time = extractSaoPauloTime(nextFollowUpAt) || '09:00';
+    return { date, time, source: 'database' };
+  }
+
+  // 2. Fallback legado: next_follow_up_date + localStorage
+  if (nextFollowUpDate && String(nextFollowUpDate).trim() !== '') {
+    const date = toDateInputValue(nextFollowUpDate);
+    const timeFromStorage = (() => {
+      try {
+        const raw = localStorage.getItem(FOLLOWUP_TIMES_STORAGE_KEY);
+        if (raw) {
+          const map: Record<string, string> = JSON.parse(raw);
+          if (interactionId && map[`int:${interactionId}`]) return map[`int:${interactionId}`];
+          if (leadId && map[`lead:${leadId}`]) return map[`lead:${leadId}`];
+        }
+      } catch {}
+      return null;
+    })();
+
+    if (timeFromStorage) {
+      return { date, time: timeFromStorage, source: 'localStorage' };
+    }
+    return { date, time: '09:00', source: 'fallback' };
+  }
+
+  return { date: '', time: '09:00', source: 'fallback' };
 }
 
 export function formatTimeBR(

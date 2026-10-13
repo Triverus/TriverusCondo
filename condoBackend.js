@@ -140,7 +140,7 @@ export async function resolveHumanReferenceToLead(supabaseClient, params) {
 export async function findCurrentFollowUpForLead(supabaseClient, leadId) {
   const { data: interactions } = await supabaseClient
     .from('interactions')
-    .select('id, lead_id, interaction_type, notes, occurred_at, next_follow_up_date')
+    .select('id, lead_id, interaction_type, notes, occurred_at, next_follow_up_date, next_follow_up_at, google_event_id')
     .eq('lead_id', leadId)
     .order('occurred_at', { ascending: false });
 
@@ -149,7 +149,8 @@ export async function findCurrentFollowUpForLead(supabaseClient, leadId) {
   }
 
   const withFollowUp = interactions.filter(
-    (i) => i.next_follow_up_date && String(i.next_follow_up_date).trim() !== ''
+    (i) => (i.next_follow_up_at && String(i.next_follow_up_at).trim() !== '') ||
+           (i.next_follow_up_date && String(i.next_follow_up_date).trim() !== '')
   );
 
   const currentFollowUp = withFollowUp.length > 0 ? withFollowUp[0] : null;

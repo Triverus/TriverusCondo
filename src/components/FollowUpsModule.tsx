@@ -34,6 +34,8 @@ import {
   toDateInputValue,
   saveFollowUpTime,
   getFollowUpTime,
+  buildSaoPauloIsoDateTime,
+  resolveFollowUpDateAndTime,
 } from '../lib/dateUtils.ts';
 import { renderFormattedTextWithLinks } from '../lib/linkUtils.tsx';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
@@ -148,31 +150,45 @@ export default function FollowUpsModule({
         setStatusFeedback({ type: 'success', message: `Temperatura alterada para ${val}!` });
       } else if (field === 'date') {
         if (!val) return;
-        const currentTime = getFollowUpTime(item.followUpDate, item.latestInteraction.id, item.lead.id);
-        const nextIso = `${val}T${currentTime}:00`;
+        const { time } = resolveFollowUpDateAndTime(
+          item.latestInteraction.next_follow_up_at,
+          item.followUpDate,
+          item.latestInteraction.id,
+          item.lead.id
+        );
+        const dateOnly = toDateInputValue(val);
+        const nextAtIso = buildSaoPauloIsoDateTime(dateOnly, time);
         const updatedInteraction: Interaction = {
           ...item.latestInteraction,
-          next_follow_up_date: nextIso,
+          next_follow_up_date: dateOnly,
+          next_follow_up_at: nextAtIso,
         };
         upsertInteractionLocally(updatedInteraction);
         await supabase
           .from('interactions')
-          .update({ next_follow_up_date: nextIso })
+          .update({ next_follow_up_date: dateOnly, next_follow_up_at: nextAtIso })
           .eq('id', item.latestInteraction.id);
-        setStatusFeedback({ type: 'success', message: `Agendamento alterado para ${formatDateBR(nextIso)}!` });
+        setStatusFeedback({ type: 'success', message: `Agendamento alterado para ${formatDateBR(nextAtIso)}!` });
       } else if (field === 'time') {
         if (!val) return;
-        const currentDatePart = toDateInputValue(item.followUpDate);
-        const nextIso = `${currentDatePart}T${val}:00`;
+        const { date } = resolveFollowUpDateAndTime(
+          item.latestInteraction.next_follow_up_at,
+          item.followUpDate,
+          item.latestInteraction.id,
+          item.lead.id
+        );
+        const dateOnly = toDateInputValue(date);
+        const nextAtIso = buildSaoPauloIsoDateTime(dateOnly, val);
         saveFollowUpTime(item.latestInteraction.id, item.lead.id, val);
         const updatedInteraction: Interaction = {
           ...item.latestInteraction,
-          next_follow_up_date: nextIso,
+          next_follow_up_date: dateOnly,
+          next_follow_up_at: nextAtIso,
         };
         upsertInteractionLocally(updatedInteraction);
         await supabase
           .from('interactions')
-          .update({ next_follow_up_date: nextIso })
+          .update({ next_follow_up_date: dateOnly, next_follow_up_at: nextAtIso })
           .eq('id', item.latestInteraction.id);
         setStatusFeedback({ type: 'success', message: `Horário alterado para ${val}!` });
       } else if (field === 'notes') {
@@ -638,8 +654,12 @@ export default function FollowUpsModule({
       const latest = sorted[0];
 
       // A lead ONLY appears in the Follow-ups list if its LATEST interaction has an active open follow-up scheduled!
-      if (latest.next_follow_up_date && latest.next_follow_up_date.trim() !== '') {
-        const status = getFollowUpStatus(latest.next_follow_up_date);
+      const hasFollowUp = (latest.next_follow_up_at && String(latest.next_follow_up_at).trim() !== '') ||
+                          (latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== '');
+
+      if (hasFollowUp) {
+        const followUpTarget = latest.next_follow_up_at || latest.next_follow_up_date!;
+        const status = getFollowUpStatus(followUpTarget);
         const responsibleId = latest.responsible_user_id || lead.responsible_user_id;
         const responsibleName = responsibleId ? profileMap.get(responsibleId) || 'Não atribuído' : 'Não atribuído';
         const stageName = lead.current_stage_id ? stageMap.get(lead.current_stage_id) || 'Estágio Inicial' : 'Estágio Inicial';
@@ -647,7 +667,7 @@ export default function FollowUpsModule({
         items.push({
           lead,
           latestInteraction: latest,
-          followUpDate: latest.next_follow_up_date,
+          followUpDate: followUpTarget,
           status,
           responsibleName,
           stageName,

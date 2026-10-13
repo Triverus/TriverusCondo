@@ -190,6 +190,29 @@ export function parseDateTime(dateStr) {
   if (isNaN(dt.getTime())) {
     dt = new Date();
   }
+
+  if (trimmed.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    try {
+      const dateSP = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }).format(dt);
+      const timeSP = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(dt);
+      return {
+        date: dateSP,
+        time: timeSP,
+        timestamp: dt.getTime(),
+      };
+    } catch {}
+  }
+
   const yyyy = dt.getFullYear();
   const mm = String(dt.getMonth() + 1).padStart(2, '0');
   const dd = String(dt.getDate()).padStart(2, '0');
@@ -250,9 +273,13 @@ export function getLeadFollowups(snapshot, leadId, filter = 'all') {
     const sorted = [...leadInts].sort((a, b) => new Date(b.occurred_at || 0).getTime() - new Date(a.occurred_at || 0).getTime());
     const latest = sorted[0];
 
-    if (latest && latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== '') {
-      const { date, time, timestamp } = parseDateTime(latest.next_follow_up_date);
-      const followupDatePrefix = String(latest.next_follow_up_date).trim().slice(0, 10);
+    const hasFollowUp = latest && ((latest.next_follow_up_at && String(latest.next_follow_up_at).trim() !== '') ||
+      (latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== ''));
+
+    if (latest && hasFollowUp) {
+      const followUpTarget = latest.next_follow_up_at || latest.next_follow_up_date;
+      const { date, time, timestamp } = parseDateTime(followUpTarget);
+      const followupDatePrefix = String(followUpTarget).trim().slice(0, 10);
 
       let status = 'upcoming';
       if (followupDatePrefix < todayStr) status = 'overdue';
@@ -273,7 +300,9 @@ export function getLeadFollowups(snapshot, leadId, filter = 'all') {
         date,
         time,
         next_follow_up_date_br: time ? `${date} às ${time}` : date,
-        scheduled_at: latest.next_follow_up_date,
+        scheduled_at: followUpTarget,
+        next_follow_up_at: latest.next_follow_up_at || null,
+        next_follow_up_date: latest.next_follow_up_date || null,
         status,
         timestamp,
       });

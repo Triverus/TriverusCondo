@@ -200,7 +200,10 @@ export interface Interaction {
   notes?: string | null;
   responsible_user_id?: string | null;
   next_follow_up_date?: string | null;
+  next_follow_up_at?: string | null;
+  google_event_id?: string | null;
   created_at?: string;
+  updated_at?: string;
 }
 
 interface CRMContextType {
@@ -305,7 +308,7 @@ export function CRMProvider({
           supabase.from('lead_contacts').select('lead_id, contact_id'),
           supabase
             .from('interactions')
-            .select('id, lead_id, interaction_type, occurred_at, notes, responsible_user_id, next_follow_up_date, created_at')
+            .select('*')
             .order('occurred_at', { ascending: false }),
         ]);
 

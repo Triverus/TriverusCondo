@@ -9,6 +9,8 @@ import {
   getFollowUpTime,
   saveFollowUpTime,
   parseCalendarDate,
+  buildSaoPauloIsoDateTime,
+  resolveFollowUpDateAndTime,
 } from '../lib/dateUtils.ts';
 
 export interface UnifiedNoteModalProps {
@@ -58,21 +60,32 @@ async function saveInteractionToSupabase(
   interactionId?: string
 ) {
   const primaryType = sanitizeInteractionTypeForDB(payload.interaction_type);
-  const attemptPayload = { ...payload, interaction_type: primaryType };
+  let attemptPayload = { ...payload, interaction_type: primaryType };
 
-  const query = mode === 'insert'
+  let query = mode === 'insert'
     ? supabase.from('interactions').insert([attemptPayload]).select().single()
     : supabase.from('interactions').update(attemptPayload).eq('id', interactionId!).select().single();
 
-  const res = await query;
+  let res = await query;
   if (!res.error && res.data) return res.data;
+
+  // Se o banco ainda não possuir next_follow_up_at ou google_event_id (código 42703 ou erro de coluna)
+  if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+    const { next_follow_up_at, google_event_id, ...legacyPayload } = attemptPayload;
+    attemptPayload = legacyPayload;
+    query = mode === 'insert'
+      ? supabase.from('interactions').insert([attemptPayload]).select().single()
+      : supabase.from('interactions').update(attemptPayload).eq('id', interactionId!).select().single();
+    res = await query;
+    if (!res.error && res.data) return res.data;
+  }
 
   // Fallback for check constraint violation (code 23514)
   if (res.error && res.error.code === '23514') {
     const candidateTypes = ['Ligação', 'WhatsApp', 'E-mail', 'Reunião', 'Outro', 'Anotação', 'call', 'meeting', 'email', 'other'];
     for (const cand of candidateTypes) {
       if (cand === primaryType) continue;
-      const retryPayload = { ...payload, interaction_type: cand };
+      const retryPayload = { ...attemptPayload, interaction_type: cand };
       const retryQuery = mode === 'insert'
         ? supabase.from('interactions').insert([retryPayload]).select().single()
         : supabase.from('interactions').update(retryPayload).eq('id', interactionId!).select().single();
@@ -170,10 +183,16 @@ export default function UnifiedNoteModal({
             setViewCalendarMonth(occ);
           }
           setFormResponsibleId(found.responsible_user_id || currentProfile.id);
-          if (found.next_follow_up_date) {
+          if (found.next_follow_up_at || found.next_follow_up_date) {
             setWantNextFollowUp(true);
-            setFormNextFollowUpDate(toDateInputValue(found.next_follow_up_date));
-            setFormNextFollowUpTime(getFollowUpTime(found.next_follow_up_date, found.id, lead.id));
+            const resolved = resolveFollowUpDateAndTime(
+              found.next_follow_up_at,
+              found.next_follow_up_date,
+              found.id,
+              lead.id
+            );
+            setFormNextFollowUpDate(resolved.date);
+            setFormNextFollowUpTime(resolved.time);
           } else {
             setWantNextFollowUp(false);
             setFormNextFollowUpDate('');
@@ -250,9 +269,14 @@ export default function UnifiedNoteModal({
         ? currentProfile.id
         : null;
 
-      const nextFollowUpFinal = wantNextFollowUp && formNextFollowUpDate
-        ? (formNextFollowUpDate.includes('T') ? formNextFollowUpDate : `${formNextFollowUpDate}T${formNextFollowUpTime || '09:00'}:00`)
-        : null;
+      let nextFollowUpAtIso: string | null = null;
+      let nextFollowUpDateOnly: string | null = null;
+
+      if (wantNextFollowUp && formNextFollowUpDate) {
+        const timeVal = formNextFollowUpTime || '09:00';
+        nextFollowUpAtIso = buildSaoPauloIsoDateTime(formNextFollowUpDate, timeVal);
+        nextFollowUpDateOnly = toDateInputValue(formNextFollowUpDate);
+      }
 
       const payload = {
         lead_id: lead.id,
@@ -260,7 +284,9 @@ export default function UnifiedNoteModal({
         occurred_at: occurredAtIso,
         responsible_user_id: validResponsibleId,
         notes: formNotes.trim() || null,
-        next_follow_up_date: nextFollowUpFinal,
+        next_follow_up_date: nextFollowUpDateOnly,
+        next_follow_up_at: nextFollowUpAtIso,
+        google_event_id: null,
       };
 
       if (editingInteractionId) {
@@ -272,7 +298,9 @@ export default function UnifiedNoteModal({
           upsertInteractionLocally({
             ...savedData,
             interaction_type: formType || savedData.interaction_type,
-            next_follow_up_date: nextFollowUpFinal || savedData.next_follow_up_date,
+            next_follow_up_date: nextFollowUpDateOnly || savedData.next_follow_up_date,
+            next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
+            google_event_id: savedData.google_event_id || null,
           });
         }
         if (onSuccessFeedback) onSuccessFeedback('Nota atualizada com sucesso!');
@@ -285,13 +313,15 @@ export default function UnifiedNoteModal({
           upsertInteractionLocally({
             ...savedData,
             interaction_type: formType || savedData.interaction_type,
-            next_follow_up_date: nextFollowUpFinal || savedData.next_follow_up_date,
+            next_follow_up_date: nextFollowUpDateOnly || savedData.next_follow_up_date,
+            next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
+            google_event_id: savedData.google_event_id || null,
           });
         }
         if (onSuccessFeedback) {
           onSuccessFeedback(
-            nextFollowUpFinal
-              ? `Nota salva! Próximo contato (${formNextChannel}) agendado para ${formatDateBR(nextFollowUpFinal)}.`
+            nextFollowUpAtIso
+              ? `Nota salva! Próximo contato (${formNextChannel}) agendado para ${formatDateBR(nextFollowUpAtIso)} às ${formNextFollowUpTime || '09:00'}.`
               : 'Nota registrada com sucesso!'
           );
         }

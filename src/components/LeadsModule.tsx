@@ -35,6 +35,9 @@ import {
   parseCalendarDate,
   getFollowUpTime,
   saveFollowUpTime,
+  toDateInputValue,
+  buildSaoPauloIsoDateTime,
+  resolveFollowUpDateAndTime,
 } from '../lib/dateUtils.ts';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
 import NotesTimelineModal from './NotesTimelineModal.tsx';
@@ -134,21 +137,32 @@ async function saveInteractionToSupabase(
   interactionId?: string
 ) {
   const primaryType = sanitizeInteractionTypeForDB(payload.interaction_type);
-  const attemptPayload = { ...payload, interaction_type: primaryType };
+  let attemptPayload = { ...payload, interaction_type: primaryType };
 
-  const query = mode === 'insert'
+  let query = mode === 'insert'
     ? supabase.from('interactions').insert([attemptPayload]).select().single()
     : supabase.from('interactions').update(attemptPayload).eq('id', interactionId!).select().single();
 
-  const res = await query;
+  let res = await query;
   if (!res.error && res.data) return res.data;
+
+  // Se a coluna next_follow_up_at ou google_event_id ainda não existir no banco
+  if (res.error && (res.error.code === '42703' || res.error.message?.includes('column'))) {
+    const { next_follow_up_at, google_event_id, ...legacyPayload } = attemptPayload;
+    attemptPayload = legacyPayload;
+    query = mode === 'insert'
+      ? supabase.from('interactions').insert([attemptPayload]).select().single()
+      : supabase.from('interactions').update(attemptPayload).eq('id', interactionId!).select().single();
+    res = await query;
+    if (!res.error && res.data) return res.data;
+  }
 
   // Fallback for check constraint violation (code 23514)
   if (res.error && res.error.code === '23514') {
     const candidateTypes = ['Ligação', 'WhatsApp', 'E-mail', 'Reunião', 'Outro', 'Anotação', 'call', 'meeting', 'email', 'other'];
     for (const cand of candidateTypes) {
       if (cand === primaryType) continue;
-      const retryPayload = { ...payload, interaction_type: cand };
+      const retryPayload = { ...attemptPayload, interaction_type: cand };
       const retryQuery = mode === 'insert'
         ? supabase.from('interactions').insert([retryPayload]).select().single()
         : supabase.from('interactions').update(retryPayload).eq('id', interactionId!).select().single();
@@ -1258,18 +1272,22 @@ export default function LeadsModule({
     } else if (field === 'follow_up_date') {
       const leadInteractions = getInteractionsForLead(leadId);
       const latest = leadInteractions[0];
+      const dateOnly = toDateInputValue(value);
       const timeVal = value.includes('T') ? value.split('T')[1]?.slice(0, 5) : '09:00';
+      const nextAtIso = buildSaoPauloIsoDateTime(dateOnly, timeVal);
+
       if (latest) {
         saveFollowUpTime(latest.id, leadId, timeVal);
         const updatedInt: Interaction = {
           ...latest,
-          next_follow_up_date: value,
+          next_follow_up_date: dateOnly,
+          next_follow_up_at: nextAtIso,
         };
         upsertInteractionLocally(updatedInt);
         try {
           await supabase
             .from('interactions')
-            .update({ next_follow_up_date: value })
+            .update({ next_follow_up_date: dateOnly, next_follow_up_at: nextAtIso })
             .eq('id', latest.id);
           setStatusFeedback({ type: 'success', message: 'Data de próximo contato atualizada!' });
         } catch (err) {
@@ -1281,7 +1299,9 @@ export default function LeadsModule({
           lead_id: leadId,
           interaction_type: 'Ligação',
           occurred_at: new Date().toISOString(),
-          next_follow_up_date: value,
+          next_follow_up_date: dateOnly,
+          next_follow_up_at: nextAtIso,
+          google_event_id: null,
           responsible_user_id: lead.responsible_user_id || currentProfile.id,
           notes: 'Agendamento de próximo contato',
           created_at: new Date().toISOString(),
@@ -2010,13 +2030,18 @@ export default function LeadsModule({
         ? new Date(formInteractionOccurredAt).toISOString()
         : new Date().toISOString();
 
+      const dateOnly = formInteractionNextFollowUpDate ? toDateInputValue(formInteractionNextFollowUpDate) : null;
+      const nextAtIso = dateOnly ? buildSaoPauloIsoDateTime(dateOnly, '09:00') : null;
+
       const payload = {
         lead_id: selectedLead.id,
         interaction_type: formInteractionType,
         occurred_at: occurredAtIso,
         responsible_user_id: formInteractionResponsibleId || currentProfile.id,
         notes: formInteractionNotes.trim() || null,
-        next_follow_up_date: formInteractionNextFollowUpDate ? formInteractionNextFollowUpDate : null,
+        next_follow_up_date: dateOnly,
+        next_follow_up_at: nextAtIso,
+        google_event_id: null,
       };
 
       if (interactionModalMode === 'create') {
@@ -2383,13 +2408,18 @@ export default function LeadsModule({
         ? currentProfile.id
         : null;
 
+      const dateOnly = noteFollowUpDate ? toDateInputValue(noteFollowUpDate) : null;
+      const nextAtIso = dateOnly ? buildSaoPauloIsoDateTime(dateOnly, '09:00') : null;
+
       const payload = {
         lead_id: validLeadId,
         interaction_type: noteType,
         occurred_at: occurredAtIso,
         responsible_user_id: validResponsibleId,
         notes: noteContent.trim() || null,
-        next_follow_up_date: noteFollowUpDate ? noteFollowUpDate : null,
+        next_follow_up_date: dateOnly,
+        next_follow_up_at: nextAtIso,
+        google_event_id: null,
       };
 
       let savedInteraction: Interaction | null = null;

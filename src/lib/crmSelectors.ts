@@ -7,6 +7,29 @@ export function parseDateTime(dateStr?: string | null): { date: string; time: st
   if (isNaN(dt.getTime())) {
     dt = new Date();
   }
+
+  if (trimmed.includes('Z') || /[+-]\d{2}:?\d{2}$/.test(trimmed)) {
+    try {
+      const dateSP = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      }).format(dt);
+      const timeSP = new Intl.DateTimeFormat('pt-BR', {
+        timeZone: 'America/Sao_Paulo',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(dt);
+      return {
+        date: dateSP,
+        time: timeSP,
+        timestamp: dt.getTime(),
+      };
+    } catch {}
+  }
+
   const yyyy = dt.getFullYear();
   const mm = String(dt.getMonth() + 1).padStart(2, '0');
   const dd = String(dt.getDate()).padStart(2, '0');
@@ -89,15 +112,19 @@ export function selectCanonicalFollowups(interactions: any[], leads: any[], prof
     const sorted = [...leadInts].sort((a, b) => new Date(b.occurred_at || 0).getTime() - new Date(a.occurred_at || 0).getTime());
     const latest = sorted[0];
 
-    if (latest && latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== '') {
-      const { date, time, timestamp } = parseDateTime(latest.next_follow_up_date);
+    const hasFollowUp = latest && ((latest.next_follow_up_at && String(latest.next_follow_up_at).trim() !== '') ||
+      (latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== ''));
+
+    if (latest && hasFollowUp) {
+      const followUpTarget = latest.next_follow_up_at || latest.next_follow_up_date;
+      const { date, time, timestamp } = parseDateTime(followUpTarget);
       const responsibleId = latest.responsible_user_id || lead.responsible_user_id;
       const responsibleName = responsibleId ? profileMap.get(responsibleId) || 'Não atribuído' : 'Não atribuído';
       const stageName = lead.current_stage_id ? stageMap.get(lead.current_stage_id) || 'Estágio Inicial' : 'Estágio Inicial';
 
       const now = new Date();
       const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-      const followupDatePrefix = String(latest.next_follow_up_date).trim().slice(0, 10);
+      const followupDatePrefix = String(followUpTarget).trim().slice(0, 10);
 
       let status: 'overdue' | 'today' | 'upcoming' = 'upcoming';
       if (followupDatePrefix < todayStr) status = 'overdue';
@@ -109,7 +136,9 @@ export function selectCanonicalFollowups(interactions: any[], leads: any[], prof
         leadName: lead.name,
         date,
         time,
-        scheduledAt: latest.next_follow_up_date,
+        scheduledAt: followUpTarget,
+        nextFollowUpAt: latest.next_follow_up_at || null,
+        nextFollowUpDate: latest.next_follow_up_date || null,
         interactionType: latest.interaction_type || 'Contato Agendado',
         notes: latest.notes || '',
         responsibleUserId: responsibleId,
