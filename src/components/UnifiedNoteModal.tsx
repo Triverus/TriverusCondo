@@ -306,20 +306,15 @@ export default function UnifiedNoteModal({
             google_event_id: savedData.google_event_id || null,
           });
 
-          const hasFollowUp = Boolean(nextFollowUpAtIso || savedData.next_follow_up_at);
-          console.log('[FOLLOWUP_GOOGLE_UPDATE_TRIGGER]', {
-            saved_interaction_id: savedData.id,
-            has_next_follow_up_at: hasFollowUp,
-            operation: 'update',
-            endpoint_called: true,
-          });
+          const hasFollowUp = (!!nextFollowUpAtIso) || (!!savedData?.next_follow_up_at);
+          console.log('[FOLLOWUP_GOOGLE_SYNC_DEBUG]', { nextFollowUpAtIso, dbNextAt: savedData?.next_follow_up_at, hasFollowUp });
 
           if (hasFollowUp && savedData.id) {
             try {
               const sessionData = await supabase.auth.getSession();
               const token = sessionData.data.session?.access_token;
               if (token) {
-                const syncRes = await fetch('/api/google/calendar/update-interaction', {
+                const syncRes = await fetch('/api/google/calendar/sync-interaction', {
                   method: 'POST',
                   headers: {
                     'Content-Type': 'application/json',
@@ -328,18 +323,18 @@ export default function UnifiedNoteModal({
                   body: JSON.stringify({ interactionId: savedData.id }),
                 });
                 const syncJson = await syncRes.json().catch(() => null);
-                console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
+                console.log('[FOLLOWUP_GOOGLE_SYNC_RESULT]', {
                   saved_interaction_id: savedData.id,
-                  http_status: syncRes.status,
+                  action: syncJson?.action || 'sync',
                   success: syncRes.ok,
                   synced: syncJson?.synced ?? false,
                   error_code: syncJson?.error || syncJson?.reason || null,
                 });
               } else {
-                console.warn('[FOLLOWUP_GOOGLE_UPDATE_RESULT] Token Supabase não encontrado na sessão.');
+                console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Token Supabase não encontrado na sessão.');
               }
             } catch (syncErr: any) {
-              console.warn('[FOLLOWUP_GOOGLE_UPDATE_RESULT] Exceção na chamada de update:', syncErr?.message);
+              console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
             }
           }
         }

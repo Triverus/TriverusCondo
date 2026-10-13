@@ -17,6 +17,8 @@ import {
   fetchUpcomingGoogleCalendarEvents,
   createGoogleCalendarEventForInteraction,
   updateGoogleCalendarEventForInteraction,
+  syncGoogleCalendarInteraction,
+  deleteGoogleCalendarEventForInteraction,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 } from './googleCalendarAuth.ts';
@@ -27,6 +29,8 @@ export {
   fetchUpcomingGoogleCalendarEvents,
   createGoogleCalendarEventForInteraction,
   updateGoogleCalendarEventForInteraction,
+  syncGoogleCalendarInteraction,
+  deleteGoogleCalendarEventForInteraction,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 };
@@ -795,7 +799,7 @@ app.get('/api/google/calendar/events', async (req, res) => {
   }
 });
 
-// Endpoint autenticado para sincronizar / criar evento no Google Calendar a partir de um follow-up salvo
+// Endpoint autenticado para sincronizar / criar / atualizar evento no Google Calendar
 app.post('/api/google/calendar/sync-interaction', async (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
@@ -838,7 +842,7 @@ app.post('/api/google/calendar/sync-interaction', async (req, res) => {
   }
 
   try {
-    const syncResult = await createGoogleCalendarEventForInteraction(interactionId);
+    const syncResult = await syncGoogleCalendarInteraction(interactionId);
     if (syncResult && (syncResult.reason === 'interaction_not_found' || syncResult.status === 404)) {
       return res.status(404).json({
         success: false,
@@ -863,8 +867,8 @@ app.post('/api/google/calendar/sync-interaction', async (req, res) => {
   }
 });
 
-// Endpoint autenticado para atualizar evento no Google Calendar a partir de um follow-up editado
-app.post('/api/google/calendar/update-interaction', async (req, res) => {
+// Endpoint autenticado para excluir evento no Google Calendar
+app.post('/api/google/calendar/delete-interaction-event', async (req, res) => {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
 
@@ -906,27 +910,20 @@ app.post('/api/google/calendar/update-interaction', async (req, res) => {
   }
 
   try {
-    const updateResult = await updateGoogleCalendarEventForInteraction(interactionId);
-    if (updateResult && (updateResult.reason === 'interaction_not_found' || updateResult.status === 404)) {
-      return res.status(404).json({
-        success: false,
-        error: 'interaction_not_found',
-      });
-    }
+    const deleteResult = await deleteGoogleCalendarEventForInteraction(interactionId);
     return res.status(200).json({
-      success: true,
-      ...updateResult,
+      success: deleteResult.success,
+      ...deleteResult,
     });
   } catch (err: any) {
-    console.error('[UPDATE_INTERACTION_ROUTE] Erro ao atualizar follow-up no Google Calendar:', {
+    console.error('[DELETE_INTERACTION_ROUTE] Erro ao excluir evento no Google Calendar:', {
       interaction_id: interactionId,
       error: err?.message,
     });
-    return res.status(200).json({
-      success: true,
-      synced: false,
-      reason: err?.code || 'update_exception',
-      message: err?.message || 'Falha na atualização, mas interação preservada.',
+    return res.status(500).json({
+      success: false,
+      error: err?.code || 'delete_exception',
+      message: err?.message || 'Falha na exclusão do evento.',
     });
   }
 });
