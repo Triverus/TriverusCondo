@@ -307,7 +307,7 @@ export default function UnifiedNoteModal({
           });
 
           const hasFollowUp = Boolean(nextFollowUpAtIso || savedData.next_follow_up_at);
-          console.log('[FOLLOWUP_GOOGLE_SYNC_TRIGGER]', {
+          console.log('[FOLLOWUP_GOOGLE_UPDATE_TRIGGER]', {
             saved_interaction_id: savedData.id,
             has_next_follow_up_at: hasFollowUp,
             operation: 'update',
@@ -358,13 +358,8 @@ export default function UnifiedNoteModal({
             google_event_id: savedData.google_event_id || null,
           });
 
-          const hasFollowUp = Boolean(nextFollowUpAtIso || savedData.next_follow_up_at);
-          console.log('[FOLLOWUP_GOOGLE_SYNC_TRIGGER]', {
-            saved_interaction_id: savedData.id,
-            has_next_follow_up_at: hasFollowUp,
-            operation: 'insert',
-            endpoint_called: true,
-          });
+          const hasFollowUp = (!!nextFollowUpAtIso) || (!!savedData?.next_follow_up_at);
+          console.log('[FOLLOWUP_GOOGLE_SYNC_DEBUG]', { nextFollowUpAtIso, dbNextAt: savedData?.next_follow_up_at, hasFollowUp });
 
           if (hasFollowUp && savedData.id) {
             try {
