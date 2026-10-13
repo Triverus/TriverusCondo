@@ -90,10 +90,30 @@ export default function NotesTimelineModal({
 
   const handleDeleteInteraction = async (interactionId: string) => {
     setDeletingId(interactionId);
+    const interaction = interactions.find(i => i.id === interactionId);
+    
     try {
-      await supabase.from('interactions').delete().eq('id', interactionId);
+        if (interaction?.google_event_id) {
+            const { data: { session } } = await supabase.auth.getSession();
+            const response = await fetch('/api/google/calendar/delete-interaction-event', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${session?.access_token}`
+                },
+                body: JSON.stringify({ interactionId })
+            });
+            
+            if (!response.ok) {
+                throw new Error('Falha ao remover evento do Google Calendar.');
+            }
+        }
+        
+        const { error } = await supabase.from('interactions').delete().eq('id', interactionId);
+        if (error) throw error;
+        
     } catch (err) {
-      console.warn('Notice deleting interaction from Supabase:', err);
+      console.warn('Erro ao excluir interaction:', err);
     } finally {
       deleteInteractionLocally(interactionId);
       setDeletingId(null);
