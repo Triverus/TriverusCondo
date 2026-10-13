@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
@@ -29,14 +30,29 @@ const loadedEnv = loadEnv(process.env.NODE_ENV || 'development', process.cwd(), 
 const app = express();
 app.use(express.json({ limit: '10mb' }));
 
-const SUPABASE_URL = loadedEnv.VITE_SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const SUPABASE_ANON_KEY = loadedEnv.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || loadedEnv.VITE_SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || loadedEnv.VITE_SUPABASE_PUBLISHABLE_KEY || '';
 
 function getScopedSupabaseClient(token?: string): SupabaseClient {
   return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
     global: {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     },
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+function getAdminSupabaseClient(): SupabaseClient | null {
+  const supabaseUrl = process.env.VITE_SUPABASE_URL || loadedEnv.VITE_SUPABASE_URL;
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || loadedEnv.SUPABASE_SERVICE_ROLE_KEY;
+  if (!serviceKey || !serviceKey.trim() || !supabaseUrl || !supabaseUrl.trim()) {
+    return null;
+  }
+  return createClient(supabaseUrl.trim(), serviceKey.trim(), {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
@@ -60,16 +76,122 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-app.get('/api/google/oauth/start', (req, res) => {
+function createOAuthState(userId: string, secret: string): string {
+  const payloadObj = {
+    user_id: userId,
+    ts: Date.now(),
+    nonce: crypto.randomBytes(16).toString('hex'),
+  };
+  const payloadStr = Buffer.from(JSON.stringify(payloadObj)).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', secret)
+    .update(payloadStr)
+    .digest('base64url');
+  return `${payloadStr}.${signature}`;
+}
+
+function verifyOAuthState(
+  state: string,
+  secret: string,
+  maxAgeMs: number = 10 * 60 * 1000
+): { valid: boolean; error?: string; userId?: string } {
+  if (!state || typeof state !== 'string' || !state.trim()) {
+    return { valid: false, error: 'missing_oauth_state' };
+  }
+
+  const parts = state.split('.');
+  if (parts.length !== 2) {
+    return { valid: false, error: 'invalid_oauth_state' };
+  }
+
+  const [payloadStr, signature] = parts;
+  if (!payloadStr || !signature) {
+    return { valid: false, error: 'invalid_oauth_state' };
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(payloadStr)
+    .digest('base64url');
+
+  try {
+    const sigBuf = Buffer.from(signature);
+    const expBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return { valid: false, error: 'invalid_oauth_state' };
+    }
+  } catch {
+    return { valid: false, error: 'invalid_oauth_state' };
+  }
+
+  let payload: { user_id?: string; ts?: number; nonce?: string };
+  try {
+    const jsonStr = Buffer.from(payloadStr, 'base64url').toString('utf8');
+    payload = JSON.parse(jsonStr);
+  } catch {
+    return { valid: false, error: 'invalid_oauth_state' };
+  }
+
+  if (!payload || !payload.user_id || typeof payload.ts !== 'number' || !payload.nonce) {
+    return { valid: false, error: 'invalid_oauth_state' };
+  }
+
+  const now = Date.now();
+  if (now - payload.ts > maxAgeMs || payload.ts > now + 60 * 1000) {
+    return { valid: false, error: 'expired_oauth_state' };
+  }
+
+  return { valid: true, userId: payload.user_id };
+}
+
+app.post('/api/google/oauth/start', async (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID || loadedEnv.GOOGLE_CLIENT_ID;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI || loadedEnv.GOOGLE_REDIRECT_URI;
+  const stateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET || loadedEnv.GOOGLE_OAUTH_STATE_SECRET;
 
-  if (!clientId || !redirectUri) {
+  if (!clientId || !redirectUri || !stateSecret) {
     return res.status(500).json({
       error: 'Configuração OAuth incompleta.',
-      message: 'As variáveis de ambiente GOOGLE_CLIENT_ID e GOOGLE_REDIRECT_URI são obrigatórias.',
+      message: 'As variáveis de ambiente GOOGLE_CLIENT_ID, GOOGLE_REDIRECT_URI e GOOGLE_OAUTH_STATE_SECRET são obrigatórias.',
     });
   }
+
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+
+  if (!token) {
+    return res.status(401).json({
+      error: 'unauthorized',
+      message: 'Cabeçalho Authorization: Bearer <token> obrigatório.',
+    });
+  }
+
+  const scopedSupabase = getScopedSupabaseClient(token);
+  let userId: string | null = null;
+  try {
+    const { data: userData, error: userError } = await scopedSupabase.auth.getUser(token);
+    if (userError || !userData?.user) {
+      return res.status(401).json({
+        error: 'unauthorized',
+        message: 'Token de autenticação inválido ou expirado.',
+      });
+    }
+    userId = userData.user.id;
+  } catch {
+    return res.status(401).json({
+      error: 'unauthorized',
+      message: 'Falha ao validar sessão do usuário.',
+    });
+  }
+
+  if (!userId) {
+    return res.status(401).json({
+      error: 'unauthorized',
+      message: 'Usuário não autenticado.',
+    });
+  }
+
+  const state = createOAuthState(userId, stateSecret);
 
   const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   authUrl.searchParams.set('response_type', 'code');
@@ -78,23 +200,35 @@ app.get('/api/google/oauth/start', (req, res) => {
   authUrl.searchParams.set('scope', 'https://www.googleapis.com/auth/calendar.events');
   authUrl.searchParams.set('access_type', 'offline');
   authUrl.searchParams.set('prompt', 'consent');
+  authUrl.searchParams.set('state', state);
 
-  return res.redirect(authUrl.toString());
+  return res.status(200).json({
+    success: true,
+    auth_url: authUrl.toString(),
+  });
+});
+
+app.get('/api/google/oauth/start', (req, res) => {
+  return res.status(401).json({
+    error: 'unauthorized',
+    message: 'Esta rota foi descontinuada. O fluxo de autorização exige autenticação. Utilize POST /api/google/oauth/start com Authorization: Bearer <token>.',
+  });
 });
 
 app.get('/api/google/oauth/callback', async (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID || loadedEnv.GOOGLE_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET || loadedEnv.GOOGLE_CLIENT_SECRET;
   const redirectUri = process.env.GOOGLE_REDIRECT_URI || loadedEnv.GOOGLE_REDIRECT_URI;
+  const stateSecret = process.env.GOOGLE_OAUTH_STATE_SECRET || loadedEnv.GOOGLE_OAUTH_STATE_SECRET;
 
-  if (!clientId || !clientSecret || !redirectUri) {
+  if (!clientId || !clientSecret || !redirectUri || !stateSecret) {
     return res.status(500).json({
       error: 'Configuração OAuth incompleta.',
-      message: 'As variáveis de ambiente GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET e GOOGLE_REDIRECT_URI são obrigatórias.',
+      message: 'As variáveis de ambiente GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI e GOOGLE_OAUTH_STATE_SECRET são obrigatórias.',
     });
   }
 
-  const { code, error, error_description } = req.query;
+  const { code, state, error, error_description } = req.query;
 
   if (error) {
     const errorMsg = typeof error === 'string' ? error : 'oauth_error';
@@ -102,6 +236,27 @@ app.get('/api/google/oauth/callback', async (req, res) => {
     return res.status(400).json({
       error: errorMsg,
       message,
+    });
+  }
+
+  if (!state || typeof state !== 'string' || !state.trim()) {
+    return res.status(400).json({
+      error: 'missing_oauth_state',
+    });
+  }
+
+  const stateValidation = verifyOAuthState(state, stateSecret);
+  if (!stateValidation.valid) {
+    return res.status(400).json({
+      error: stateValidation.error || 'invalid_oauth_state',
+    });
+  }
+
+  // user_id recuperado de forma autenticada e segura a partir da assinatura do state
+  const authenticatedUserId = stateValidation.userId;
+  if (!authenticatedUserId) {
+    return res.status(400).json({
+      error: 'invalid_oauth_state',
     });
   }
 
@@ -140,12 +295,78 @@ app.get('/api/google/oauth/callback', async (req, res) => {
       });
     }
 
+    // Consultar API de userinfo do Google para obter o e-mail da conta autorizada
+    let googleEmail: string | null = null;
+    try {
+      const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+        headers: {
+          Authorization: `Bearer ${tokenData.access_token}`,
+        },
+      });
+      if (userInfoResponse.ok) {
+        const userInfo: any = await userInfoResponse.json().catch(() => null);
+        if (userInfo && typeof userInfo.email === 'string') {
+          googleEmail = userInfo.email.trim();
+        }
+      }
+    } catch {
+      // Ignora erro de rede/permissão de userinfo para não travar a autorização
+    }
+
+    const adminSupabase = getAdminSupabaseClient();
+    if (!adminSupabase) {
+      console.error('[GOOGLE_OAUTH] SUPABASE_SERVICE_ROLE_KEY não configurada no servidor.');
+      return res.status(500).json({
+        success: false,
+        error: 'calendar_connection_persist_failed',
+      });
+    }
+
+    // Regra: se o novo callback não trouxer refresh_token, preservar o refresh_token já existente
+    let refreshTokenToPersist = tokenData.refresh_token || null;
+    if (!refreshTokenToPersist) {
+      const { data: existingConn, error: existingFetchErr } = await adminSupabase
+        .from('google_calendar_connections')
+        .select('refresh_token')
+        .eq('user_id', authenticatedUserId)
+        .maybeSingle();
+
+      if (!existingFetchErr && existingConn?.refresh_token) {
+        refreshTokenToPersist = existingConn.refresh_token;
+      }
+    }
+
+    const expiresAt = tokenData.expires_in
+      ? new Date(Date.now() + Number(tokenData.expires_in) * 1000).toISOString()
+      : null;
+
+    const connectionPayload = {
+      user_id: authenticatedUserId,
+      google_email: googleEmail,
+      access_token: tokenData.access_token,
+      refresh_token: refreshTokenToPersist,
+      token_type: tokenData.token_type || null,
+      scope: tokenData.scope || null,
+      expires_at: expiresAt,
+    };
+
+    const { error: upsertError } = await adminSupabase
+      .from('google_calendar_connections')
+      .upsert(connectionPayload, { onConflict: 'user_id' });
+
+    if (upsertError) {
+      console.error('[GOOGLE_OAUTH] Falha ao persistir conexão no Supabase:', upsertError.message);
+      return res.status(500).json({
+        success: false,
+        error: 'calendar_connection_persist_failed',
+      });
+    }
+
     return res.status(200).json({
       success: true,
-      message: 'Google Calendar autorizado com sucesso',
-      has_access_token: Boolean(tokenData.access_token),
-      has_refresh_token: Boolean(tokenData.refresh_token),
-      expires_in: tokenData.expires_in ?? null,
+      message: 'Google Calendar conectado com sucesso',
+      connected: true,
+      google_email: googleEmail,
     });
   } catch (err: any) {
     return res.status(500).json({
