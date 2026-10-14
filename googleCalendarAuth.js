@@ -644,3 +644,64 @@ export async function syncGoogleCalendarInteraction(interactionId) {
   }
 }
 
+export async function deleteGoogleCalendarEventForInteraction(interactionId) {
+  const supabase = getAdminClient();
+  if (!supabase) {
+    return { success: false, reason: 'database_unavailable' };
+  }
+
+  const { data: interaction, error: intErr } = await supabase
+    .from('interactions')
+    .select('id, google_event_id, responsible_user_id')
+    .eq('id', interactionId)
+    .single();
+
+  if (intErr || !interaction) {
+    return { success: false, reason: 'interaction_not_found', status: 404 };
+  }
+
+  if (!interaction.google_event_id || !interaction.google_event_id.trim()) {
+    return { success: true, deleted: false, reason: 'no_google_event' };
+  }
+
+  const startTime = Date.now();
+  let accessToken;
+  try {
+    accessToken = await getValidGoogleAccessToken(interaction.responsible_user_id);
+  } catch (err) {
+    console.warn('[GOOGLE_CALENDAR_DELETE] Falha ao obter token:', { interaction_id: interactionId, error: err?.code });
+    return { success: false, reason: err?.code || 'google_calendar_not_connected' };
+  }
+
+  const googleEventId = interaction.google_event_id.trim();
+  const googleUrl = `https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(googleEventId)}`;
+
+  const googleRes = await fetch(googleUrl, {
+    method: 'DELETE',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const duration = Date.now() - startTime;
+  const alreadyMissing = googleRes.status === 404;
+
+  if (!googleRes.ok && !alreadyMissing) {
+    console.error('[GOOGLE_CALENDAR_DELETE] Falha ao excluir no Google:', {
+      status: googleRes.status,
+      interaction_id: interactionId,
+    });
+    return { success: false, reason: googleRes.status >= 500 ? 'google_calendar_delete_failed' : 'google_api_error', status: googleRes.status };
+  }
+
+  console.log('[GOOGLE_CALENDAR_DELETE]', {
+    interaction_id: interactionId,
+    success: true,
+    google_http_status: googleRes.status,
+    already_missing: alreadyMissing,
+    google_duration_ms: duration,
+  });
+
+  return { success: true, deleted: !alreadyMissing, reason: alreadyMissing ? 'already_missing' : 'success' };
+}
+

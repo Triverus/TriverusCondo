@@ -18,6 +18,7 @@ import {
   createGoogleCalendarEventForInteraction,
   updateGoogleCalendarEventForInteraction,
   syncGoogleCalendarInteraction,
+  deleteGoogleCalendarEventForInteraction,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 } from './googleCalendarAuth.js';
@@ -28,6 +29,8 @@ export {
   fetchUpcomingGoogleCalendarEvents,
   createGoogleCalendarEventForInteraction,
   updateGoogleCalendarEventForInteraction,
+  syncGoogleCalendarInteraction,
+  deleteGoogleCalendarEventForInteraction,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 };
@@ -943,6 +946,79 @@ app.post('/api/google/calendar/update-interaction', async (req, res) => {
       synced: false,
       reason: err?.code || 'update_exception',
       message: err?.message || 'Falha na atualização, mas interação preservada.',
+    });
+  }
+});
+
+// Endpoint autenticado para excluir evento no Google Calendar
+app.post('/api/google/calendar/delete-interaction-event', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: 'unauthorized',
+      message: 'Cabeçalho Authorization: Bearer <token> obrigatório.',
+    });
+  }
+
+  const scopedSupabase = getScopedSupabaseClient(token);
+  let userId = null;
+  try {
+    const { data: userData, error: userError } = await scopedSupabase.auth.getUser(token);
+    if (userError || !userData?.user) {
+      return res.status(401).json({
+        success: false,
+        error: 'unauthorized',
+        message: 'Token de autenticação inválido ou expirado.',
+      });
+    }
+    userId = userData.user.id;
+  } catch {
+    return res.status(401).json({
+      success: false,
+      error: 'unauthorized',
+      message: 'Falha ao validar sessão do usuário.',
+    });
+  }
+
+  const { interactionId } = req.body || {};
+  if (!interactionId) {
+    return res.status(400).json({
+      success: false,
+      error: 'missing_interaction_id',
+      message: 'interactionId obrigatório no corpo da requisição.',
+    });
+  }
+
+  try {
+    const deleteResult = await deleteGoogleCalendarEventForInteraction(interactionId);
+    if (deleteResult && (deleteResult.reason === 'interaction_not_found' || deleteResult.status === 404)) {
+      return res.status(404).json({
+        success: false,
+        error: 'interaction_not_found',
+      });
+    }
+    if (!deleteResult.success) {
+      return res.status(deleteResult.status || 500).json({
+        success: false,
+        ...deleteResult,
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      ...deleteResult,
+    });
+  } catch (err) {
+    console.error('[DELETE_INTERACTION_ROUTE] Erro ao excluir evento no Google Calendar:', {
+      interaction_id: interactionId,
+      error: err?.message,
+    });
+    return res.status(500).json({
+      success: false,
+      error: err?.code || 'delete_exception',
+      message: err?.message || 'Falha na exclusão do evento.',
     });
   }
 });
