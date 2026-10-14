@@ -738,6 +738,8 @@ export function LeadCard({
               <select
                 autoFocus
                 value={lead.current_stage_id || stages[0]?.id || ''}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
                 onChange={(e) => {
                   const newStage = e.target.value;
                   if (newStage && newStage !== lead.current_stage_id) {
@@ -782,7 +784,10 @@ export function LeadCard({
                 {onQuickUpdate && (
                   <button
                     type="button"
-                    onClick={() => setInlineEditing('stage')}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInlineEditing('stage');
+                    }}
                     title="Editar estágio do funil"
                     className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
                       isLight
@@ -817,6 +822,8 @@ export function LeadCard({
               <select
                 autoFocus
                 value={lead.responsible_user_id || profiles[0]?.id || ''}
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
                 onChange={(e) => {
                   const newResp = e.target.value;
                   if (newResp && newResp !== lead.responsible_user_id) {
@@ -841,7 +848,10 @@ export function LeadCard({
                 {onQuickUpdate && (
                   <button
                     type="button"
-                    onClick={() => setInlineEditing('responsible')}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setInlineEditing('responsible');
+                    }}
                     title="Alterar responsável"
                     className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
                       isLight
@@ -861,7 +871,11 @@ export function LeadCard({
         {showNextContact && (
           <div className="pt-1.5 text-[11px]">
             {inlineEditing === 'followup_date' ? (
-              <div className="flex items-center gap-1 bg-slate-900 p-1.5 rounded-xl border border-indigo-500/80 shadow-md">
+              <div
+                onClick={(e) => e.stopPropagation()}
+                onMouseDown={(e) => e.stopPropagation()}
+                className="flex items-center gap-1 bg-slate-900 p-1.5 rounded-xl border border-indigo-500/80 shadow-md"
+              >
                 <input
                   type="date"
                   autoFocus
@@ -910,7 +924,8 @@ export function LeadCard({
                   </span>
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       const initialDate = followUpInfo.rawDate
                         ? toDateInputValue(followUpInfo.rawDate)
                         : toDateInputValue(new Date().toISOString());

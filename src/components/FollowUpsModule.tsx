@@ -145,29 +145,33 @@ export default function FollowUpsModule({
     const lead = leads.find((l) => l.id === lostReasonModal.leadId);
     if (!lead) return;
 
-    const updatedLead: Lead = {
-      ...lead,
-      current_stage_id: lostReasonModal.targetStageId,
-      loss_reason: reasonTrimmed,
-    };
-
-    upsertLeadLocally(updatedLead);
-    saveLeadStageOverride(lead.id, lostReasonModal.targetStageId, reasonTrimmed);
-    setLostReasonModal({ open: false, leadId: null, targetStageId: 'stg_perdido', reason: '', error: null });
-    setStatusFeedback({ type: 'success', message: 'Condomínio marcado como Perdido.' });
-
     try {
-      const { error: err } = await supabase
+      const { data: updatedData, error: err } = await supabase
         .from('leads')
         .update({
           current_stage_id: lostReasonModal.targetStageId,
           loss_reason: reasonTrimmed,
         })
-        .eq('id', lead.id);
+        .eq('id', lead.id)
+        .select()
+        .single();
       if (err) throw err;
+
+      const updatedLead: Lead = updatedData || {
+        ...lead,
+        current_stage_id: lostReasonModal.targetStageId,
+        loss_reason: reasonTrimmed,
+      };
+
+      saveLeadStageOverride(lead.id, lostReasonModal.targetStageId, reasonTrimmed);
+      upsertLeadLocally(updatedLead);
+      setLostReasonModal({ open: false, leadId: null, targetStageId: 'stg_perdido', reason: '', error: null });
+      setStatusFeedback({ type: 'success', message: 'Condomínio marcado como Perdido.' });
       refreshAll(true);
-    } catch (err) {
-      console.warn('Sync lost reason error:', err);
+    } catch (err: any) {
+      console.error('Sync lost reason error:', err);
+      setLostReasonModal((prev) => ({ ...prev, error: 'Falha ao salvar motivo de perda no banco de dados.' }));
+      setStatusFeedback({ type: 'error', message: 'Erro ao atualizar estágio no banco de dados.' });
     }
   };
 
@@ -206,12 +210,17 @@ export default function FollowUpsModule({
         const prevStage = stages.find((s) => s.id === item.lead.current_stage_id);
         const wasClient = prevStage?.is_won || item.lead.current_stage_id === 'stg_cliente' || prevStage?.name?.toLowerCase().includes('cliente');
 
-        const updatedLead: Lead = { ...item.lead, current_stage_id: val, loss_reason: newLossReason };
-        upsertLeadLocally(updatedLead);
-        saveLeadStageOverride(item.lead.id, val, newLossReason);
-
-        const { error: stageErr } = await supabase.from('leads').update({ current_stage_id: val, loss_reason: newLossReason }).eq('id', item.lead.id);
+        const { data: updatedData, error: stageErr } = await supabase
+          .from('leads')
+          .update({ current_stage_id: val, loss_reason: newLossReason })
+          .eq('id', item.lead.id)
+          .select()
+          .single();
         if (stageErr) throw stageErr;
+
+        const updatedLead: Lead = updatedData || { ...item.lead, current_stage_id: val, loss_reason: newLossReason };
+        saveLeadStageOverride(item.lead.id, val, newLossReason);
+        upsertLeadLocally(updatedLead);
 
         if (isTargetClient && !wasClient) {
           celebrateClientConversion();
@@ -754,6 +763,7 @@ export default function FollowUpsModule({
 
         items.push({
           lead,
+          followUpInteraction: activeInt,
           latestInteraction: activeInt,
           followUpDate: followUpTarget,
           status,
@@ -1255,6 +1265,8 @@ export default function FollowUpsModule({
                                 <select
                                   autoFocus
                                   value={quickEdit?.value || ''}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onMouseDown={(e) => e.stopPropagation()}
                                   onChange={(e) => handleSaveQuickField(item, e.target.value)}
                                   onBlur={() => setQuickEdit(null)}
                                   className="px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded-md text-[11px] text-slate-100 focus:outline-none"
@@ -1271,13 +1283,14 @@ export default function FollowUpsModule({
                                 <span className="truncate">{item.stageName}</span>
                                 <button
                                   type="button"
-                                  onClick={() =>
+                                  onClick={(e) => {
+                                    e.stopPropagation();
                                     handleOpenQuickEdit(
                                       item.lead.id,
                                       'stage',
                                       item.lead.current_stage_id || (stages[0]?.id ?? '')
-                                    )
-                                  }
+                                    );
+                                  }}
                                   title="Editar estágio do funil"
                                   className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
                                     isLight ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70' : 'text-slate-300/80 hover:text-white hover:bg-black/30'
@@ -1445,21 +1458,22 @@ export default function FollowUpsModule({
                         </>
                       )}
 
-                      {/* Bloco 3: Estágio Comercial */}
+                      {/* Bloco 3: Temperatura */}
                       {viewConfig.showTemperature && (
                         <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
                           <div className="flex items-center justify-between gap-1 mb-0.5">
                             <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
-                              Estágio
+                              Temperatura
                             </span>
                             <button
                               type="button"
-                              onClick={() =>
-                                isEditingField('stage')
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                isEditingField('temperature')
                                   ? setQuickEdit(null)
-                                  : handleOpenQuickEdit(item.lead.id, 'stage', item.lead.current_stage_id || stages[0]?.id || '')
-                              }
-                              title="Alterar estágio comercial"
+                                  : handleOpenQuickEdit(item.lead.id, 'temperature', item.lead.temperature || 'Morno');
+                              }}
+                              title="Alterar temperatura do condomínio"
                               className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
                                 isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
                               }`}
@@ -1467,26 +1481,28 @@ export default function FollowUpsModule({
                               <EditIcon className="w-3 h-3" />
                             </button>
                           </div>
-                          {isEditingField('stage') ? (
+                          {isEditingField('temperature') ? (
                             <select
                               autoFocus
-                              value={quickEdit?.value || item.lead.current_stage_id || ''}
+                              value={quickEdit?.value || item.lead.temperature || 'Morno'}
+                              onClick={(e) => e.stopPropagation()}
+                              onMouseDown={(e) => e.stopPropagation()}
                               onChange={(e) => {
                                 const v = e.target.value;
-                                if (v) handleSaveQuickField(item, v, 'stage');
+                                if (v) handleSaveQuickField(item, v, 'temperature');
                               }}
                               onBlur={() => setQuickEdit((prev) => (prev?.saving ? prev : null))}
                               className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none mt-0.5"
                             >
-                              {stages.map((stg) => (
-                                <option key={stg.id} value={stg.id}>
-                                  {stg.name}
+                              {TEMPERATURE_OPTIONS.map((opt) => (
+                                <option key={opt} value={opt}>
+                                  {opt}
                                 </option>
                               ))}
                             </select>
                           ) : (
                             <div className="mt-0.5 truncate">
-                              {getStageBadge(item.lead.current_stage_id)}
+                              {getTemperatureBadge(item.lead.temperature)}
                             </div>
                           )}
                         </div>

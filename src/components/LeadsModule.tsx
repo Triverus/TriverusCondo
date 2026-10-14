@@ -47,7 +47,7 @@ import {
   syncInteractionCalendar,
   syncGoogleCalendarInteraction,
   updateGoogleCalendarInteraction,
-  deleteGoogleCalendarInteraction,
+  deleteInteractionCalendar,
 } from '../lib/googleCalendarClient.ts';
 
 interface LeadsModuleProps {
@@ -2559,9 +2559,9 @@ export default function LeadsModule({
         try {
           const interaction = interactions.find(i => i.id === interactionId);
           if (interaction?.google_event_id) {
-            const deleteRes = await deleteGoogleCalendarInteraction(interactionId);
-            if (!deleteRes.ok) {
-              throw new Error('Falha ao remover evento do Google Calendar.');
+            const result = await deleteInteractionCalendar(interactionId);
+            if (!result.ok || result.data?.success === false) {
+              throw new Error(result.error || result.data?.message || 'Falha ao remover evento do Google Calendar.');
             }
           }
           const { error } = await supabase.from('interactions').delete().eq('id', interactionId);
@@ -2572,7 +2572,7 @@ export default function LeadsModule({
           setDeleteConfirmModal((prev) => ({ ...prev, open: false }));
         } catch (err: any) {
           console.error('Error deleting interaction:', err);
-          setStatusFeedback({ type: 'error', message: 'Erro ao excluir atualização.' });
+          setStatusFeedback({ type: 'error', message: err?.message || 'Erro ao excluir atualização.' });
         } finally {
           setIsDeletingItem(false);
         }

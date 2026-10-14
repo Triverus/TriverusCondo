@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase.ts';
-import { deleteGoogleCalendarInteraction } from '../lib/googleCalendarClient.ts';
+import { deleteInteractionCalendar } from '../lib/googleCalendarClient.ts';
 import { useCRM, type Lead, type Interaction } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
 import { NotesIcon, EditIcon, TrashIcon } from './PipelineComponents.tsx';
@@ -69,6 +69,7 @@ export default function NotesTimelineModal({
   const [isMaximized, setIsMaximized] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   if (!isOpen || !lead) return null;
 
@@ -91,21 +92,29 @@ export default function NotesTimelineModal({
 
   const handleDeleteInteraction = async (interactionId: string) => {
     setDeletingId(interactionId);
+    setDeleteError(null);
     const interaction = interactions.find(i => i.id === interactionId);
     
     try {
+      // Se houver evento vinculado ao Google Calendar, aguardar exclusão no Calendar primeiro
       if (interaction?.google_event_id) {
-        const deleteRes = await deleteGoogleCalendarInteraction(interactionId);
-        if (!deleteRes.ok) {
-          throw new Error('Falha ao remover evento do Google Calendar.');
+        const result = await deleteInteractionCalendar(interactionId);
+        // Validar sucesso de acordo com o contrato real do helper
+        if (!result.ok || result.data?.success === false) {
+          throw new Error(result.error || result.data?.message || 'Falha ao remover evento do Google Calendar.');
         }
       }
 
+      // Somente após sucesso no Calendar (ou sem evento Calendar vinculado), excluir no Supabase
       const { error } = await supabase.from('interactions').delete().eq('id', interactionId);
       if (error) throw error;
+
+      // Remover do estado e cache local apenas após sucesso comprovado
       deleteInteractionLocally(interactionId);
-    } catch (err) {
-      console.warn('Erro ao excluir interaction:', err);
+      setDeleteError(null);
+    } catch (err: any) {
+      console.error('Erro ao excluir interação:', err);
+      setDeleteError(err?.message || 'Não foi possível excluir a anotação. Tente novamente.');
     } finally {
       setDeletingId(null);
       setConfirmDeleteId(null);
@@ -200,6 +209,25 @@ export default function NotesTimelineModal({
 
         {/* Timeline Body - Da mais recente para a mais antiga */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-slate-950/60 custom-scrollbar">
+          {deleteError && (
+            <div className="p-3 bg-rose-950/90 border border-rose-600/70 rounded-xl flex items-center justify-between gap-3 text-rose-200 text-xs animate-in fade-in duration-150">
+              <div className="flex items-center gap-2">
+                <svg className="w-4 h-4 shrink-0 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>{deleteError}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteError(null)}
+                className="p-1 hover:bg-rose-900/60 rounded text-rose-400 hover:text-white cursor-pointer"
+                title="Fechar alerta"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {leadInteractions.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full text-center py-12">
               <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mb-3">

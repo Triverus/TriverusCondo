@@ -161,63 +161,75 @@ export default function UnifiedNoteModal({
     setFormNextFollowUpDate(`${yyyy}-${mm}-${dd}`);
   };
 
-  // Reset/Initialize state when modal opens
+  // Track previous opened state to only initialize when modal transitions to open
+  const wasOpenRef = React.useRef(false);
+  const prevEditingIdRef = React.useRef<string | null | undefined>(undefined);
+
+  // Reset/Initialize state strictly when modal opens or editingInteractionId changes
   useEffect(() => {
-    if (isOpen && lead) {
-      setStep(1);
-      setFormError(null);
+    const justOpened = isOpen && !wasOpenRef.current;
+    const editingChanged = isOpen && editingInteractionId !== prevEditingIdRef.current;
+    wasOpenRef.current = isOpen;
+    prevEditingIdRef.current = editingInteractionId;
 
-      const now = new Date();
-      const yyyy = now.getFullYear();
-      const mm = String(now.getMonth() + 1).padStart(2, '0');
-      const dd = String(now.getDate()).padStart(2, '0');
-      const hh = String(now.getHours()).padStart(2, '0');
-      const min = String(now.getMinutes()).padStart(2, '0');
+    // Se estiver em processo de save ou se o modal já estava aberto e nada mudou, NÃO resetar
+    if (formSaving) return;
+    if (!isOpen || !lead) return;
+    if (!justOpened && !editingChanged) return;
 
-      if (editingInteractionId) {
-        const found = interactions.find((i) => i.id === editingInteractionId);
-        if (found) {
-          setFormType(found.interaction_type || 'Ligação');
-          setFormNotes(found.notes || '');
-          if (found.occurred_at) {
-            const occ = parseCalendarDate(found.occurred_at) || new Date(found.occurred_at);
-            setFormDate(toDateInputValue(found.occurred_at));
-            setFormTime(`${String(occ.getHours()).padStart(2, '0')}:${String(occ.getMinutes()).padStart(2, '0')}`);
-            setViewCalendarMonth(occ);
-          }
-          setFormResponsibleId(found.responsible_user_id || currentProfile.id);
-          if (found.next_follow_up_at || found.next_follow_up_date) {
-            setWantNextFollowUp(true);
-            const resolved = resolveFollowUpDateAndTime(
-              found.next_follow_up_at,
-              found.next_follow_up_date,
-              found.id,
-              lead.id
-            );
-            setFormNextFollowUpDate(resolved.date);
-            setFormNextFollowUpTime(resolved.time);
-          } else {
-            setWantNextFollowUp(false);
-            setFormNextFollowUpDate('');
-            setFormNextFollowUpTime('09:00');
-          }
-          return;
+    setStep(1);
+    setFormError(null);
+
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const hh = String(now.getHours()).padStart(2, '0');
+    const min = String(now.getMinutes()).padStart(2, '0');
+
+    if (editingInteractionId) {
+      const found = interactions.find((i) => i.id === editingInteractionId);
+      if (found) {
+        setFormType(found.interaction_type || 'Ligação');
+        setFormNotes(found.notes || '');
+        if (found.occurred_at) {
+          const occ = parseCalendarDate(found.occurred_at) || new Date(found.occurred_at);
+          setFormDate(toDateInputValue(found.occurred_at));
+          setFormTime(`${String(occ.getHours()).padStart(2, '0')}:${String(occ.getMinutes()).padStart(2, '0')}`);
+          setViewCalendarMonth(occ);
         }
+        setFormResponsibleId(found.responsible_user_id || currentProfile.id);
+        if (found.next_follow_up_at || found.next_follow_up_date) {
+          setWantNextFollowUp(true);
+          const resolved = resolveFollowUpDateAndTime(
+            found.next_follow_up_at,
+            found.next_follow_up_date,
+            found.id,
+            lead.id
+          );
+          setFormNextFollowUpDate(resolved.date);
+          setFormNextFollowUpTime(resolved.time);
+        } else {
+          setWantNextFollowUp(false);
+          setFormNextFollowUpDate('');
+          setFormNextFollowUpTime('09:00');
+        }
+        return;
       }
-
-      // Default new note values (no pre-selected type so user explicitly chooses)
-      setFormType('');
-      setFormNotes('');
-      setFormDate(`${yyyy}-${mm}-${dd}`);
-      setFormTime(`${hh}:${min}`);
-      setViewCalendarMonth(new Date());
-      setFormResponsibleId(currentProfile.id);
-      setWantNextFollowUp(true);
-      setFormNextFollowUpDate('');
-      setFormNextFollowUpTime('09:00');
-      setFormNextChannel('WhatsApp');
     }
-  }, [isOpen, lead, editingInteractionId, currentProfile.id, interactions]);
+
+    // Default new note values (no pre-selected type so user explicitly chooses)
+    setFormType('');
+    setFormNotes('');
+    setFormDate(`${yyyy}-${mm}-${dd}`);
+    setFormTime(`${hh}:${min}`);
+    setViewCalendarMonth(new Date());
+    setFormResponsibleId(currentProfile.id);
+    setWantNextFollowUp(true);
+    setFormNextFollowUpDate('');
+    setFormNextFollowUpTime('09:00');
+    setFormNextChannel('WhatsApp');
+  }, [isOpen, lead?.id, editingInteractionId]);
 
   if (!isOpen || !lead) return null;
 
@@ -239,6 +251,7 @@ export default function UnifiedNoteModal({
 
   // Submit Handler
   const handleSubmit = async () => {
+    if (formSaving) return;
     setFormError(null);
 
     if (!formNotes.trim() && !formNextFollowUpDate) {
@@ -371,7 +384,7 @@ export default function UnifiedNoteModal({
 
   return (
     <div
-      onClick={onClose}
+      onClick={() => !formSaving && onClose()}
       className="fixed inset-0 z-50 overflow-y-auto bg-black/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150"
     >
       <div
@@ -400,7 +413,8 @@ export default function UnifiedNoteModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+              disabled={formSaving}
+              className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer shrink-0 disabled:opacity-30 disabled:cursor-not-allowed"
               title="Fechar"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -410,33 +424,51 @@ export default function UnifiedNoteModal({
           </div>
 
           {/* Minimalist Progress Indicator */}
-          <div className="mt-4">
-            <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5 font-medium">
-              <span>Pergunta {step} de {totalSteps}</span>
-              <span className="text-indigo-400 font-semibold">
-                {step === 1 && 'Tipo de Contato'}
-                {step === 2 && 'Anotações'}
-                {step === 3 && 'Data & Horário'}
-                {step === 4 && 'Atendente'}
-                {step === 5 && 'Próximo Follow-up'}
-              </span>
-            </div>
-            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-              <div
-                className="bg-indigo-500 h-full transition-all duration-300 ease-out rounded-full"
-                style={{ width: `${(step / totalSteps) * 100}%` }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Modal Body: One Step at a Time (Typeform) */}
-        <div className="p-6 sm:p-7 overflow-y-auto flex-1 text-sm">
-          {formError && (
-            <div className="mb-4 p-3 bg-rose-950/80 border border-rose-600/50 rounded-xl text-rose-200 text-xs">
-              {formError}
+          {!formSaving && (
+            <div className="mt-4">
+              <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5 font-medium">
+                <span>Pergunta {step} de {totalSteps}</span>
+                <span className="text-indigo-400 font-semibold">
+                  {step === 1 && 'Tipo de Contato'}
+                  {step === 2 && 'Anotações'}
+                  {step === 3 && 'Data & Horário'}
+                  {step === 4 && 'Atendente'}
+                  {step === 5 && 'Próximo Follow-up'}
+                </span>
+              </div>
+              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                <div
+                  className="bg-indigo-500 h-full transition-all duration-300 ease-out rounded-full"
+                  style={{ width: `${(step / totalSteps) * 100}%` }}
+                />
+              </div>
             </div>
           )}
+        </div>
+
+        {/* Modal Body: Loading State during save OR One Step at a Time (Typeform) */}
+        <div className="p-6 sm:p-7 overflow-y-auto flex-1 text-sm">
+          {formSaving ? (
+            <div className="py-12 flex flex-col items-center justify-center text-center space-y-4 animate-in fade-in duration-200">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/40 flex items-center justify-center shadow-lg">
+                <div className="w-7 h-7 border-3 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+              <div className="space-y-1.5 max-w-xs">
+                <h3 className="text-base font-bold text-white">Salvando nota...</h3>
+                <p className="text-xs text-slate-400">
+                  {wantNextFollowUp && formNextFollowUpDate
+                    ? 'Gravando anotação e sincronizando agendamento de follow-up...'
+                    : 'Gravando anotação no histórico do condomínio...'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              {formError && (
+                <div className="mb-4 p-3 bg-rose-950/80 border border-rose-600/50 rounded-xl text-rose-200 text-xs">
+                  {formError}
+                </div>
+              )}
 
           {/* STEP 1: Tipo de Contato (Sem emojis, auto-avança, sem botões embaixo) */}
           {step === 1 && (
@@ -815,6 +847,8 @@ export default function UnifiedNoteModal({
                 </div>
               </div>
             </div>
+          )}
+            </>
           )}
         </div>
 
