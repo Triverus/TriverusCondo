@@ -21,6 +21,7 @@ export interface UnifiedNoteModalProps {
   currentProfile: UserProfile;
   onClose: () => void;
   onSuccessFeedback?: (msg: string) => void;
+  onSavedSuccess?: (lead: Lead) => void;
 }
 
 export const CONTACT_TYPES = [
@@ -107,6 +108,7 @@ export default function UnifiedNoteModal({
   currentProfile,
   onClose,
   onSuccessFeedback,
+  onSavedSuccess,
 }: UnifiedNoteModalProps) {
   const { profiles, interactions, upsertInteractionLocally, refreshAll } = useCRM();
 
@@ -353,7 +355,11 @@ export default function UnifiedNoteModal({
         }
       }
 
-      onClose();
+      if (onSavedSuccess && lead) {
+        onSavedSuccess(lead);
+      } else {
+        onClose();
+      }
       refreshAll(true);
     } catch (err: any) {
       console.error('Erro ao salvar nota:', err);

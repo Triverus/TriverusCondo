@@ -38,11 +38,13 @@ import {
   toDateInputValue,
   buildSaoPauloIsoDateTime,
   resolveFollowUpDateAndTime,
+  getActiveFollowUpInteraction,
 } from '../lib/dateUtils.ts';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
 import NotesTimelineModal from './NotesTimelineModal.tsx';
 import { celebrateClientConversion } from '../lib/celebration.ts';
 import {
+  syncInteractionCalendar,
   syncGoogleCalendarInteraction,
   updateGoogleCalendarInteraction,
   deleteGoogleCalendarInteraction,
@@ -1108,23 +1110,27 @@ export default function LeadsModule({
     const wasLost = Boolean(lead.loss_reason) || lead.current_stage_id === 'stg_perdido';
     const newLossReason = wasLost ? null : lead.loss_reason;
 
-    const updatedLead: Lead = {
-      ...lead,
-      current_stage_id: targetStageId,
-      loss_reason: newLossReason,
-    };
-
-    upsertLeadLocally(updatedLead);
-    saveLeadStageOverride(leadId, targetStageId, newLossReason);
-
     try {
-      await supabase
+      const { data: updatedData, error: stageErr } = await supabase
         .from('leads')
         .update({
           current_stage_id: targetStageId,
           loss_reason: newLossReason,
         })
-        .eq('id', leadId);
+        .eq('id', leadId)
+        .select()
+        .single();
+
+      if (stageErr) throw stageErr;
+
+      const updatedLead: Lead = updatedData || {
+        ...lead,
+        current_stage_id: targetStageId,
+        loss_reason: newLossReason,
+      };
+
+      saveLeadStageOverride(leadId, targetStageId, newLossReason);
+      upsertLeadLocally(updatedLead);
 
       const isTargetClient = targetStage?.is_won || targetStageId === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
       const prevStageObj = stages.find((s) => s.id === lead.current_stage_id);
@@ -1136,7 +1142,9 @@ export default function LeadsModule({
 
       setStatusFeedback({ type: 'success', message: `Condomínio movido para ${targetStage?.name || 'novo estágio'}!` });
     } catch (err: any) {
-      console.warn('Background stage sync notice:', err?.message || err);
+      console.error('Erro ao persistir mudança de estágio:', err);
+      upsertLeadLocally(lead);
+      setStatusFeedback({ type: 'error', message: 'Erro ao persistir mudança de estágio no banco de dados.' });
     }
   };
 
@@ -1151,27 +1159,34 @@ export default function LeadsModule({
     const lead = leads.find((l) => l.id === lostReasonModal.leadId);
     if (!lead) return;
 
-    const updatedLead: Lead = {
-      ...lead,
-      current_stage_id: lostReasonModal.targetStageId,
-      loss_reason: reasonTrimmed,
-    };
-
-    upsertLeadLocally(updatedLead);
-    saveLeadStageOverride(lead.id, lostReasonModal.targetStageId, reasonTrimmed);
-    setLostReasonModal({ open: false, leadId: null, targetStageId: 'stg_perdido', reason: '', error: null });
-    setStatusFeedback({ type: 'success', message: 'Condomínio marcado como Perdido.' });
-
     try {
-      await supabase
+      const { data: updatedData, error: updateErr } = await supabase
         .from('leads')
         .update({
           current_stage_id: lostReasonModal.targetStageId,
           loss_reason: reasonTrimmed,
         })
-        .eq('id', lead.id);
-    } catch (err) {
-      console.warn('Sync lost reason error:', err);
+        .eq('id', lead.id)
+        .select()
+        .single();
+
+      if (updateErr) throw updateErr;
+
+      const updatedLead: Lead = updatedData || {
+        ...lead,
+        current_stage_id: lostReasonModal.targetStageId,
+        loss_reason: reasonTrimmed,
+      };
+
+      saveLeadStageOverride(lead.id, lostReasonModal.targetStageId, reasonTrimmed);
+      upsertLeadLocally(updatedLead);
+      setLostReasonModal({ open: false, leadId: null, targetStageId: 'stg_perdido', reason: '', error: null });
+      setStatusFeedback({ type: 'success', message: 'Condomínio marcado como Perdido.' });
+      refreshAll(true);
+    } catch (err: any) {
+      console.error('Sync lost reason error:', err);
+      setLostReasonModal((prev) => ({ ...prev, error: 'Falha ao salvar motivo de perda no banco de dados.' }));
+      setStatusFeedback({ type: 'error', message: 'Erro ao atualizar estágio no banco de dados.' });
     }
   };
 
@@ -1239,68 +1254,96 @@ export default function LeadsModule({
         return;
       }
       const newLossReason = null;
-      const updated = { ...lead, current_stage_id: value, loss_reason: newLossReason };
-      upsertLeadLocally(updated);
-      saveLeadStageOverride(leadId, value, newLossReason);
       const isTargetClient = targetStage?.is_won || value === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
       const prevStageObj = stages.find((s) => s.id === lead.current_stage_id);
       const wasClient = prevStageObj?.is_won || lead.current_stage_id === 'stg_cliente' || prevStageObj?.name?.toLowerCase().includes('cliente');
 
       try {
-        await supabase.from('leads').update({ current_stage_id: value, loss_reason: newLossReason }).eq('id', leadId);
+        const { data: updatedData, error: stageErr } = await supabase
+          .from('leads')
+          .update({ current_stage_id: value, loss_reason: newLossReason })
+          .eq('id', leadId)
+          .select()
+          .single();
+
+        if (stageErr) throw stageErr;
+
+        const updated = updatedData || { ...lead, current_stage_id: value, loss_reason: newLossReason };
+        saveLeadStageOverride(leadId, value, newLossReason);
+        upsertLeadLocally(updated);
+
         if (isTargetClient && !wasClient) {
           celebrateClientConversion();
         }
         setStatusFeedback({ type: 'success', message: 'Estágio do funil atualizado!' });
-      } catch (err) {
-        console.error(err);
+      } catch (err: any) {
+        console.error('Erro ao atualizar estágio:', err);
+        upsertLeadLocally(lead);
+        setStatusFeedback({ type: 'error', message: 'Erro ao atualizar estágio do funil no banco de dados.' });
       }
     } else if (field === 'responsible') {
       const updated = { ...lead, responsible_user_id: value };
       upsertLeadLocally(updated);
       try {
-        await supabase.from('leads').update({ responsible_user_id: value }).eq('id', leadId);
+        const { error: respErr } = await supabase.from('leads').update({ responsible_user_id: value }).eq('id', leadId);
+        if (respErr) throw respErr;
         setStatusFeedback({ type: 'success', message: 'Responsável atualizado com sucesso!' });
-      } catch (err) {
-        console.error(err);
+      } catch (err: any) {
+        console.error('Erro ao atualizar responsável:', err);
+        setStatusFeedback({ type: 'error', message: 'Erro ao atualizar responsável.' });
       }
     } else if (field === 'temperature') {
       const updated = { ...lead, temperature: value };
       upsertLeadLocally(updated);
       try {
         const dbTemp = sanitizeTemperatureForDB(value);
-        await supabase.from('leads').update({ temperature: dbTemp }).eq('id', leadId);
+        const { error: tempErr } = await supabase.from('leads').update({ temperature: dbTemp }).eq('id', leadId);
+        if (tempErr) throw tempErr;
         setStatusFeedback({ type: 'success', message: `Temperatura alterada para ${value}!` });
-      } catch (err) {
-        console.error(err);
+      } catch (err: any) {
+        console.error('Erro ao alterar temperatura:', err);
+        setStatusFeedback({ type: 'error', message: 'Erro ao atualizar temperatura.' });
       }
     } else if (field === 'follow_up_date') {
       const leadInteractions = getInteractionsForLead(leadId);
-      const latest = leadInteractions[0];
+      const targetInteraction = getActiveFollowUpInteraction(leadInteractions);
       const dateOnly = toDateInputValue(value);
       const timeVal = value.includes('T') ? value.split('T')[1]?.slice(0, 5) : '09:00';
       const nextAtIso = buildSaoPauloIsoDateTime(dateOnly, timeVal);
 
-      if (latest) {
-        saveFollowUpTime(latest.id, leadId, timeVal);
+      if (targetInteraction && targetInteraction.id) {
+        saveFollowUpTime(targetInteraction.id, leadId, timeVal);
         const updatedInt: Interaction = {
-          ...latest,
+          ...targetInteraction,
           next_follow_up_date: dateOnly,
           next_follow_up_at: nextAtIso,
         };
-        upsertInteractionLocally(updatedInt);
         try {
-          await supabase
+          const { data: savedInt, error: updateErr } = await supabase
             .from('interactions')
             .update({ next_follow_up_date: dateOnly, next_follow_up_at: nextAtIso })
-            .eq('id', latest.id);
+            .eq('id', targetInteraction.id)
+            .select()
+            .single();
+
+          if (updateErr) throw updateErr;
+
+          upsertInteractionLocally(savedInt || updatedInt);
           setStatusFeedback({ type: 'success', message: 'Data de próximo contato atualizada!' });
-        } catch (err) {
-          console.error(err);
+
+          // Sincronização canônica com Google Calendar
+          try {
+            await syncInteractionCalendar(targetInteraction.id);
+          } catch (calErr: any) {
+            console.warn('Google Calendar sync notice:', calErr?.message || calErr);
+          }
+        } catch (err: any) {
+          console.error('Erro ao atualizar follow-up no Supabase:', err);
+          setStatusFeedback({ type: 'error', message: 'Falha ao salvar agendamento no banco de dados.' });
+          return;
         }
       } else {
-        const newInt: Interaction = {
-          id: `int_${Date.now()}`,
+        const newPayload = {
           lead_id: leadId,
           interaction_type: 'Ligação',
           occurred_at: new Date().toISOString(),
@@ -1309,15 +1352,30 @@ export default function LeadsModule({
           google_event_id: null,
           responsible_user_id: lead.responsible_user_id || currentProfile.id,
           notes: 'Agendamento de próximo contato',
-          created_at: new Date().toISOString(),
         };
-        saveFollowUpTime(newInt.id, leadId, timeVal);
-        upsertInteractionLocally(newInt);
         try {
-          await supabase.from('interactions').insert([newInt]);
+          const { data: createdInt, error: insertErr } = await supabase
+            .from('interactions')
+            .insert([newPayload])
+            .select()
+            .single();
+
+          if (insertErr || !createdInt) throw insertErr || new Error('Falha ao criar interação no banco.');
+
+          saveFollowUpTime(createdInt.id, leadId, timeVal);
+          upsertInteractionLocally(createdInt);
           setStatusFeedback({ type: 'success', message: 'Próximo contato agendado!' });
-        } catch (err) {
-          console.error(err);
+
+          // Sincronização canônica com Google Calendar
+          try {
+            await syncInteractionCalendar(createdInt.id);
+          } catch (calErr: any) {
+            console.warn('Google Calendar sync notice:', calErr?.message || calErr);
+          }
+        } catch (err: any) {
+          console.error('Erro ao inserir follow-up no Supabase:', err);
+          setStatusFeedback({ type: 'error', message: 'Falha ao agendar próximo contato no banco de dados.' });
+          return;
         }
       }
       refreshAll(true);
@@ -2478,7 +2536,11 @@ export default function LeadsModule({
       }
 
       refreshAll(true);
-      setNotesPopover((prev) => ({ ...prev, mode: 'list', editingInteractionId: null }));
+      const targetLead = notesPopover.lead;
+      setNotesPopover({ open: false, lead: null, mode: 'create', editingInteractionId: null });
+      if (targetLead) {
+        setTimelineLead(targetLead);
+      }
     } catch (err: any) {
       console.error('Error saving note:', err);
       setNoteError(err?.message || 'Erro ao salvar nota no Supabase.');
@@ -2688,10 +2750,11 @@ export default function LeadsModule({
                       const waContactsCount = leadContacts.filter((c) => c.phone).length;
                       const emContactsCount = leadContacts.filter((c) => c.email).length;
                       const notesCount = leadInteractions.length;
-                      const activeFollowUpDate = leadInteractions[0]?.next_follow_up_date || null;
+                      const activeInteraction = getActiveFollowUpInteraction(leadInteractions);
+                      const activeFollowUpDate = activeInteraction?.next_follow_up_at || activeInteraction?.next_follow_up_date || null;
                       const followUpInfo = getFollowUpDisplay(
                         activeFollowUpDate,
-                        leadInteractions[0]?.id,
+                        activeInteraction?.id,
                         lead.id
                       );
 
@@ -3139,6 +3202,10 @@ export default function LeadsModule({
         currentProfile={currentProfile}
         onClose={handleCloseNotesPopover}
         onSuccessFeedback={(msg) => setStatusFeedback({ type: 'success', message: msg })}
+        onSavedSuccess={(ld) => {
+          handleCloseNotesPopover();
+          setTimelineLead(ld);
+        }}
       />
 
       {/* DOCUMENT FOLDER / GOOGLE DRIVE POPOVER */}

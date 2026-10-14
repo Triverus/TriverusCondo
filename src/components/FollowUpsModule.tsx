@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase.ts';
-import { updateGoogleCalendarInteraction } from '../lib/googleCalendarClient.ts';
+import {
+  syncInteractionCalendar,
+  updateGoogleCalendarInteraction,
+} from '../lib/googleCalendarClient.ts';
+import { saveLeadStageOverride } from '../lib/crmCache.ts';
 import { useCRM, type Lead, type Interaction, type Contact } from '../lib/crmStore.tsx';
 import { useTheme } from '../lib/themeContext.tsx';
 import type { UserProfile } from '../App.tsx';
@@ -37,6 +41,7 @@ import {
   getFollowUpTime,
   buildSaoPauloIsoDateTime,
   resolveFollowUpDateAndTime,
+  getActiveFollowUpInteraction,
 } from '../lib/dateUtils.ts';
 import { renderFormattedTextWithLinks } from '../lib/linkUtils.tsx';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
@@ -52,6 +57,7 @@ export interface FollowUpsModuleProps {
 
 export interface FollowUpItem {
   lead: Lead;
+  followUpInteraction: Interaction;
   latestInteraction: Interaction;
   followUpDate: string;
   status: 'overdue' | 'today' | 'upcoming';
@@ -113,26 +119,99 @@ export default function FollowUpsModule({
     setQuickEdit({ leadId, field, value: initialValue, saving: false });
   };
 
+  // Modal for lost reason when moving stage to Perdido in FollowUpsModule
+  const [lostReasonModal, setLostReasonModal] = useState<{
+    open: boolean;
+    leadId: string | null;
+    targetStageId: string;
+    reason: string;
+    error: string | null;
+  }>({
+    open: false,
+    leadId: null,
+    targetStageId: 'stg_perdido',
+    reason: '',
+    error: null,
+  });
+
+  const handleConfirmLostReason = async () => {
+    if (!lostReasonModal.leadId || !lostReasonModal.targetStageId) return;
+    const reasonTrimmed = lostReasonModal.reason.trim();
+    if (!reasonTrimmed) {
+      setLostReasonModal((prev) => ({ ...prev, error: 'O motivo da perda é obrigatório.' }));
+      return;
+    }
+
+    const lead = leads.find((l) => l.id === lostReasonModal.leadId);
+    if (!lead) return;
+
+    const updatedLead: Lead = {
+      ...lead,
+      current_stage_id: lostReasonModal.targetStageId,
+      loss_reason: reasonTrimmed,
+    };
+
+    upsertLeadLocally(updatedLead);
+    saveLeadStageOverride(lead.id, lostReasonModal.targetStageId, reasonTrimmed);
+    setLostReasonModal({ open: false, leadId: null, targetStageId: 'stg_perdido', reason: '', error: null });
+    setStatusFeedback({ type: 'success', message: 'Condomínio marcado como Perdido.' });
+
+    try {
+      const { error: err } = await supabase
+        .from('leads')
+        .update({
+          current_stage_id: lostReasonModal.targetStageId,
+          loss_reason: reasonTrimmed,
+        })
+        .eq('id', lead.id);
+      if (err) throw err;
+      refreshAll(true);
+    } catch (err) {
+      console.warn('Sync lost reason error:', err);
+    }
+  };
+
   const handleSaveQuickField = async (
     item: FollowUpItem,
-    overrideValue?: string
+    overrideValue?: string,
+    overrideField?: 'stage' | 'date' | 'time' | 'temperature' | 'notes' | 'responsible'
   ) => {
-    if (!quickEdit || quickEdit.leadId !== item.lead.id) return;
-    const val = (overrideValue !== undefined ? overrideValue : quickEdit.value).trim();
-    const { field } = quickEdit;
-    setQuickEdit((prev) => (prev ? { ...prev, saving: true } : null));
+    const field = overrideField || quickEdit?.field;
+    if (!field) return;
+    const val = (overrideValue !== undefined ? overrideValue : (quickEdit?.value || '')).trim();
+    if (!val && field !== 'notes') {
+      setQuickEdit(null);
+      return;
+    }
+    setQuickEdit(null);
 
     try {
       if (field === 'stage') {
         if (!val) return;
         const targetStage = stages.find((s) => s.id === val);
+        const isTargetLost = targetStage?.is_lost || val === 'stg_perdido' || targetStage?.name?.toLowerCase().includes('perdid');
+        if (isTargetLost) {
+          setLostReasonModal({
+            open: true,
+            leadId: item.lead.id,
+            targetStageId: val,
+            reason: item.lead.loss_reason || '',
+            error: null,
+          });
+          return;
+        }
+
+        const newLossReason = null;
         const isTargetClient = targetStage?.is_won || val === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
         const prevStage = stages.find((s) => s.id === item.lead.current_stage_id);
         const wasClient = prevStage?.is_won || item.lead.current_stage_id === 'stg_cliente' || prevStage?.name?.toLowerCase().includes('cliente');
 
-        const updatedLead: Lead = { ...item.lead, current_stage_id: val };
+        const updatedLead: Lead = { ...item.lead, current_stage_id: val, loss_reason: newLossReason };
         upsertLeadLocally(updatedLead);
-        await supabase.from('leads').update({ current_stage_id: val }).eq('id', item.lead.id);
+        saveLeadStageOverride(item.lead.id, val, newLossReason);
+
+        const { error: stageErr } = await supabase.from('leads').update({ current_stage_id: val, loss_reason: newLossReason }).eq('id', item.lead.id);
+        if (stageErr) throw stageErr;
 
         if (isTargetClient && !wasClient) {
           celebrateClientConversion();
@@ -165,10 +244,11 @@ export default function FollowUpsModule({
           next_follow_up_at: nextAtIso,
         };
         upsertInteractionLocally(updatedInteraction);
-        await supabase
+        const { error: dateErr } = await supabase
           .from('interactions')
           .update({ next_follow_up_date: dateOnly, next_follow_up_at: nextAtIso })
           .eq('id', item.latestInteraction.id);
+        if (dateErr) throw dateErr;
         setStatusFeedback({ type: 'success', message: `Agendamento alterado para ${formatDateBR(nextAtIso)}!` });
       } else if (field === 'time') {
         if (!val) return;
@@ -187,10 +267,11 @@ export default function FollowUpsModule({
           next_follow_up_at: nextAtIso,
         };
         upsertInteractionLocally(updatedInteraction);
-        await supabase
+        const { error: timeErr } = await supabase
           .from('interactions')
           .update({ next_follow_up_date: dateOnly, next_follow_up_at: nextAtIso })
           .eq('id', item.latestInteraction.id);
+        if (timeErr) throw timeErr;
         setStatusFeedback({ type: 'success', message: `Horário alterado para ${val}!` });
       } else if (field === 'notes') {
         const updatedInteraction: Interaction = {
@@ -198,10 +279,11 @@ export default function FollowUpsModule({
           notes: val || null,
         };
         upsertInteractionLocally(updatedInteraction);
-        await supabase
+        const { error: notesErr } = await supabase
           .from('interactions')
           .update({ notes: val || null })
           .eq('id', item.latestInteraction.id);
+        if (notesErr) throw notesErr;
         setStatusFeedback({ type: 'success', message: 'Mensagem da nota atualizada!' });
       } else if (field === 'responsible') {
         if (!val) return;
@@ -221,16 +303,17 @@ export default function FollowUpsModule({
 
       if (['date', 'time', 'notes', 'responsible'].includes(field) && item.latestInteraction?.id) {
         try {
-          await updateGoogleCalendarInteraction(item.latestInteraction.id);
-        } catch (e) {
-          console.warn('Quick edit update sync error:', e);
+          await syncInteractionCalendar(item.latestInteraction.id);
+        } catch (e: any) {
+          console.warn('Quick edit calendar sync notice:', e?.message || e);
         }
       }
 
       setQuickEdit(null);
       refreshAll(true);
-    } catch (err) {
+    } catch (err: any) {
       console.warn('Quick field update notice:', err);
+      setStatusFeedback({ type: 'error', message: 'Falha ao salvar alteração rápida.' });
       setQuickEdit(null);
     }
   };
@@ -655,27 +738,23 @@ export default function FollowUpsModule({
       const leadInteractions = interactionsByLead.get(lead.id) || [];
       if (leadInteractions.length === 0) return;
 
-      // Sort by occurred_at desc (most recent first)
-      const sorted = [...leadInteractions].sort(
-        (a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime()
-      );
+      // Resolve a interação que representa o follow-up ativo do lead
+      const activeInt = getActiveFollowUpInteraction(leadInteractions);
+      if (!activeInt) return;
 
-      const latest = sorted[0];
-
-      // A lead ONLY appears in the Follow-ups list if its LATEST interaction has an active open follow-up scheduled!
-      const hasFollowUp = (latest.next_follow_up_at && String(latest.next_follow_up_at).trim() !== '') ||
-                          (latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== '');
+      const hasFollowUp = (activeInt.next_follow_up_at && String(activeInt.next_follow_up_at).trim() !== '') ||
+                          (activeInt.next_follow_up_date && String(activeInt.next_follow_up_date).trim() !== '');
 
       if (hasFollowUp) {
-        const followUpTarget = latest.next_follow_up_at || latest.next_follow_up_date!;
+        const followUpTarget = activeInt.next_follow_up_at || activeInt.next_follow_up_date!;
         const status = getFollowUpStatus(followUpTarget);
-        const responsibleId = latest.responsible_user_id || lead.responsible_user_id;
+        const responsibleId = activeInt.responsible_user_id || lead.responsible_user_id;
         const responsibleName = responsibleId ? profileMap.get(responsibleId) || 'Não atribuído' : 'Não atribuído';
         const stageName = lead.current_stage_id ? stageMap.get(lead.current_stage_id) || 'Estágio Inicial' : 'Estágio Inicial';
 
         items.push({
           lead,
-          latestInteraction: latest,
+          latestInteraction: activeInt,
           followUpDate: followUpTarget,
           status,
           responsibleName,
@@ -1256,15 +1335,38 @@ export default function FollowUpsModule({
                                   autoFocus
                                   value={quickEdit?.value || ''}
                                   onChange={(e) => {
-                                    const nextVal = e.target.value;
-                                    setQuickEdit((prev) => (prev ? { ...prev, value: nextVal } : null));
-                                    if (nextVal) handleSaveQuickField(item, nextVal);
+                                    setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null));
                                   }}
                                   onKeyDown={(e) => {
+                                    if (e.key === 'Enter' && quickEdit?.value) {
+                                      handleSaveQuickField(item, quickEdit.value, 'date');
+                                    }
                                     if (e.key === 'Escape') setQuickEdit(null);
                                   }}
                                   className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
                                 />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (quickEdit?.value) {
+                                      handleSaveQuickField(item, quickEdit.value, 'date');
+                                    } else {
+                                      setQuickEdit(null);
+                                    }
+                                  }}
+                                  className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
+                                  title="Confirmar data"
+                                >
+                                  ✓
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setQuickEdit(null)}
+                                  className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
+                                  title="Cancelar"
+                                >
+                                  ✕
+                                </button>
                               </div>
                             ) : (
                               <span className={`font-bold text-xs truncate ${isLight ? 'text-slate-950' : 'text-white'}`}>
@@ -1303,16 +1405,36 @@ export default function FollowUpsModule({
                                   onChange={(e) =>
                                     setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null))
                                   }
-                                  onBlur={(e) => {
-                                    if (e.target.value) handleSaveQuickField(item, e.target.value);
-                                    else setQuickEdit(null);
-                                  }}
                                   onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleSaveQuickField(item);
+                                    if (e.key === 'Enter' && quickEdit?.value) {
+                                      handleSaveQuickField(item, quickEdit.value, 'time');
+                                    }
                                     if (e.key === 'Escape') setQuickEdit(null);
                                   }}
                                   className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
                                 />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (quickEdit?.value) {
+                                      handleSaveQuickField(item, quickEdit.value, 'time');
+                                    } else {
+                                      setQuickEdit(null);
+                                    }
+                                  }}
+                                  className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
+                                  title="Confirmar horário"
+                                >
+                                  ✓
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setQuickEdit(null)}
+                                  className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
+                                  title="Cancelar"
+                                >
+                                  ✕
+                                </button>
                               </div>
                             ) : (
                               <span className={`font-bold text-xs truncate ${isLight ? 'text-indigo-700' : 'text-indigo-300'}`}>
@@ -1349,8 +1471,11 @@ export default function FollowUpsModule({
                             <select
                               autoFocus
                               value={quickEdit?.value || item.lead.current_stage_id || ''}
-                              onChange={(e) => handleSaveQuickField(item, e.target.value)}
-                              onBlur={() => setQuickEdit(null)}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                if (v) handleSaveQuickField(item, v, 'stage');
+                              }}
+                              onBlur={() => setQuickEdit((prev) => (prev?.saving ? prev : null))}
                               className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none mt-0.5"
                             >
                               {stages.map((stg) => (
@@ -1655,9 +1780,13 @@ export default function FollowUpsModule({
         onClose={() => {
           setActiveNoteModalLead(null);
           setActiveNoteModalInteractionId(null);
-          setActiveTimelineLead(null);
         }}
         onSuccessFeedback={(msg) => setStatusFeedback({ type: 'success', message: msg })}
+        onSavedSuccess={(ld) => {
+          setActiveNoteModalLead(null);
+          setActiveNoteModalInteractionId(null);
+          setActiveTimelineLead(ld);
+        }}
       />
 
       {/* INDEPENDENT WHATSAPP POPOVER WITH FULL CRUD */}
@@ -2319,6 +2448,68 @@ export default function FollowUpsModule({
                   );
                 });
               })()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL FOR LOST REASON WHEN MOVING TO PERDIDO IN FOLLOWUPS */}
+      {lostReasonModal.open && (
+        <div
+          onClick={() => setLostReasonModal((prev) => ({ ...prev, open: false }))}
+          className="fixed inset-0 z-[110] overflow-y-auto bg-black/80 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-md bg-slate-900 border border-rose-500/40 rounded-2xl shadow-2xl p-5 my-6 flex flex-col"
+          >
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-950/80 border border-rose-600/60 flex items-center justify-center text-rose-400 shrink-0">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-white">Marcar Condomínio como Perdido</h3>
+                <p className="text-xs text-slate-400">Informe o motivo da perda desta oportunidade.</p>
+              </div>
+            </div>
+
+            {lostReasonModal.error && (
+              <div className="mb-3 p-2.5 bg-rose-950/80 border border-rose-600/60 rounded-xl text-rose-200 text-xs font-medium">
+                {lostReasonModal.error}
+              </div>
+            )}
+
+            <div className="mb-4">
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Motivo da perda <span className="text-rose-400">*</span>
+              </label>
+              <textarea
+                autoFocus
+                rows={3}
+                value={lostReasonModal.reason}
+                onChange={(e) => setLostReasonModal((prev) => ({ ...prev, reason: e.target.value, error: null }))}
+                placeholder="Ex: Preço acima do orçamento, optaram por concorrente, síndico encerrou mandato..."
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-rose-500 rounded-xl text-white text-xs focus:outline-none resize-none"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setLostReasonModal((prev) => ({ ...prev, open: false }))}
+                className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmLostReason}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold shadow-md cursor-pointer transition-colors"
+              >
+                Confirmar Perdido
+              </button>
             </div>
           </div>
         </div>

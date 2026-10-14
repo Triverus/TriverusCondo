@@ -250,3 +250,41 @@ export function formatTimeBR(
 ): string {
   return getFollowUpTime(dateStr, interactionId, leadId);
 }
+
+export interface HasFollowUp {
+  id?: string;
+  lead_id?: string;
+  next_follow_up_at?: string | null;
+  next_follow_up_date?: string | null;
+  occurred_at?: string | null;
+  [key: string]: any;
+}
+
+/**
+ * Localiza a interação que representa o follow-up ativo do lead:
+ * 1. Ordena as interações por occurred_at DESC (mais recente primeiro).
+ * 2. Examina exclusivamente a interação mais recente.
+ * 3. Se ela possuir next_follow_up_at ou next_follow_up_date, retorna essa interação.
+ * 4. Caso contrário, retorna null (não busca interações históricas anteriores).
+ */
+export function getActiveFollowUpInteraction<T extends HasFollowUp>(interactions: T[]): T | null {
+  if (!interactions || interactions.length === 0) return null;
+
+  const sorted = [...interactions].sort((a, b) => {
+    const timeOccurredB = new Date(b.occurred_at || 0).getTime();
+    const timeOccurredA = new Date(a.occurred_at || 0).getTime();
+    return timeOccurredB - timeOccurredA;
+  });
+
+  const latest = sorted[0];
+  if (!latest) return null;
+
+  const hasFollowUp = (latest.next_follow_up_at && String(latest.next_follow_up_at).trim() !== '') ||
+                      (latest.next_follow_up_date && String(latest.next_follow_up_date).trim() !== '');
+
+  if (hasFollowUp) {
+    return latest;
+  }
+
+  return null;
+}

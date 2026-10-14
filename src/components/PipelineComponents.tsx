@@ -739,7 +739,10 @@ export function LeadCard({
                 autoFocus
                 value={lead.current_stage_id || stages[0]?.id || ''}
                 onChange={(e) => {
-                  onQuickUpdate?.(lead.id, 'stage', e.target.value);
+                  const newStage = e.target.value;
+                  if (newStage && newStage !== lead.current_stage_id) {
+                    onQuickUpdate?.(lead.id, 'stage', newStage);
+                  }
                   setInlineEditing(null);
                 }}
                 onBlur={() => setInlineEditing(null)}
@@ -815,7 +818,10 @@ export function LeadCard({
                 autoFocus
                 value={lead.responsible_user_id || profiles[0]?.id || ''}
                 onChange={(e) => {
-                  onQuickUpdate?.(lead.id, 'responsible', e.target.value);
+                  const newResp = e.target.value;
+                  if (newResp && newResp !== lead.responsible_user_id) {
+                    onQuickUpdate?.(lead.id, 'responsible', newResp);
+                  }
                   setInlineEditing(null);
                 }}
                 onBlur={() => setInlineEditing(null)}
