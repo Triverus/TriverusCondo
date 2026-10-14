@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.ts';
+import { syncGoogleCalendarInteraction, updateGoogleCalendarInteraction } from '../lib/googleCalendarClient.ts';
 import { useCRM, type Lead } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
 import { NotesIcon } from './PipelineComponents.tsx';
@@ -311,30 +312,9 @@ export default function UnifiedNoteModal({
 
           if (hasFollowUp && savedData.id) {
             try {
-              const sessionData = await supabase.auth.getSession();
-              const token = sessionData.data.session?.access_token;
-              if (token) {
-                const syncRes = await fetch('/api/google/calendar/sync-interaction', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                  },
-                  body: JSON.stringify({ interactionId: savedData.id }),
-                });
-                const syncJson = await syncRes.json().catch(() => null);
-                console.log('[FOLLOWUP_GOOGLE_SYNC_RESULT]', {
-                  saved_interaction_id: savedData.id,
-                  action: syncJson?.action || 'sync',
-                  success: syncRes.ok,
-                  synced: syncJson?.synced ?? false,
-                  error_code: syncJson?.error || syncJson?.reason || null,
-                });
-              } else {
-                console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Token Supabase não encontrado na sessão.');
-              }
+              await updateGoogleCalendarInteraction(savedData.id);
             } catch (syncErr: any) {
-              console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
+              console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de update:', syncErr?.message);
             }
           }
         }
@@ -358,28 +338,7 @@ export default function UnifiedNoteModal({
 
           if (hasFollowUp && savedData.id) {
             try {
-              const sessionData = await supabase.auth.getSession();
-              const token = sessionData.data.session?.access_token;
-              if (token) {
-                const syncRes = await fetch('/api/google/calendar/sync-interaction', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                  },
-                  body: JSON.stringify({ interactionId: savedData.id }),
-                });
-                const syncJson = await syncRes.json().catch(() => null);
-                console.log('[FOLLOWUP_GOOGLE_SYNC_RESULT]', {
-                  saved_interaction_id: savedData.id,
-                  http_status: syncRes.status,
-                  success: syncRes.ok,
-                  synced: syncJson?.synced ?? false,
-                  error_code: syncJson?.error || syncJson?.reason || null,
-                });
-              } else {
-                console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Token Supabase não encontrado na sessão.');
-              }
+              await syncGoogleCalendarInteraction(savedData.id);
             } catch (syncErr: any) {
               console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
             }

@@ -867,7 +867,7 @@ export async function syncGoogleCalendarInteraction(interactionId: string) {
 
   const startTime = Date.now();
   
-  let result;
+  let result: any;
   if (interaction.google_event_id && interaction.google_event_id.trim()) {
     result = await updateGoogleCalendarEventForInteraction(interactionId);
     result.action = 'updated';

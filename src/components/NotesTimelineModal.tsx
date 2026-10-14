@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { supabase } from '../lib/supabase.ts';
+import { deleteGoogleCalendarInteraction } from '../lib/googleCalendarClient.ts';
 import { useCRM, type Lead, type Interaction } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
 import { NotesIcon, EditIcon, TrashIcon } from './PipelineComponents.tsx';
@@ -93,29 +94,19 @@ export default function NotesTimelineModal({
     const interaction = interactions.find(i => i.id === interactionId);
     
     try {
-        if (interaction?.google_event_id) {
-            const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch('/api/google/calendar/delete-interaction-event', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session?.access_token}`
-                },
-                body: JSON.stringify({ interactionId })
-            });
-            
-            if (!response.ok) {
-                throw new Error('Falha ao remover evento do Google Calendar.');
-            }
+      if (interaction?.google_event_id) {
+        const deleteRes = await deleteGoogleCalendarInteraction(interactionId);
+        if (!deleteRes.ok) {
+          throw new Error('Falha ao remover evento do Google Calendar.');
         }
-        
-        const { error } = await supabase.from('interactions').delete().eq('id', interactionId);
-        if (error) throw error;
-        
+      }
+
+      const { error } = await supabase.from('interactions').delete().eq('id', interactionId);
+      if (error) throw error;
+      deleteInteractionLocally(interactionId);
     } catch (err) {
       console.warn('Erro ao excluir interaction:', err);
     } finally {
-      deleteInteractionLocally(interactionId);
       setDeletingId(null);
       setConfirmDeleteId(null);
     }

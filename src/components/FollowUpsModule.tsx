@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../lib/supabase.ts';
+import { updateGoogleCalendarInteraction } from '../lib/googleCalendarClient.ts';
 import { useCRM, type Lead, type Interaction, type Contact } from '../lib/crmStore.tsx';
 import { useTheme } from '../lib/themeContext.tsx';
 import type { UserProfile } from '../App.tsx';
@@ -220,18 +221,7 @@ export default function FollowUpsModule({
 
       if (['date', 'time', 'notes', 'responsible'].includes(field) && item.latestInteraction?.id) {
         try {
-          const sessionData = await supabase.auth.getSession();
-          const token = sessionData.data.session?.access_token;
-          if (token) {
-            await fetch('/api/google/calendar/update-interaction', {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-              },
-              body: JSON.stringify({ interactionId: item.latestInteraction.id }),
-            });
-          }
+          await updateGoogleCalendarInteraction(item.latestInteraction.id);
         } catch (e) {
           console.warn('Quick edit update sync error:', e);
         }

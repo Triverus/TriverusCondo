@@ -42,6 +42,11 @@ import {
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
 import NotesTimelineModal from './NotesTimelineModal.tsx';
 import { celebrateClientConversion } from '../lib/celebration.ts';
+import {
+  syncGoogleCalendarInteraction,
+  updateGoogleCalendarInteraction,
+  deleteGoogleCalendarInteraction,
+} from '../lib/googleCalendarClient.ts';
 
 interface LeadsModuleProps {
   currentProfile: UserProfile;
@@ -2053,14 +2058,10 @@ export default function LeadsModule({
           });
           clearDraft(getInteractionCreateDraftKey(selectedLead.id));
           if (nextAtIso && savedData.id) {
-            const sessionData = await supabase.auth.getSession();
-            const token = sessionData.data.session?.access_token;
-            if (token) {
-              fetch('/api/google/calendar/sync-interaction', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ interactionId: savedData.id }),
-              }).catch((e) => console.warn('Sync error:', e));
+            try {
+              await syncGoogleCalendarInteraction(savedData.id);
+            } catch (syncErr: any) {
+              console.warn('Sync error:', syncErr);
             }
           }
         }
@@ -2074,18 +2075,7 @@ export default function LeadsModule({
           });
           if (nextAtIso && savedData.id) {
             try {
-              const sessionData = await supabase.auth.getSession();
-              const token = sessionData.data.session?.access_token;
-              if (token) {
-                await fetch('/api/google/calendar/update-interaction', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                  },
-                  body: JSON.stringify({ interactionId: savedData.id }),
-                });
-              }
+              await updateGoogleCalendarInteraction(savedData.id);
             } catch (err) {
               console.warn('Update sync error:', err);
             }
@@ -2461,18 +2451,7 @@ export default function LeadsModule({
           });
           if (nextAtIso && savedInteraction.id) {
             try {
-              const sessionData = await supabase.auth.getSession();
-              const token = sessionData.data.session?.access_token;
-              if (token) {
-                await fetch('/api/google/calendar/update-interaction', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                  },
-                  body: JSON.stringify({ interactionId: savedInteraction.id }),
-                });
-              }
+              await updateGoogleCalendarInteraction(savedInteraction.id);
             } catch (err) {
               console.warn('Update sync error:', err);
             }
@@ -2488,14 +2467,10 @@ export default function LeadsModule({
             interaction_type: noteType || savedInteraction.interaction_type,
           });
           if (nextAtIso && savedInteraction.id) {
-            const sessionData = await supabase.auth.getSession();
-            const token = sessionData.data.session?.access_token;
-            if (token) {
-              fetch('/api/google/calendar/sync-interaction', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ interactionId: savedInteraction.id }),
-              }).catch((e) => console.warn('Sync error:', e));
+            try {
+              await syncGoogleCalendarInteraction(savedInteraction.id);
+            } catch (err) {
+              console.warn('Sync error:', err);
             }
           }
         }
@@ -2522,18 +2497,9 @@ export default function LeadsModule({
         try {
           const interaction = interactions.find(i => i.id === interactionId);
           if (interaction?.google_event_id) {
-            const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch('/api/google/calendar/delete-interaction-event', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${session?.access_token}`
-                },
-                body: JSON.stringify({ interactionId })
-            });
-            
-            if (!response.ok) {
-                throw new Error('Falha ao remover evento do Google Calendar.');
+            const deleteRes = await deleteGoogleCalendarInteraction(interactionId);
+            if (!deleteRes.ok) {
+              throw new Error('Falha ao remover evento do Google Calendar.');
             }
           }
           const { error } = await supabase.from('interactions').delete().eq('id', interactionId);

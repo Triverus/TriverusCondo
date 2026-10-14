@@ -629,7 +629,7 @@ export async function syncGoogleCalendarInteraction(interactionId) {
 
   const { data: interaction, error: intErr } = await supabase
     .from('interactions')
-    .select('id, google_event_id')
+    .select('id, google_event_id, next_follow_up_at')
     .eq('id', interactionId)
     .single();
 
@@ -637,11 +637,29 @@ export async function syncGoogleCalendarInteraction(interactionId) {
     return { synced: false, reason: 'interaction_not_found', status: 404 };
   }
 
+  console.log('[DEBUG_SYNC_INTERACTION]', { interactionId, google_event_id: interaction.google_event_id });
+
+  const startTime = Date.now();
+  
+  let result;
   if (interaction.google_event_id && interaction.google_event_id.trim()) {
-    return await updateGoogleCalendarEventForInteraction(interactionId);
+    result = await updateGoogleCalendarEventForInteraction(interactionId);
+    result.action = 'updated';
   } else {
-    return await createGoogleCalendarEventForInteraction(interactionId);
+    result = await createGoogleCalendarEventForInteraction(interactionId);
+    result.action = 'created';
   }
+
+  const duration = Date.now() - startTime;
+  console.log('[GOOGLE_CALENDAR_SYNC]', {
+    interaction_id: interactionId,
+    action: result.action,
+    success: result.synced,
+    google_http_status: result.status || (result.synced ? 200 : 500),
+    google_duration_ms: duration,
+  });
+
+  return result;
 }
 
 export async function deleteGoogleCalendarEventForInteraction(interactionId) {
