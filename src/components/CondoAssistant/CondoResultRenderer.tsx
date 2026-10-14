@@ -271,14 +271,6 @@ function LeadResultCard({
     }
   };
 
-  const getTempColor = (temp?: string) => {
-    const t = (temp || '').toLowerCase();
-    if (t.includes('quente') || t.includes('hot')) return 'bg-rose-500/20 text-rose-300 border-rose-500/30';
-    if (t.includes('cliente') || t.includes('won')) return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30';
-    if (t.includes('frio') || t.includes('cold')) return 'bg-sky-500/20 text-sky-300 border-sky-500/30';
-    return 'bg-amber-500/20 text-amber-300 border-amber-500/30';
-  };
-
   return (
     <div className="p-3.5 rounded-2xl bg-slate-900/90 border border-slate-800 text-white flex flex-col gap-2 shadow-md">
       <div className="flex items-start justify-between gap-2 min-w-0">
@@ -289,9 +281,9 @@ function LeadResultCard({
             {item.unit_count ? <span> · {item.unit_count} un.</span> : null}
           </div>
         </div>
-        {item.temperature && (
-          <span className={`text-[11px] font-bold px-2 py-0.5 rounded-lg border ${getTempColor(item.temperature)} shrink-0 capitalize`}>
-            {item.temperature}
+        {item.stage_name && (
+          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-lg border bg-indigo-500/20 text-indigo-300 border-indigo-500/30 shrink-0">
+            {item.stage_name}
           </span>
         )}
       </div>

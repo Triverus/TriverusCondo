@@ -10,6 +10,7 @@ import {
   EyeIcon,
   EditIcon,
   TrashIcon,
+  getStageCardClasses,
 } from './PipelineComponents.tsx';
 import {
   getLeadFolderLink,
@@ -21,7 +22,7 @@ import {
   formatTimeBR,
 } from '../lib/dateUtils.ts';
 
-export type FunnelType = 'temperature' | 'stages' | 'followups';
+export type FunnelType = 'stages' | 'followups';
 
 export interface FunnelTierData {
   id: string;
@@ -79,7 +80,7 @@ export default function FunnelVisualizer({
 }: FunnelVisualizerProps) {
   const { theme } = useTheme();
   const isLight = theme === 'light';
-  const [funnelType, setFunnelType] = useState<FunnelType>('temperature');
+  const [funnelType, setFunnelType] = useState<FunnelType>('stages');
   const [selectedTierId, setSelectedTierId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -107,90 +108,7 @@ export default function FunnelVisualizer({
   const tiers = useMemo<FunnelTierData[]>(() => {
     const totalLeadsCount = leads.length;
 
-    // 1. Funil de Temperatura
-    if (funnelType === 'temperature') {
-      const coldLeads = leads.filter((l) => (l.temperature || 'Morno').toLowerCase() === 'frio');
-      const warmLeads = leads.filter((l) => (l.temperature || 'Morno').toLowerCase() === 'morno');
-      const hotLeads = leads.filter((l) => (l.temperature || 'Morno').toLowerCase() === 'quente');
-      const clientLeads = leads.filter((l) => (l.temperature || 'Morno').toLowerCase() === 'cliente');
-
-      return [
-        {
-          id: 'frio',
-          name: 'Frio',
-          subtitle: 'Prospecção / Primeiro contato',
-          count: coldLeads.length,
-          percentage: totalLeadsCount > 0 ? Math.round((coldLeads.length / totalLeadsCount) * 100) : 0,
-          color: {
-            bg: 'bg-sky-950/70',
-            border: 'border-sky-700/60',
-            text: 'text-sky-300',
-            accent: 'bg-sky-500',
-            gradientFrom: 'from-sky-500/25',
-            gradientTo: 'to-sky-600/10',
-            glow: 'rgba(14, 165, 233, 0.25)',
-            badgeBg: 'bg-sky-500/20 text-sky-300 border border-sky-500/40',
-          },
-          leads: coldLeads,
-        },
-        {
-          id: 'morno',
-          name: 'Morno',
-          subtitle: 'Qualificação / Em negociação',
-          count: warmLeads.length,
-          percentage: totalLeadsCount > 0 ? Math.round((warmLeads.length / totalLeadsCount) * 100) : 0,
-          color: {
-            bg: 'bg-amber-950/70',
-            border: 'border-amber-700/60',
-            text: 'text-amber-300',
-            accent: 'bg-amber-500',
-            gradientFrom: 'from-amber-500/25',
-            gradientTo: 'to-amber-600/10',
-            glow: 'rgba(245, 158, 11, 0.25)',
-            badgeBg: 'bg-amber-500/20 text-amber-300 border border-amber-500/40',
-          },
-          leads: warmLeads,
-        },
-        {
-          id: 'quente',
-          name: 'Quente',
-          subtitle: 'Decisão / Proposta em análise',
-          count: hotLeads.length,
-          percentage: totalLeadsCount > 0 ? Math.round((hotLeads.length / totalLeadsCount) * 100) : 0,
-          color: {
-            bg: 'bg-rose-950/70',
-            border: 'border-rose-700/60',
-            text: 'text-rose-300',
-            accent: 'bg-rose-500',
-            gradientFrom: 'from-rose-500/25',
-            gradientTo: 'to-rose-600/10',
-            glow: 'rgba(244, 63, 94, 0.25)',
-            badgeBg: 'bg-rose-500/20 text-rose-300 border border-rose-500/40',
-          },
-          leads: hotLeads,
-        },
-        {
-          id: 'cliente',
-          name: 'Cliente',
-          subtitle: 'Convertido / Contrato fechado',
-          count: clientLeads.length,
-          percentage: totalLeadsCount > 0 ? Math.round((clientLeads.length / totalLeadsCount) * 100) : 0,
-          color: {
-            bg: 'bg-emerald-950/70',
-            border: 'border-emerald-700/60',
-            text: 'text-emerald-300',
-            accent: 'bg-emerald-500',
-            gradientFrom: 'from-emerald-500/25',
-            gradientTo: 'to-emerald-600/10',
-            glow: 'rgba(16, 185, 129, 0.25)',
-            badgeBg: 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40',
-          },
-          leads: clientLeads,
-        },
-      ];
-    }
-
-    // 2. Funil de Etapas (Sem a etapa de Perdido, focado no fechamento comercial)
+    // 1. Funil de Etapas Comerciais (Sem a etapa de Perdido, focado no fechamento comercial)
     if (funnelType === 'stages') {
       const activeCommercialStages = stages.filter(
         (s) => !s.is_lost && !(s.name || '').toLowerCase().includes('perdid')
@@ -280,9 +198,10 @@ export default function FunnelVisualizer({
     const todayOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
     // Total de Leads = condomínios no pipeline que ainda não são clientes
-    const nonClientLeads = leads.filter(
-      (l) => (l.temperature || 'Morno').toLowerCase() !== 'cliente'
-    );
+    const nonClientLeads = leads.filter((l) => {
+      const stage = stages.find((s) => s.id === l.current_stage_id);
+      return !stage?.is_won && l.current_stage_id !== 'stg_cliente' && !(stage?.name || '').toLowerCase().includes('cliente');
+    });
 
     // Contato agendado = leads não-clientes que possuem next_follow_up_date
     const scheduledLeads = nonClientLeads.filter((l) => {
@@ -452,42 +371,25 @@ export default function FunnelVisualizer({
               </div>
 
               {/* Type Switcher Tabs (Compact) */}
-              <div className={`grid grid-cols-3 p-1 rounded-xl border text-[11px] font-semibold text-center ${
+              <div className={`grid grid-cols-2 p-1 rounded-xl border text-[11px] font-semibold text-center ${
                 isLight ? 'bg-slate-100 border-slate-200' : 'bg-[#09090b] border-zinc-800'
               }`}>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFunnelType('temperature');
-                    setSelectedTierId(null);
-                  }}
-                  className={`py-1.5 px-1 rounded-lg transition-all cursor-pointer truncate ${
-                    funnelType === 'temperature'
-                      ? 'bg-indigo-600 text-white shadow-xs'
-                      : isLight
-                      ? 'text-slate-600 hover:text-slate-950'
-                      : 'text-zinc-400 hover:text-white'
-                  }`}
-                  title="Funil por Temperatura"
-                >
-                  🔥 Temperatura
-                </button>
                 <button
                   type="button"
                   onClick={() => {
                     setFunnelType('stages');
                     setSelectedTierId(null);
                   }}
-                  className={`py-1.5 px-1 rounded-lg transition-all cursor-pointer truncate ${
+                  className={`py-1.5 px-2 rounded-lg transition-all cursor-pointer truncate ${
                     funnelType === 'stages'
                       ? 'bg-indigo-600 text-white shadow-xs'
                       : isLight
                       ? 'text-slate-600 hover:text-slate-950'
                       : 'text-zinc-400 hover:text-white'
                   }`}
-                  title="Funil por Etapas"
+                  title="Funil por Etapas Comerciais"
                 >
-                  📊 Etapas
+                  📊 Etapas Comerciais
                 </button>
                 <button
                   type="button"
@@ -495,7 +397,7 @@ export default function FunnelVisualizer({
                     setFunnelType('followups');
                     setSelectedTierId(null);
                   }}
-                  className={`py-1.5 px-1 rounded-lg transition-all cursor-pointer truncate ${
+                  className={`py-1.5 px-2 rounded-lg transition-all cursor-pointer truncate ${
                     funnelType === 'followups'
                       ? 'bg-indigo-600 text-white shadow-xs'
                       : isLight
@@ -654,26 +556,10 @@ export default function FunnelVisualizer({
                     ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
                     : 'Estágio inicial';
 
-                  const getTempBadgeStyle = (temp?: string | null) => {
-                    const norm = (temp || 'morno').trim().toLowerCase();
-                    if (norm === 'frio') return isLight ? 'bg-white/90 text-sky-800 border border-sky-400 font-bold shadow-2xs' : 'bg-sky-500/20 text-sky-300 border border-sky-400/50 font-bold';
-                    if (norm === 'quente') return isLight ? 'bg-white/90 text-orange-800 border border-orange-400 font-bold shadow-2xs' : 'bg-orange-500/20 text-orange-300 border border-orange-400/50 font-bold';
-                    if (norm === 'cliente') return isLight ? 'bg-white/90 text-emerald-800 border border-emerald-400 font-bold shadow-2xs' : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50 font-bold';
-                    return isLight ? 'bg-white/90 text-yellow-900 border border-yellow-500 font-bold shadow-2xs' : 'bg-yellow-500/20 text-yellow-300 border border-yellow-400/50 font-bold';
-                  };
-
-                  const getCardBgClasses = (temp?: string | null) => {
-                    const norm = (temp || 'morno').trim().toLowerCase();
-                    if (norm === 'frio') return 'card-temp-frio';
-                    if (norm === 'quente') return 'card-temp-quente';
-                    if (norm === 'cliente') return 'card-temp-cliente';
-                    return 'card-temp-morno';
-                  };
-
                   return (
                     <div
                       key={lead.id}
-                      className={`p-3.5 rounded-[22px] border transition-all hover:shadow-md flex flex-col justify-between ${getCardBgClasses(lead.temperature)}`}
+                      className={`p-3.5 rounded-[22px] border transition-all hover:shadow-md flex flex-col justify-between ${getStageCardClasses(lead.current_stage_id, stageName)}`}
                     >
                       <div>
                         {/* Linha 1: Nome do Condomínio */}
@@ -687,13 +573,10 @@ export default function FunnelVisualizer({
                           {lead.name}
                         </h5>
 
-                        {/* Linha 2: Temperatura + Status da Etapa */}
+                        {/* Linha 2: Status da Etapa Comercial */}
                         <div className="flex items-center gap-1.5 flex-wrap mb-2.5">
-                          <span className={`px-2 py-0.5 rounded-md text-[10px] ${getTempBadgeStyle(lead.temperature)}`}>
-                            {lead.temperature || 'Morno'}
-                          </span>
                           <span
-                            className={`px-2 py-0.5 rounded-md text-[10px] font-semibold truncate max-w-[125px] border ${
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-semibold truncate max-w-[150px] border ${
                               isLight
                                 ? 'bg-white/90 border-black/15 text-slate-900 shadow-2xs'
                                 : 'bg-zinc-900/90 border-zinc-700/70 text-zinc-200'

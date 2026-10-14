@@ -17,7 +17,7 @@ import ProfileAvatar from './ProfileAvatar.tsx';
 export interface FollowUpsViewConfig {
   showCityAndType: boolean;
   showStage: boolean;
-  showTemperature: boolean;
+  showTemperature?: boolean;
   showFollowUpDate: boolean;
   showLatestNotes: boolean;
   showResponsible: boolean;
@@ -35,7 +35,7 @@ export const DEFAULT_PIPELINE_VIEW_CONFIG: PipelineViewConfig = {
 export const DEFAULT_FOLLOWUPS_VIEW_CONFIG: FollowUpsViewConfig = {
   showCityAndType: true,
   showStage: true,
-  showTemperature: true,
+  showTemperature: false,
   showFollowUpDate: true,
   showLatestNotes: true,
   showResponsible: true,

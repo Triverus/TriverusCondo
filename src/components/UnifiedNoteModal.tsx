@@ -1,9 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase.ts';
-import { syncGoogleCalendarInteraction, updateGoogleCalendarInteraction } from '../lib/googleCalendarClient.ts';
+import {
+  syncInteractionCalendar,
+  updateGoogleCalendarInteraction,
+} from '../lib/googleCalendarClient.ts';
 import { useCRM, type Lead } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
 import { NotesIcon } from './PipelineComponents.tsx';
+import { Loader } from './ui/loader.tsx';
 import {
   formatDateBR,
   toDateInputValue,
@@ -13,6 +17,13 @@ import {
   buildSaoPauloIsoDateTime,
   resolveFollowUpDateAndTime,
 } from '../lib/dateUtils.ts';
+
+export type SavePhase =
+  | 'idle'
+  | 'saving_database'
+  | 'syncing_calendar'
+  | 'refreshing'
+  | 'done';
 
 export interface UnifiedNoteModalProps {
   isOpen: boolean;
@@ -147,7 +158,8 @@ export default function UnifiedNoteModal({
   const [formNextFollowUpTime, setFormNextFollowUpTime] = useState<string>('09:00');
   const [formNextChannel, setFormNextChannel] = useState<string>('WhatsApp');
 
-  const [formSaving, setFormSaving] = useState<boolean>(false);
+  const [savePhase, setSavePhase] = useState<SavePhase>('idle');
+  const formSaving = savePhase !== 'idle';
   const [formError, setFormError] = useState<string | null>(null);
 
   // Quick next follow-up helper
@@ -167,6 +179,11 @@ export default function UnifiedNoteModal({
 
   // Reset/Initialize state strictly when modal opens or editingInteractionId changes
   useEffect(() => {
+    if (!isOpen) {
+      setSavePhase('idle');
+      return;
+    }
+
     const justOpened = isOpen && !wasOpenRef.current;
     const editingChanged = isOpen && editingInteractionId !== prevEditingIdRef.current;
     wasOpenRef.current = isOpen;
@@ -260,7 +277,8 @@ export default function UnifiedNoteModal({
       return;
     }
 
-    setFormSaving(true);
+    // ETAPA 1: SUPABASE
+    setSavePhase('saving_database');
     try {
       // Build ISO occurred_at (Safety check: occurred_at is when this note/history was recorded)
       let occurredAtIso = new Date().toISOString();
@@ -322,10 +340,10 @@ export default function UnifiedNoteModal({
             google_event_id: savedData.google_event_id || null,
           });
 
+          // ETAPA 2: GOOGLE CALENDAR (apenas se houver agendamento)
           const hasFollowUp = (!!nextFollowUpAtIso) || (!!savedData?.next_follow_up_at);
-          console.log('[FOLLOWUP_GOOGLE_SYNC_DEBUG]', { nextFollowUpAtIso, dbNextAt: savedData?.next_follow_up_at, hasFollowUp });
-
           if (hasFollowUp && savedData.id) {
+            setSavePhase('syncing_calendar');
             try {
               await updateGoogleCalendarInteraction(savedData.id);
             } catch (syncErr: any) {
@@ -348,12 +366,12 @@ export default function UnifiedNoteModal({
             google_event_id: savedData.google_event_id || null,
           });
 
+          // ETAPA 2: GOOGLE CALENDAR (apenas se houver agendamento)
           const hasFollowUp = (!!nextFollowUpAtIso) || (!!savedData?.next_follow_up_at);
-          console.log('[FOLLOWUP_GOOGLE_SYNC_DEBUG]', { nextFollowUpAtIso, dbNextAt: savedData?.next_follow_up_at, hasFollowUp });
-
           if (hasFollowUp && savedData.id) {
+            setSavePhase('syncing_calendar');
             try {
-              await syncGoogleCalendarInteraction(savedData.id);
+              await syncInteractionCalendar(savedData.id);
             } catch (syncErr: any) {
               console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
             }
@@ -368,17 +386,22 @@ export default function UnifiedNoteModal({
         }
       }
 
+      // ETAPA 3: REFRESH / ATUALIZAÇÃO
+      setSavePhase('refreshing');
+      // Sincronizar em background sem travar a interface do usuário
+      refreshAll(false).catch(() => {});
+
+      // ETAPA 4: TRANSIÇÃO DIRETA PARA A TIMELINE
+      setSavePhase('done');
       if (onSavedSuccess && lead) {
         onSavedSuccess(lead);
       } else {
         onClose();
       }
-      refreshAll(true);
     } catch (err: any) {
       console.error('Erro ao salvar nota:', err);
       setFormError(err?.message || 'Erro ao gravar nota no banco de dados.');
-    } finally {
-      setFormSaving(false);
+      setSavePhase('idle');
     }
   };
 
@@ -449,18 +472,32 @@ export default function UnifiedNoteModal({
         {/* Modal Body: Loading State during save OR One Step at a Time (Typeform) */}
         <div className="p-6 sm:p-7 overflow-y-auto flex-1 text-sm">
           {formSaving ? (
-            <div className="py-12 flex flex-col items-center justify-center text-center space-y-4 animate-in fade-in duration-200">
-              <div className="w-14 h-14 rounded-2xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/40 flex items-center justify-center shadow-lg">
-                <div className="w-7 h-7 border-3 border-indigo-400 border-t-transparent rounded-full animate-spin" />
-              </div>
-              <div className="space-y-1.5 max-w-xs">
-                <h3 className="text-base font-bold text-white">Salvando nota...</h3>
-                <p className="text-xs text-slate-400">
-                  {wantNextFollowUp && formNextFollowUpDate
-                    ? 'Gravando anotação e sincronizando agendamento de follow-up...'
-                    : 'Gravando anotação no histórico do condomínio...'}
-                </p>
-              </div>
+            <div className="py-12 flex flex-col items-center justify-center text-center animate-in fade-in duration-200">
+              <Loader
+                title={
+                  savePhase === 'saving_database'
+                    ? 'Salvando nota no Triverus...'
+                    : savePhase === 'syncing_calendar'
+                    ? 'Vinculando ao Google Calendar...'
+                    : savePhase === 'refreshing'
+                    ? 'Atualizando histórico...'
+                    : savePhase === 'done'
+                    ? 'Concluído!'
+                    : 'Processando...'
+                }
+                subtitle={
+                  savePhase === 'saving_database'
+                    ? 'Gravando a interação no histórico.'
+                    : savePhase === 'syncing_calendar'
+                    ? 'Sincronizando o agendamento do próximo contato.'
+                    : savePhase === 'refreshing'
+                    ? 'Preparando suas notas.'
+                    : savePhase === 'done'
+                    ? 'Abrindo histórico de notas...'
+                    : 'Aguarde um momento.'
+                }
+                size="md"
+              />
             </div>
           ) : (
             <>

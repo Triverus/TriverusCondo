@@ -852,14 +852,8 @@ app.post('/api/google/calendar/interaction', async (req, res) => {
   if (operation === 'delete') {
     try {
       const deleteResult = await deleteGoogleCalendarEventForInteraction(interactionId);
-      if (deleteResult && (deleteResult.reason === 'interaction_not_found' || deleteResult.status === 404)) {
-        return res.status(404).json({
-          success: false,
-          error: 'interaction_not_found',
-        });
-      }
       if (!deleteResult.success) {
-        return res.status(deleteResult.status || 500).json({
+        return res.status(deleteResult.status || 400).json({
           ...deleteResult,
           success: false,
         });

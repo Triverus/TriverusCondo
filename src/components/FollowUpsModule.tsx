@@ -29,8 +29,6 @@ import { celebrateClientConversion } from '../lib/celebration.ts';
 import {
   getLeadFolderLink,
   saveLeadFolderLink,
-  sanitizeTemperatureForDB,
-  TEMPERATURE_OPTIONS,
 } from './LeadsModule.tsx';
 import {
   parseCalendarDate,
@@ -106,14 +104,14 @@ export default function FollowUpsModule({
   // Inline Quick-Edit State (single field per card at a time)
   const [quickEdit, setQuickEdit] = useState<{
     leadId: string;
-    field: 'stage' | 'date' | 'time' | 'temperature' | 'notes' | 'responsible';
+    field: 'stage' | 'date' | 'time' | 'notes' | 'responsible';
     value: string;
     saving?: boolean;
   } | null>(null);
 
   const handleOpenQuickEdit = (
     leadId: string,
-    field: 'stage' | 'date' | 'time' | 'temperature' | 'notes' | 'responsible',
+    field: 'stage' | 'date' | 'time' | 'notes' | 'responsible',
     initialValue: string
   ) => {
     setQuickEdit({ leadId, field, value: initialValue, saving: false });
@@ -178,7 +176,7 @@ export default function FollowUpsModule({
   const handleSaveQuickField = async (
     item: FollowUpItem,
     overrideValue?: string,
-    overrideField?: 'stage' | 'date' | 'time' | 'temperature' | 'notes' | 'responsible'
+    overrideField?: 'stage' | 'date' | 'time' | 'notes' | 'responsible'
   ) => {
     const field = overrideField || quickEdit?.field;
     if (!field) return;
@@ -227,16 +225,6 @@ export default function FollowUpsModule({
         }
 
         setStatusFeedback({ type: 'success', message: 'Estágio do funil atualizado!' });
-      } else if (field === 'temperature') {
-        if (!val) return;
-        const updatedLead: Lead = { ...item.lead, temperature: val };
-        upsertLeadLocally(updatedLead);
-        const dbTemp = sanitizeTemperatureForDB(val);
-        const { error } = await supabase.from('leads').update({ temperature: dbTemp }).eq('id', item.lead.id);
-        if (error && error.code === '23514') {
-          await supabase.from('leads').update({ temperature: 'Morno' }).eq('id', item.lead.id);
-        }
-        setStatusFeedback({ type: 'success', message: `Temperatura alterada para ${val}!` });
       } else if (field === 'date') {
         if (!val) return;
         const { time } = resolveFollowUpDateAndTime(
@@ -859,20 +847,6 @@ export default function FollowUpsModule({
   const { theme } = useTheme();
   const isLight = theme === 'light';
 
-  const getTemperatureCardBorder = (temp?: string | null) => {
-    const norm = temp ? temp.trim().toLowerCase() : 'morno';
-    if (norm === 'frio' || norm === 'cold') {
-      return 'card-temp-frio';
-    }
-    if (norm === 'quente' || norm === 'hot') {
-      return 'card-temp-quente';
-    }
-    if (norm === 'cliente' || norm === 'client' || norm === 'won') {
-      return 'card-temp-cliente';
-    }
-    return 'card-temp-morno';
-  };
-
   const getStageBadge = (stageId?: string | null) => {
     const stageName = stageId ? stageMap.get(stageId) || 'Início' : 'Início';
     const stageObj = stages.find((s) => s.id === stageId);
@@ -899,10 +873,6 @@ export default function FollowUpsModule({
         <span>{stageName}</span>
       </span>
     );
-  };
-
-  const getTemperatureBadge = (temp?: string | null) => {
-    return getStageBadge(temp);
   };
 
   const getStatusBadge = (status: 'overdue' | 'today' | 'upcoming') => {
@@ -1224,7 +1194,7 @@ export default function FollowUpsModule({
             const emCount = leadContacts.filter((c) => c.email && c.email.trim()).length;
             const hasFolder = Boolean(getLeadFolderLink(item.lead.id));
             const leadInteractionsCount = interactions.filter((i) => i.lead_id === item.lead.id).length;
-            const isEditingField = (f: 'stage' | 'date' | 'time' | 'temperature' | 'notes' | 'responsible') =>
+            const isEditingField = (f: 'stage' | 'date' | 'time' | 'notes' | 'responsible') =>
               quickEdit?.leadId === item.lead.id && quickEdit?.field === f;
             const currentResponsibleId = item.latestInteraction.responsible_user_id || item.lead.responsible_user_id || currentProfile.id;
             const displayTime = formatTimeBR(item.followUpDate, item.latestInteraction.id, item.lead.id);
@@ -1307,206 +1277,144 @@ export default function FollowUpsModule({
                     {getStatusBadge(item.status)}
                   </div>
 
-                  {/* Highlight Blocks: Agendamento / Horário / Temperatura */}
-                  {(viewConfig.showFollowUpDate || viewConfig.showTemperature) && (
-                    <div
-                      className={`my-2.5 grid gap-2 text-xs ${
-                        viewConfig.showFollowUpDate && viewConfig.showTemperature
-                          ? 'grid-cols-3'
-                          : viewConfig.showFollowUpDate
-                          ? 'grid-cols-2'
-                          : 'grid-cols-1'
-                      }`}
-                    >
-                      {viewConfig.showFollowUpDate && (
-                        <>
-                          {/* Bloco 1: Agendamento */}
-                          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
-                            <div className="flex items-center justify-between gap-1 mb-0.5">
-                              <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
-                                Agendamento
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  isEditingField('date')
-                                    ? setQuickEdit(null)
-                                    : handleOpenQuickEdit(item.lead.id, 'date', toDateInputValue(item.followUpDate))
+                  {/* Highlight Blocks: Agendamento & Horário */}
+                  {viewConfig.showFollowUpDate && (
+                    <div className="my-2.5 grid grid-cols-2 gap-2 text-xs">
+                      {/* Bloco 1: Agendamento */}
+                      <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
+                            Agendamento
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              isEditingField('date')
+                                ? setQuickEdit(null)
+                                : handleOpenQuickEdit(item.lead.id, 'date', toDateInputValue(item.followUpDate))
+                            }
+                            title="Alterar data do agendamento"
+                            className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                              isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                            }`}
+                          >
+                            <EditIcon className="w-3 h-3" />
+                          </button>
+                        </div>
+                        {isEditingField('date') ? (
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <input
+                              type="date"
+                              autoFocus
+                              value={quickEdit?.value || ''}
+                              onChange={(e) => {
+                                setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null));
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && quickEdit?.value) {
+                                  handleSaveQuickField(item, quickEdit.value, 'date');
                                 }
-                                title="Alterar data do agendamento"
-                                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                                  isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
-                                }`}
-                              >
-                                <EditIcon className="w-3 h-3" />
-                              </button>
-                            </div>
-                            {isEditingField('date') ? (
-                              <div className="flex items-center gap-1 mt-0.5">
-                                <input
-                                  type="date"
-                                  autoFocus
-                                  value={quickEdit?.value || ''}
-                                  onChange={(e) => {
-                                    setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null));
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && quickEdit?.value) {
-                                      handleSaveQuickField(item, quickEdit.value, 'date');
-                                    }
-                                    if (e.key === 'Escape') setQuickEdit(null);
-                                  }}
-                                  className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (quickEdit?.value) {
-                                      handleSaveQuickField(item, quickEdit.value, 'date');
-                                    } else {
-                                      setQuickEdit(null);
-                                    }
-                                  }}
-                                  className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
-                                  title="Confirmar data"
-                                >
-                                  ✓
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setQuickEdit(null)}
-                                  className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
-                                  title="Cancelar"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ) : (
-                              <span className={`font-bold text-xs truncate ${isLight ? 'text-slate-950' : 'text-white'}`}>
-                                {formatDateBR(item.followUpDate)}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Bloco 2: Horário */}
-                          <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
-                            <div className="flex items-center justify-between gap-1 mb-0.5">
-                              <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
-                                Horário
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  isEditingField('time')
-                                    ? setQuickEdit(null)
-                                    : handleOpenQuickEdit(item.lead.id, 'time', displayTime)
-                                }
-                                title="Alterar horário do agendamento"
-                                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                                  isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
-                                }`}
-                              >
-                                <EditIcon className="w-3 h-3" />
-                              </button>
-                            </div>
-                            {isEditingField('time') ? (
-                              <div className="flex items-center gap-1 mt-0.5">
-                                <input
-                                  type="time"
-                                  autoFocus
-                                  value={quickEdit?.value || '09:00'}
-                                  onChange={(e) =>
-                                    setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null))
-                                  }
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && quickEdit?.value) {
-                                      handleSaveQuickField(item, quickEdit.value, 'time');
-                                    }
-                                    if (e.key === 'Escape') setQuickEdit(null);
-                                  }}
-                                  className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (quickEdit?.value) {
-                                      handleSaveQuickField(item, quickEdit.value, 'time');
-                                    } else {
-                                      setQuickEdit(null);
-                                    }
-                                  }}
-                                  className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
-                                  title="Confirmar horário"
-                                >
-                                  ✓
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setQuickEdit(null)}
-                                  className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
-                                  title="Cancelar"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                            ) : (
-                              <span className={`font-bold text-xs truncate ${isLight ? 'text-indigo-700' : 'text-indigo-300'}`}>
-                                {displayTime}
-                              </span>
-                            )}
-                          </div>
-                        </>
-                      )}
-
-                      {/* Bloco 3: Temperatura */}
-                      {viewConfig.showTemperature && (
-                        <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
-                          <div className="flex items-center justify-between gap-1 mb-0.5">
-                            <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
-                              Temperatura
-                            </span>
+                                if (e.key === 'Escape') setQuickEdit(null);
+                              }}
+                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
+                            />
                             <button
                               type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                isEditingField('temperature')
-                                  ? setQuickEdit(null)
-                                  : handleOpenQuickEdit(item.lead.id, 'temperature', item.lead.temperature || 'Morno');
+                              onClick={() => {
+                                if (quickEdit?.value) {
+                                  handleSaveQuickField(item, quickEdit.value, 'date');
+                                } else {
+                                  setQuickEdit(null);
+                                }
                               }}
-                              title="Alterar temperatura do condomínio"
-                              className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                                isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
-                              }`}
+                              className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
+                              title="Confirmar data"
                             >
-                              <EditIcon className="w-3 h-3" />
+                              ✓
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setQuickEdit(null)}
+                              className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
+                              title="Cancelar"
+                            >
+                              ✕
                             </button>
                           </div>
-                          {isEditingField('temperature') ? (
-                            <select
-                              autoFocus
-                              value={quickEdit?.value || item.lead.temperature || 'Morno'}
-                              onClick={(e) => e.stopPropagation()}
-                              onMouseDown={(e) => e.stopPropagation()}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                if (v) handleSaveQuickField(item, v, 'temperature');
-                              }}
-                              onBlur={() => setQuickEdit((prev) => (prev?.saving ? prev : null))}
-                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none mt-0.5"
-                            >
-                              {TEMPERATURE_OPTIONS.map((opt) => (
-                                <option key={opt} value={opt}>
-                                  {opt}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <div className="mt-0.5 truncate">
-                              {getTemperatureBadge(item.lead.temperature)}
-                            </div>
-                          )}
+                        ) : (
+                          <span className={`font-bold text-xs truncate ${isLight ? 'text-slate-950' : 'text-white'}`}>
+                            {formatDateBR(item.followUpDate)}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Bloco 2: Horário */}
+                      <div className={`p-2.5 rounded-xl border flex flex-col justify-between ${isLight ? 'bg-white/80 border-black/10' : 'bg-black/30 border-white/10'}`}>
+                        <div className="flex items-center justify-between gap-1 mb-0.5">
+                          <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
+                            Horário
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              isEditingField('time')
+                                ? setQuickEdit(null)
+                                : handleOpenQuickEdit(item.lead.id, 'time', displayTime)
+                            }
+                            title="Alterar horário do agendamento"
+                            className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                              isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                            }`}
+                          >
+                            <EditIcon className="w-3 h-3" />
+                          </button>
                         </div>
-                      )}
+                        {isEditingField('time') ? (
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <input
+                              type="time"
+                              autoFocus
+                              value={quickEdit?.value || '09:00'}
+                              onChange={(e) =>
+                                setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null))
+                              }
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && quickEdit?.value) {
+                                  handleSaveQuickField(item, quickEdit.value, 'time');
+                                }
+                                if (e.key === 'Escape') setQuickEdit(null);
+                              }}
+                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (quickEdit?.value) {
+                                  handleSaveQuickField(item, quickEdit.value, 'time');
+                                } else {
+                                  setQuickEdit(null);
+                                }
+                              }}
+                              className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
+                              title="Confirmar horário"
+                            >
+                              ✓
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setQuickEdit(null)}
+                              className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
+                              title="Cancelar"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
+                          <span className={`font-bold text-xs truncate ${isLight ? 'text-indigo-700' : 'text-indigo-300'}`}>
+                            {displayTime}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   )}
 
@@ -1691,10 +1599,10 @@ export default function FollowUpsModule({
                   isLight ? 'border-slate-200 bg-slate-50 text-slate-600' : 'border-slate-800 bg-slate-950/60 text-slate-400'
                 }`}>
                   <th className="py-3 px-4 sm:px-6">Condomínio</th>
-                  <th className="py-3 px-4">Data Follow-up</th>
+                  <th className="py-3 px-4">Estágio Atual</th>
+                  <th className="py-3 px-4">Próximo Contato</th>
                   <th className="py-3 px-4">Situação</th>
                   <th className="py-3 px-4 hidden md:table-cell">Última Interação</th>
-                  <th className="py-3 px-4 hidden lg:table-cell">Temperatura</th>
                   <th className="py-3 px-4 hidden sm:table-cell">Responsável</th>
                   <th className="py-3 px-4 text-right">Ação</th>
                 </tr>
@@ -1712,10 +1620,16 @@ export default function FollowUpsModule({
                       >
                         {item.lead.name}
                       </button>
-                      <span className={`text-[11px] block ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>{item.stageName}</span>
+                      <span className={`text-[11px] block ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>
+                        {item.lead.condominium_type || 'Residencial'}{item.lead.city ? ` · ${item.lead.city}` : ''}
+                      </span>
+                    </td>
+                    <td className="py-3.5 px-4">
+                      {getStageBadge(item.lead.current_stage_id)}
                     </td>
                     <td className={`py-3.5 px-4 font-bold ${isLight ? 'text-slate-900' : 'text-white'}`}>
-                      {formatDateBR(item.followUpDate)}
+                      <div>{formatDateBR(item.followUpDate)}</div>
+                      <div className="text-[11px] font-normal text-slate-400">{formatTimeBR(item.followUpDate, item.latestInteraction.id, item.lead.id)}</div>
                     </td>
                     <td className="py-3.5 px-4">
                       {getStatusBadge(item.status)}
@@ -1729,9 +1643,6 @@ export default function FollowUpsModule({
                       <div className="text-[11px] text-slate-400">
                         {formatDateBR(item.latestInteraction.occurred_at)}
                       </div>
-                    </td>
-                    <td className="py-3.5 px-4 hidden lg:table-cell">
-                      {getTemperatureBadge(item.lead.temperature)}
                     </td>
                     <td className="py-3.5 px-4 text-xs text-slate-300 hidden sm:table-cell">
                       {item.responsibleName}
@@ -2333,12 +2244,6 @@ export default function FollowUpsModule({
             onChange: (val) => handleUpdateViewConfig('showFollowUpDate', val),
           },
           {
-            key: 'showTemperature',
-            label: 'Temperatura',
-            checked: viewConfig.showTemperature,
-            onChange: (val) => handleUpdateViewConfig('showTemperature', val),
-          },
-          {
             key: 'showLatestNotes',
             label: 'Última Anotação',
             checked: viewConfig.showLatestNotes,
@@ -2455,7 +2360,6 @@ export default function FollowUpsModule({
                       </div>
 
                       <div className="shrink-0 flex items-center gap-2">
-                        {getTemperatureBadge(lead.temperature)}
                         <span className="w-7 h-7 rounded-xl bg-indigo-600/20 text-indigo-400 group-hover:bg-indigo-600 group-hover:text-white flex items-center justify-center text-xs font-bold transition-all shadow-xs">
                           +
                         </span>

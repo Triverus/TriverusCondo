@@ -665,7 +665,7 @@ export async function syncGoogleCalendarInteraction(interactionId) {
 export async function deleteGoogleCalendarEventForInteraction(interactionId) {
   const supabase = getAdminClient();
   if (!supabase) {
-    return { success: false, reason: 'database_unavailable' };
+    return { success: false, reason: 'database_unavailable', status: 503 };
   }
 
   const { data: interaction, error: intErr } = await supabase
@@ -675,11 +675,12 @@ export async function deleteGoogleCalendarEventForInteraction(interactionId) {
     .single();
 
   if (intErr || !interaction) {
-    return { success: false, reason: 'interaction_not_found', status: 404 };
+    // Se a interação já não existe no banco, considera sucesso idempotente
+    return { success: true, deleted: false, reason: 'interaction_not_found', already_missing: true, status: 200 };
   }
 
   if (!interaction.google_event_id || !interaction.google_event_id.trim()) {
-    return { success: true, deleted: false, reason: 'no_google_event' };
+    return { success: true, deleted: false, reason: 'no_google_event', status: 200 };
   }
 
   const startTime = Date.now();
@@ -688,7 +689,7 @@ export async function deleteGoogleCalendarEventForInteraction(interactionId) {
     accessToken = await getValidGoogleAccessToken(interaction.responsible_user_id);
   } catch (err) {
     console.warn('[GOOGLE_CALENDAR_DELETE] Falha ao obter token:', { interaction_id: interactionId, error: err?.code });
-    return { success: false, reason: err?.code || 'google_calendar_not_connected' };
+    return { success: false, reason: err?.code || 'google_calendar_not_connected', status: 401 };
   }
 
   const googleEventId = interaction.google_event_id.trim();
@@ -702,7 +703,19 @@ export async function deleteGoogleCalendarEventForInteraction(interactionId) {
   });
 
   const duration = Date.now() - startTime;
-  const alreadyMissing = googleRes.status === 404;
+  let alreadyMissing = googleRes.status === 404 || googleRes.status === 410;
+
+  if (!googleRes.ok && !alreadyMissing) {
+    try {
+      const errBody = await googleRes.json();
+      const msg = JSON.stringify(errBody || '').toLowerCase();
+      if (msg.includes('deleted') || msg.includes('not found') || msg.includes('notfound') || msg.includes('gone')) {
+        alreadyMissing = true;
+      }
+    } catch {
+      // Ignorar erro de parse JSON do corpo de erro
+    }
+  }
 
   if (!googleRes.ok && !alreadyMissing) {
     console.error('[GOOGLE_CALENDAR_DELETE] Falha ao excluir no Google:', {
@@ -720,6 +733,7 @@ export async function deleteGoogleCalendarEventForInteraction(interactionId) {
     google_duration_ms: duration,
   });
 
-  return { success: true, deleted: !alreadyMissing, reason: alreadyMissing ? 'already_missing' : 'success' };
+  return { success: true, deleted: !alreadyMissing, already_missing: alreadyMissing, reason: alreadyMissing ? 'already_missing' : 'success', status: 200 };
 }
+
 
