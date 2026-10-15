@@ -9,6 +9,7 @@ import { useCRM, type Lead } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
 import { NotesIcon } from './PipelineComponents.tsx';
 import { Loader } from './ui/loader.tsx';
+import { useUserPermissions } from '../lib/permissionsContext.tsx';
 import {
   formatDateBR,
   toDateInputValue,
@@ -246,33 +247,29 @@ export default function UnifiedNoteModal({
     setFormNextFollowUpDate(`${yyyy}-${mm}-${dd}`);
   };
 
-  // Track previous opened state to only initialize when modal transitions to open
-  const wasOpenRef = React.useRef(false);
-  const prevEditingIdRef = React.useRef<string | null | undefined>(undefined);
-  const prevInitialStepRef = React.useRef<InitialStepType | undefined>(undefined);
+  // Session tracking ref to ensure clean hydration whenever modal opens or session parameters change
+  const activeSessionKeyRef = React.useRef<string | null>(null);
 
-  // Reset/Initialize state strictly when modal opens or editingInteractionId / initialStep changes
+  // Reset/Initialize state strictly when modal opens, lead changes, or editingInteractionId / initialStep changes
   useEffect(() => {
-    if (!isOpen) {
+    if (!isOpen || !lead) {
+      activeSessionKeyRef.current = null;
       setSavePhase('idle');
+      setFormError(null);
       return;
     }
 
-    const justOpened = isOpen && !wasOpenRef.current;
-    const editingChanged = isOpen && editingInteractionId !== prevEditingIdRef.current;
-    const stepChanged = isOpen && initialStep !== prevInitialStepRef.current;
-    wasOpenRef.current = isOpen;
-    prevEditingIdRef.current = editingInteractionId;
-    prevInitialStepRef.current = initialStep;
-
-    // Se estiver em processo de save ou se o modal já estava aberto e nada mudou, NÃO resetar
-    if (formSaving) return;
-    if (!isOpen || !lead) return;
-    if (!justOpened && !editingChanged && !stepChanged) return;
+    const sessionKey = `${lead.id}::${editingInteractionId || 'new'}::${initialStep || 1}`;
+    if (activeSessionKeyRef.current === sessionKey) {
+      // Já está inicializado para esta sessão específica (usuário pode estar interagindo)
+      return;
+    }
+    activeSessionKeyRef.current = sessionKey;
 
     const targetStep = resolveStepNumber(initialStep, Boolean(editingInteractionId));
     setStep(targetStep);
     setFormError(null);
+    setSavePhase('idle');
 
     const now = new Date();
     const yyyy = now.getFullYear();
@@ -281,6 +278,7 @@ export default function UnifiedNoteModal({
     const hh = String(now.getHours()).padStart(2, '0');
     const min = String(now.getMinutes()).padStart(2, '0');
 
+    // FLUXO DE EDITAR NOTA: carregar exclusivamente a interaction clicada
     if (editingInteractionId) {
       const found = interactions.find((i) => i.id === editingInteractionId);
       if (found) {
@@ -291,6 +289,10 @@ export default function UnifiedNoteModal({
           setFormDate(toDateInputValue(found.occurred_at));
           setFormTime(`${String(occ.getHours()).padStart(2, '0')}:${String(occ.getMinutes()).padStart(2, '0')}`);
           setViewCalendarMonth(occ);
+        } else {
+          setFormDate(`${yyyy}-${mm}-${dd}`);
+          setFormTime(`${hh}:${min}`);
+          setViewCalendarMonth(now);
         }
         setFormResponsibleId(found.responsible_user_id || currentProfile.id);
         if (found.next_follow_up_at || found.next_follow_up_date) {
@@ -308,16 +310,18 @@ export default function UnifiedNoteModal({
           setFormNextFollowUpDate('');
           setFormNextFollowUpTime('09:00');
         }
+        setFormNextChannel('WhatsApp');
         return;
       }
     }
 
-    // Default new note values
+    // FLUXO DE NOVA NOTA (editingInteractionId === null):
+    // Formulário 100% limpo, sem resíduos de interações anteriores ou outros condomínios
     setFormType(targetStep === 5 ? 'Ligação' : '');
     setFormNotes('');
     setFormDate(`${yyyy}-${mm}-${dd}`);
     setFormTime(`${hh}:${min}`);
-    setViewCalendarMonth(new Date());
+    setViewCalendarMonth(now);
     setFormResponsibleId(currentProfile.id);
     setWantNextFollowUp(true);
 
@@ -334,7 +338,7 @@ export default function UnifiedNoteModal({
     }
     setFormNextFollowUpTime('09:00');
     setFormNextChannel('WhatsApp');
-  }, [isOpen, lead?.id, editingInteractionId, initialStep]);
+  }, [isOpen, lead?.id, editingInteractionId, initialStep, interactions, currentProfile.id]);
 
   if (!isOpen || !lead) return null;
 

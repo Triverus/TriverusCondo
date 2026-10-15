@@ -6,6 +6,7 @@ import type { UserProfile } from '../App.tsx';
 import { NotesIcon, EditIcon, TrashIcon } from './PipelineComponents.tsx';
 import { formatDateBR, parseCalendarDate } from '../lib/dateUtils.ts';
 import { renderFormattedTextWithLinks } from '../lib/linkUtils.tsx';
+import { useUserPermissions } from '../lib/permissionsContext.tsx';
 
 export interface NotesTimelineModalProps {
   isOpen: boolean;
@@ -17,6 +18,22 @@ export interface NotesTimelineModalProps {
 }
 
 export { formatDateBR };
+
+export function formatDateTimeBR(dateStr?: string | null): string {
+  if (!dateStr) return '';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = String(d.getFullYear()).slice(-2);
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} às ${hours}:${minutes}`;
+  } catch {
+    return '';
+  }
+}
 
 export function formatTimeBR(dateStr?: string | null): string {
   if (!dateStr) return '';
@@ -74,6 +91,8 @@ export default function NotesTimelineModal({
     getLeadServices,
     getPrimaryContactForLead,
   } = useCRM();
+
+  const { canManageNotes, canDeleteNotes } = useUserPermissions();
 
   const [activeTab, setActiveTab] = useState<'followups' | 'info'>('followups');
   const [isMaximized, setIsMaximized] = useState(false);
@@ -341,16 +360,18 @@ export default function NotesTimelineModal({
                 <p className="text-xs text-slate-400 max-w-xs mb-4">
                   Clique no botão "+" no rodapé para registrar a primeira interação com este condomínio.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenNewNote(lead);
-                  }}
-                  className="px-3.5 py-2 bg-[#FF6600] hover:bg-[#e65c00] text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5"
-                >
-                  <span>+ Registrar Follow-up</span>
-                </button>
+                {canManageNotes && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenNewNote(lead);
+                    }}
+                    className="px-3.5 py-2 bg-[#FF6600] hover:bg-[#e65c00] text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5"
+                  >
+                    <span>+ Registrar Follow-up</span>
+                  </button>
+                )}
               </div>
             ) : (
               groupedInteractions.map((group) => (
@@ -367,6 +388,17 @@ export default function NotesTimelineModal({
                     const respName = item.responsible_user_id
                       ? profileMap.get(item.responsible_user_id) || 'Atendente'
                       : 'Atendente';
+
+                    // Autoria humana inviolável conforme arquitetura aprovada
+                    const authorName = item.created_by_user_id
+                      ? profileMap.get(item.created_by_user_id) || null
+                      : null;
+                    const editorName = item.last_edited_by_user_id
+                      ? profileMap.get(item.last_edited_by_user_id) || null
+                      : null;
+
+                    const creationDateFormatted = formatDateTimeBR(item.created_at || item.occurred_at);
+                    const lastEditedDateFormatted = item.last_edited_at ? formatDateTimeBR(item.last_edited_at) : null;
 
                     const typeStyles: Record<string, { badge: string; border: string }> = {
                       'WhatsApp': { badge: 'bg-emerald-950/90 text-emerald-300 border-emerald-700/50', border: 'border-emerald-500/30' },
@@ -421,9 +453,11 @@ export default function NotesTimelineModal({
                                 <span className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-bold ${style.badge}`}>
                                   {item.interaction_type || 'Contato'}
                                 </span>
-                                <span className="text-[11px] text-slate-400 font-medium">
-                                  {respName}
-                                </span>
+                                {item.responsible_user_id && (
+                                  <span className="text-[11px] text-slate-400 font-medium" title="Responsável Comercial">
+                                    Resp: {respName}
+                                  </span>
+                                )}
                               </div>
 
                               <div className="flex items-center gap-2">
@@ -431,34 +465,40 @@ export default function NotesTimelineModal({
                                   {formatTimeBR(item.occurred_at)}
                                 </span>
 
-                                <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      onClose();
-                                      if (onEditNote) {
-                                        onEditNote(lead, item.id);
-                                      } else {
-                                        onOpenNewNote(lead);
-                                      }
-                                    }}
-                                    title="Editar nota"
-                                    aria-label="Editar nota"
-                                    className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
-                                  >
-                                    <EditIcon className="w-3.5 h-3.5" />
-                                  </button>
+                                {(canManageNotes || canDeleteNotes) && (
+                                  <div className="flex items-center gap-1 opacity-80 group-hover:opacity-100 transition-opacity">
+                                    {canManageNotes && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          onClose();
+                                          if (onEditNote) {
+                                            onEditNote(lead, item.id);
+                                          } else {
+                                            onOpenNewNote(lead);
+                                          }
+                                        }}
+                                        title="Editar nota"
+                                        aria-label="Editar nota"
+                                        className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                                      >
+                                        <EditIcon className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
 
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmDeleteId(item.id)}
-                                    title="Excluir nota"
-                                    aria-label="Excluir nota"
-                                    className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
-                                  >
-                                    <TrashIcon className="w-3.5 h-3.5" />
-                                  </button>
-                                </div>
+                                    {canDeleteNotes && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setConfirmDeleteId(item.id)}
+                                        title="Excluir nota"
+                                        aria-label="Excluir nota"
+                                        className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                      >
+                                        <TrashIcon className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             </div>
 
@@ -483,6 +523,31 @@ export default function NotesTimelineModal({
                                 <span className="text-[10px] text-slate-500">Agendado</span>
                               </div>
                             )}
+
+                            {/* Autoria Visual e Última Edição Humana (Auditada) */}
+                            <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-slate-400">
+                              <div className="flex items-center gap-1.5 text-slate-300">
+                                <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                                </svg>
+                                <span>
+                                  {authorName
+                                    ? `Criada por ${authorName} em ${creationDateFormatted}`
+                                    : `Criada em ${creationDateFormatted}`}
+                                </span>
+                              </div>
+
+                              {lastEditedDateFormatted && (
+                                <div className="flex items-center gap-1 text-[10px] text-slate-400 italic">
+                                  <span>•</span>
+                                  <span>
+                                    {editorName
+                                      ? `Última edição: ${editorName} em ${lastEditedDateFormatted}`
+                                      : `Última edição em ${lastEditedDateFormatted}`}
+                                  </span>
+                                </div>
+                              )}
+                            </div>
                           </>
                         )}
                       </div>
@@ -633,21 +698,23 @@ export default function NotesTimelineModal({
             )}
           </div>
 
-          {/* Botão "+" oficial laranja #FF6600 */}
-          <button
-            type="button"
-            onClick={() => {
-              onClose();
-              onOpenNewNote(lead);
-            }}
-            title="Registrar novo follow-up / nota"
-            aria-label="Registrar novo follow-up"
-            className="w-9 h-9 rounded-full bg-[#FF6600] hover:bg-[#e65c00] active:scale-95 text-white flex items-center justify-center shadow-lg ring-2 ring-[#FF6600]/30 transition-all cursor-pointer shrink-0"
-          >
-            <svg className="w-4 h-4 shrink-0 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 5v14M5 12h14" />
-            </svg>
-          </button>
+          {/* Botão "+" oficial laranja #FF6600 (habilitado apenas se possuir permissão can_manage_notes) */}
+          {canManageNotes && (
+            <button
+              type="button"
+              onClick={() => {
+                onClose();
+                onOpenNewNote(lead);
+              }}
+              title="Registrar novo follow-up / nota"
+              aria-label="Registrar novo follow-up"
+              className="w-9 h-9 rounded-full bg-[#FF6600] hover:bg-[#e65c00] active:scale-95 text-white flex items-center justify-center shadow-lg ring-2 ring-[#FF6600]/30 transition-all cursor-pointer shrink-0"
+            >
+              <svg className="w-4 h-4 shrink-0 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </button>
+          )}
         </div>
       </div>
     </div>

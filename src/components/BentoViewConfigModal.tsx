@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import type { UserProfile } from '../App.tsx';
 import { useTheme } from '../lib/themeContext.tsx';
+import { useUserPermissions } from '../lib/permissionsContext.tsx';
 
 // Pipeline View Configuration
 export interface PipelineViewConfig {
@@ -68,6 +69,7 @@ export function BentoViewConfigModal({
   onResetDefaults,
 }: BentoViewConfigModalProps) {
   const { theme, setTheme } = useTheme();
+  const { isAdmin } = useUserPermissions();
   const isLight = theme === 'light';
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -312,6 +314,45 @@ export function BentoViewConfigModal({
               ))}
             </div>
           </div>
+
+          {/* 3. Gerenciamento de Usuários (Somente Administrador) */}
+          {isAdmin && (
+            <div className={`pt-3 border-t ${isLight ? 'border-slate-200' : 'border-slate-800/60'}`}>
+              <span className={`text-[11px] font-semibold uppercase tracking-wider block mb-2 ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
+                Administração do Sistema
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  window.history.pushState({}, '', '/app/settings/users');
+                  window.dispatchEvent(new PopStateEvent('popstate'));
+                }}
+                className={`w-full px-4 py-3 rounded-xl border flex items-center justify-between gap-3 transition-all cursor-pointer ${
+                  isLight
+                    ? 'bg-orange-50 hover:bg-orange-100/80 border-orange-200 text-slate-900'
+                    : 'bg-orange-500/10 hover:bg-orange-500/15 border-orange-500/30 text-white'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#FF6600] text-white flex items-center justify-center shrink-0">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+                    </svg>
+                  </div>
+                  <div className="text-left">
+                    <span className="text-xs font-bold block">Usuários</span>
+                    <span className={`text-[11px] block ${isLight ? 'text-slate-600' : 'text-slate-400'}`}>
+                      Gerenciar equipe, permissões operacionais e convites
+                    </span>
+                  </div>
+                </div>
+                <svg className="w-4 h-4 text-[#FF6600] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Footer */}

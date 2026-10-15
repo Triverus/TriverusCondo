@@ -43,6 +43,7 @@ import {
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
 import NotesTimelineModal from './NotesTimelineModal.tsx';
 import { celebrateClientConversion } from '../lib/celebration.ts';
+import { useUserPermissions } from '../lib/permissionsContext.tsx';
 import {
   syncInteractionCalendar,
   syncGoogleCalendarInteraction,
@@ -367,6 +368,15 @@ export default function LeadsModule({
     getContactLeadIds,
     getInteractionsForLead,
   } = useCRM();
+
+  const {
+    canManageLeads,
+    canDeleteLeads,
+    canChangeStage,
+    canManageNotes,
+    canDeleteNotes,
+    canManageContacts,
+  } = useUserPermissions();
 
   // Search & Filter
   const [searchTerm, setSearchTerm] = useState('');
@@ -1060,6 +1070,7 @@ export default function LeadsModule({
     e.preventDefault();
     stopAutoScroll();
     setDragOverCol(null);
+    if (!canChangeStage) return;
     let leadId = specificLeadId;
     if (!leadId) {
       try {
@@ -1356,6 +1367,7 @@ export default function LeadsModule({
 
   // Safe delete lead with confirmation modal
   const handleRequestDeleteLead = (lead: Lead) => {
+    if (!canDeleteLeads) return;
     setActiveMenuLeadId(null);
     setDeleteConfirmModal({
       open: true,
@@ -1664,7 +1676,10 @@ export default function LeadsModule({
       unitCountNum = selectedLead.unit_count;
     }
 
-    const stageIdToUse = formCurrentStageId || (stages.length > 0 ? stages[0].id : null);
+    const stageIdToUse =
+      modalMode === 'edit' && !canChangeStage && selectedLead?.current_stage_id
+        ? selectedLead.current_stage_id
+        : formCurrentStageId || (stages.length > 0 ? stages[0].id : null);
     let dbStageId = isValidUUID(stageIdToUse) ? stageIdToUse : (stages.find((s) => isValidUUID(s.id))?.id || null);
 
     // Fallback: Se não temos um UUID de estágio válido no estado local, busca o primeiro estágio do Supabase
@@ -1829,8 +1844,8 @@ export default function LeadsModule({
       let contactRelationFailed = false;
       let servicesRelationFailed = false;
 
-      // 4 & 5. Se houver contato preenchido na Etapa 1: salvar/vincular contact e lead_contacts
-      if (hasContactInput) {
+      // 4 & 5. Se houver contato preenchido na Etapa 2 (e o usuário tiver canManageContacts): salvar/vincular contact e lead_contacts
+      if (canManageContacts && hasContactInput) {
         const contactFormState: ContactFormState = {
           id: formContactId || undefined,
           name: cName,
@@ -1854,7 +1869,7 @@ export default function LeadsModule({
         } else {
           upsertContactLocally(contactResult.contact, [savedLead.id]);
         }
-      } else if (!hasContactInput && formContactId && modalMode === 'edit') {
+      } else if (canManageContacts && !hasContactInput && formContactId && modalMode === 'edit') {
         try {
           await supabase
             .from('lead_contacts')
@@ -2182,6 +2197,7 @@ export default function LeadsModule({
 
   const handleSaveWhatsAppContact = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageContacts) return;
     if (!whatsappPopover.lead) return;
     setWaError(null);
 
@@ -2287,6 +2303,7 @@ export default function LeadsModule({
 
   const handleSaveEmailContact = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageContacts) return;
     if (!emailPopover.lead) return;
     setEmError(null);
 
@@ -2351,6 +2368,7 @@ export default function LeadsModule({
 
   // Contact Unlink from Condominium (NÃO apaga de public.contacts)
   const handleRequestDeleteContact = (contact: Contact, leadId: string) => {
+    if (!canManageContacts) return;
     setDeleteConfirmModal({
       open: true,
       title: 'Desvincular contato',
@@ -2382,6 +2400,9 @@ export default function LeadsModule({
       initialStep?: any;
     }
   ) => {
+    setSelectedInteraction(null);
+    setInteractionModalMode(null);
+    setNoteError(null);
     setNotesPopover({
       open: true,
       lead,
@@ -2389,10 +2410,12 @@ export default function LeadsModule({
       editingInteractionId: options?.editingInteractionId || null,
       initialStep: options?.initialStep || 1,
     });
-    setNoteError(null);
   };
 
   const handleOpenEditNotesPopover = (lead: Lead, interactionId: string, initialStep: any = 'notes') => {
+    setSelectedInteraction(null);
+    setInteractionModalMode(null);
+    setNoteError(null);
     setNotesPopover({
       open: true,
       lead,
@@ -2400,10 +2423,11 @@ export default function LeadsModule({
       editingInteractionId: interactionId,
       initialStep,
     });
-    setNoteError(null);
   };
 
   const handleCloseNotesPopover = () => {
+    setSelectedInteraction(null);
+    setInteractionModalMode(null);
     setNotesPopover({ open: false, lead: null, mode: 'create', editingInteractionId: null, initialStep: 1 });
     setNoteError(null);
   };
@@ -2815,7 +2839,7 @@ export default function LeadsModule({
               </div>
 
               <div className="flex items-center gap-1.5">
-                {whatsappPopover.mode === 'list' && (
+                {whatsappPopover.mode === 'list' && canManageContacts && (
                   <button
                     type="button"
                     onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add' }))}
@@ -2849,14 +2873,16 @@ export default function LeadsModule({
                           <p className="text-xs text-slate-400 mb-3">
                             Nenhum contato com WhatsApp cadastrado para este condomínio.
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add' }))}
-                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
-                          >
-                            <WhatsAppIcon className="w-3.5 h-3.5" />
-                            <span>+ Adicionar WhatsApp</span>
-                          </button>
+                          {canManageContacts && (
+                            <button
+                              type="button"
+                              onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add' }))}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <WhatsAppIcon className="w-3.5 h-3.5" />
+                              <span>+ Adicionar WhatsApp</span>
+                            </button>
+                          )}
                         </div>
                       );
                     }
@@ -2868,24 +2894,26 @@ export default function LeadsModule({
                             <span className="font-semibold text-white block text-xs">{contact.name}</span>
                             <span className="text-[11px] text-slate-400">{contact.role_title || 'Contato Geral'}</span>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditWhatsAppContact(contact)}
-                              title="Editar contato"
-                              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
-                            >
-                              <EditIcon className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRequestDeleteContact(contact, whatsappPopover.lead!.id)}
-                              title="Desvincular contato deste condomínio"
-                              className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
-                            >
-                              <TrashIcon className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          {canManageContacts && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditWhatsAppContact(contact)}
+                                title="Editar contato"
+                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
+                              >
+                                <EditIcon className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRequestDeleteContact(contact, whatsappPopover.lead!.id)}
+                                title="Desvincular contato deste condomínio"
+                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 gap-2">
@@ -3002,7 +3030,7 @@ export default function LeadsModule({
               </div>
 
               <div className="flex items-center gap-1.5">
-                {emailPopover.mode === 'list' && (
+                {emailPopover.mode === 'list' && canManageContacts && (
                   <button
                     type="button"
                     onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
@@ -3036,14 +3064,16 @@ export default function LeadsModule({
                           <p className="text-xs text-slate-400 mb-3">
                             Nenhum contato com e-mail cadastrado para este condomínio.
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
-                            className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
-                          >
-                            <EmailIcon className="w-3.5 h-3.5" />
-                            <span>+ Adicionar E-mail</span>
-                          </button>
+                          {canManageContacts && (
+                            <button
+                              type="button"
+                              onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
+                              className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <EmailIcon className="w-3.5 h-3.5" />
+                              <span>+ Adicionar E-mail</span>
+                            </button>
+                          )}
                         </div>
                       );
                     }
@@ -3055,24 +3085,26 @@ export default function LeadsModule({
                             <span className="font-semibold text-white block text-xs">{contact.name}</span>
                             <span className="text-[11px] text-slate-400">{contact.role_title || 'Contato Geral'}</span>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditEmailContact(contact)}
-                              title="Editar contato"
-                              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
-                            >
-                              <EditIcon className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleRequestDeleteContact(contact, emailPopover.lead!.id)}
-                              title="Desvincular contato deste condomínio"
-                              className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
-                            >
-                              <TrashIcon className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          {canManageContacts && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditEmailContact(contact)}
+                                title="Editar contato"
+                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
+                              >
+                                <EditIcon className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRequestDeleteContact(contact, emailPopover.lead!.id)}
+                                title="Desvincular contato deste condomínio"
+                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 gap-2">
@@ -3180,28 +3212,35 @@ export default function LeadsModule({
         onClose={() => setTimelineLead(null)}
         onOpenNewNote={(ld) => {
           setTimelineLead(null);
-          handleOpenNotesPopover(ld, { initialStep: 1 });
+          setSelectedInteraction(null);
+          setInteractionModalMode(null);
+          handleOpenNotesPopover(ld, { editingInteractionId: null, initialStep: 1 });
         }}
         onEditNote={(ld, interactionId) => {
           setTimelineLead(null);
+          setSelectedInteraction(null);
+          setInteractionModalMode(null);
           handleOpenEditNotesPopover(ld, interactionId, 'notes');
         }}
       />
 
       {/* UNIFIED CONVERSATIONAL TYPEFORM NOTAS MODAL */}
-      <UnifiedNoteModal
-        isOpen={notesPopover.open && Boolean(notesPopover.lead)}
-        lead={notesPopover.lead}
-        editingInteractionId={notesPopover.editingInteractionId}
-        initialStep={notesPopover.initialStep}
-        currentProfile={currentProfile}
-        onClose={handleCloseNotesPopover}
-        onSuccessFeedback={(msg) => setStatusFeedback({ type: 'success', message: msg })}
-        onSavedSuccess={(ld) => {
-          handleCloseNotesPopover();
-          setTimelineLead(ld);
-        }}
-      />
+      {notesPopover.open && Boolean(notesPopover.lead) && (
+        <UnifiedNoteModal
+          key={`unified-note-${notesPopover.lead!.id}-${notesPopover.editingInteractionId || 'new'}-${notesPopover.initialStep || 1}`}
+          isOpen={true}
+          lead={notesPopover.lead}
+          editingInteractionId={notesPopover.editingInteractionId || null}
+          initialStep={notesPopover.initialStep}
+          currentProfile={currentProfile}
+          onClose={handleCloseNotesPopover}
+          onSuccessFeedback={(msg) => setStatusFeedback({ type: 'success', message: msg })}
+          onSavedSuccess={(ld) => {
+            handleCloseNotesPopover();
+            setTimelineLead(ld);
+          }}
+        />
+      )}
 
       {/* DOCUMENT FOLDER / GOOGLE DRIVE POPOVER */}
       {folderPopover.open && folderPopover.lead && (
@@ -3529,28 +3568,36 @@ export default function LeadsModule({
                     <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">Opcional</span>
                   </div>
 
-                  <div className="space-y-3 pt-2">
+                  {!canManageContacts && (
+                    <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-700/40 text-amber-200 text-xs">
+                      Seu perfil não possui permissão para gerenciar contatos. Você pode avançar para a próxima etapa.
+                    </div>
+                  )}
+
+                  <div className={`space-y-3 pt-2 ${!canManageContacts ? 'opacity-50 pointer-events-none' : ''}`}>
                     <div>
                       <label className="block text-xs font-medium text-slate-300 mb-1.5">Nome do contato</label>
                       <input
                         type="text"
+                        disabled={!canManageContacts}
                         value={formContactName}
                         onChange={(e) => setFormContactName(e.target.value)}
                         placeholder="Ex: Carlos Síndico ou Aldair"
-                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none disabled:cursor-not-allowed"
                       />
                     </div>
 
                     <div>
                       <label className="block text-xs font-medium text-slate-300 mb-1.5">Vínculo / Cargo</label>
                       <select
+                        disabled={!canManageContacts}
                         value={formContactRole}
                         onChange={(e) => {
                           const val = e.target.value;
                           setFormContactRole(val);
                           if (val !== 'Outro') setFormCustomContactRole('');
                         }}
-                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                        className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none disabled:cursor-not-allowed"
                       >
                         {PRESET_ROLES.map((role) => (
                           <option key={role} value={role}>
@@ -3562,10 +3609,11 @@ export default function LeadsModule({
                         <div className="mt-2">
                           <input
                             type="text"
+                            disabled={!canManageContacts}
                             value={formCustomContactRole}
                             onChange={(e) => setFormCustomContactRole(e.target.value)}
                             placeholder="Especifique o cargo (ex: Gestor Predial, Tesoureiro...)"
-                            className="w-full px-4 py-2 bg-slate-950 border border-amber-500/60 focus:border-amber-500 rounded-xl text-white text-xs focus:outline-none"
+                            className="w-full px-4 py-2 bg-slate-950 border border-amber-500/60 focus:border-amber-500 rounded-xl text-white text-xs focus:outline-none disabled:cursor-not-allowed"
                           />
                         </div>
                       )}
@@ -3576,10 +3624,11 @@ export default function LeadsModule({
                         <label className="block text-xs font-medium text-slate-300 mb-1.5">WhatsApp / Telefone</label>
                         <input
                           type="text"
+                          disabled={!canManageContacts}
                           value={formContactPhone}
                           onChange={(e) => setFormContactPhone(formatPhoneMask(e.target.value))}
                           placeholder="(11) 98765-4321"
-                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none disabled:cursor-not-allowed"
                         />
                       </div>
 
@@ -3587,10 +3636,11 @@ export default function LeadsModule({
                         <label className="block text-xs font-medium text-slate-300 mb-1.5">E-mail</label>
                         <input
                           type="email"
+                          disabled={!canManageContacts}
                           value={formContactEmail}
                           onChange={(e) => setFormContactEmail(e.target.value)}
                           placeholder="contato@exemplo.com"
-                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                          className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none disabled:cursor-not-allowed"
                         />
                       </div>
                     </div>
@@ -3865,7 +3915,7 @@ export default function LeadsModule({
                     ← Voltar
                   </button>
                 )}
-                {modalMode === 'edit' && selectedLead && (
+                {modalMode === 'edit' && selectedLead && canDeleteLeads && (
                   <button
                     type="button"
                     onClick={() => handleRequestDeleteLead(selectedLead)}
@@ -3927,25 +3977,29 @@ export default function LeadsModule({
                 <h2 className="text-lg font-bold text-white">{selectedLead.name}</h2>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleCloseModal();
-                    handleOpenEdit(selectedLead);
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:text-white cursor-pointer"
-                >
-                  Editar
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleRequestDeleteLead(selectedLead)}
-                  className="px-2.5 py-1.5 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300 hover:text-rose-200 cursor-pointer flex items-center gap-1"
-                  title="Excluir condomínio"
-                >
-                  <TrashIcon className="w-3.5 h-3.5" />
-                  <span>Excluir</span>
-                </button>
+                {canManageLeads && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleCloseModal();
+                      handleOpenEdit(selectedLead);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-slate-800 border border-slate-700 text-xs text-slate-200 hover:text-white cursor-pointer"
+                  >
+                    Editar
+                  </button>
+                )}
+                {canDeleteLeads && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestDeleteLead(selectedLead)}
+                    className="px-2.5 py-1.5 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300 hover:text-rose-200 cursor-pointer flex items-center gap-1"
+                    title="Excluir condomínio"
+                  >
+                    <TrashIcon className="w-3.5 h-3.5" />
+                    <span>Excluir</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleCloseModal}
@@ -3980,37 +4034,63 @@ export default function LeadsModule({
               <div>
                 <div className="flex items-center justify-between mb-2.5">
                   <h3 className="font-bold uppercase tracking-wider text-slate-300">Histórico de Interações</h3>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setModalMode(null);
-                      handleOpenNotesPopover(selectedLead, { initialStep: 1 });
-                    }}
-                    className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold cursor-pointer"
-                  >
-                    + Registrar interação
-                  </button>
-                </div>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {getInteractionsForLead(selectedLead.id).map((i) => (
-                    <div
-                      key={i.id}
+                  {canManageNotes && (
+                    <button
+                      type="button"
                       onClick={() => {
                         setModalMode(null);
-                        handleOpenEditNotesPopover(selectedLead, i.id, 'notes');
+                        setSelectedInteraction(null);
+                        handleOpenNotesPopover(selectedLead, { editingInteractionId: null, initialStep: 1 });
                       }}
-                      className="p-3 bg-slate-950 border border-slate-800 rounded-xl hover:border-slate-700 transition-colors cursor-pointer"
-                      title="Clique para editar esta nota no fluxo canônico"
+                      className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold cursor-pointer"
                     >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="font-semibold text-indigo-300">{i.interaction_type} · {formatDateBR(i.occurred_at)}</span>
-                        {i.next_follow_up_date && (
-                          <span className="text-amber-300 text-[10px]">Follow-up: {formatDateBR(i.next_follow_up_date)}</span>
-                        )}
+                      + Registrar interação
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {getInteractionsForLead(selectedLead.id).map((i) => {
+                    const authorName = i.created_by_user_id ? profileMap.get(i.created_by_user_id) || null : null;
+                    const editorName = i.last_edited_by_user_id ? profileMap.get(i.last_edited_by_user_id) || null : null;
+                    const createdFormatted = formatDateTimeBR(i.created_at || i.occurred_at);
+                    const editedFormatted = i.last_edited_at ? formatDateTimeBR(i.last_edited_at) : null;
+
+                    return (
+                      <div
+                        key={i.id}
+                        onClick={
+                          canManageNotes
+                            ? () => {
+                                setModalMode(null);
+                                handleOpenEditNotesPopover(selectedLead, i.id, 'notes');
+                              }
+                            : undefined
+                        }
+                        className={`p-3 bg-slate-950 border border-slate-800 rounded-xl transition-colors ${
+                          canManageNotes ? 'hover:border-slate-700 cursor-pointer' : ''
+                        }`}
+                        title={canManageNotes ? 'Clique para editar esta nota no fluxo canônico' : undefined}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-semibold text-indigo-300">{i.interaction_type} · {formatDateBR(i.occurred_at)}</span>
+                          {i.next_follow_up_date && (
+                            <span className="text-amber-300 text-[10px]">Follow-up: {formatDateBR(i.next_follow_up_date)}</span>
+                          )}
+                        </div>
+                        {i.notes && <p className="text-slate-300 whitespace-pre-wrap">{i.notes}</p>}
+                        <div className="mt-2 pt-1.5 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
+                          <span>
+                            {authorName ? `Criada por ${authorName} em ${createdFormatted}` : `Criada em ${createdFormatted}`}
+                          </span>
+                          {editedFormatted && (
+                            <span className="italic">
+                              {editorName ? `Última edição: ${editorName} em ${editedFormatted}` : `Última edição em ${editedFormatted}`}
+                            </span>
+                          )}
+                        </div>
                       </div>
-                      {i.notes && <p className="text-slate-300 whitespace-pre-wrap">{i.notes}</p>}
-                    </div>
-                  ))}
+                    );
+                  })}
                   {getInteractionsForLead(selectedLead.id).length === 0 && (
                     <p className="text-slate-500 text-center py-4 bg-slate-950 rounded-xl border border-slate-800">Nenhuma interação registrada.</p>
                   )}

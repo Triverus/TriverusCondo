@@ -7,6 +7,7 @@ import {
 import { saveLeadStageOverride } from '../lib/crmCache.ts';
 import { useCRM, type Lead, type Interaction, type Contact } from '../lib/crmStore.tsx';
 import { useTheme } from '../lib/themeContext.tsx';
+import { useUserPermissions } from '../lib/permissionsContext.tsx';
 import type { UserProfile } from '../App.tsx';
 import {
   BentoViewConfigModal,
@@ -43,7 +44,7 @@ import {
 } from '../lib/dateUtils.ts';
 import { renderFormattedTextWithLinks } from '../lib/linkUtils.tsx';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
-import NotesTimelineModal from './NotesTimelineModal.tsx';
+import NotesTimelineModal, { formatDateTimeBR } from './NotesTimelineModal.tsx';
 import FunnelVisualizer from './FunnelVisualizer.tsx';
 
 export interface FollowUpsModuleProps {
@@ -101,6 +102,13 @@ export default function FollowUpsModule({
     refreshAll,
   } = useCRM();
 
+  const {
+    canManageNotes,
+    canManageLeads,
+    canChangeStage,
+    canManageContacts,
+  } = useUserPermissions();
+
   // Inline Quick-Edit State (single field per card at a time)
   const [quickEdit, setQuickEdit] = useState<{
     leadId: string;
@@ -114,6 +122,9 @@ export default function FollowUpsModule({
     field: 'stage' | 'date' | 'time' | 'notes' | 'responsible',
     initialValue: string
   ) => {
+    if (field === 'stage' && !canChangeStage) return;
+    if ((field === 'notes' || field === 'date' || field === 'time') && !canManageNotes) return;
+    if (field === 'responsible' && !canManageLeads) return;
     setQuickEdit({ leadId, field, value: initialValue, saving: false });
   };
 
@@ -475,6 +486,7 @@ export default function FollowUpsModule({
 
   const handleSaveWhatsAppContact = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageContacts) return;
     if (!whatsappPopover.lead) return;
     setWaError(null);
 
@@ -606,6 +618,7 @@ export default function FollowUpsModule({
 
   const handleSaveEmailContact = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!canManageContacts) return;
     if (!emailPopover.lead) return;
     setEmError(null);
 
@@ -706,6 +719,7 @@ export default function FollowUpsModule({
   };
 
   const handleDeleteContact = async (contact: Contact, leadId: string) => {
+    if (!canManageContacts) return;
     try {
       await supabase.from('lead_contacts').delete().eq('contact_id', contact.id).eq('lead_id', leadId);
       await supabase.from('contacts').delete().eq('id', contact.id);
@@ -1149,21 +1163,23 @@ export default function FollowUpsModule({
         </div>
 
         {/* Right Action Button (Extrema Direita Superior da Tela - Idêntico ao Novo Condomínio) */}
-        <div className="shrink-0 flex items-center justify-end">
-          <button
-            type="button"
-            onClick={() => {
-              setPickerSearch('');
-              setIsPickerOpen(true);
-            }}
-            className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#E65C00] text-white font-semibold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            <span>Novo Follow-up</span>
-          </button>
-        </div>
+        {canManageNotes && (
+          <div className="shrink-0 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => {
+                setPickerSearch('');
+                setIsPickerOpen(true);
+              }}
+              className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#E65C00] text-white font-semibold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+              <span>Novo Follow-up</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Main Content Area */}
@@ -1251,23 +1267,25 @@ export default function FollowUpsModule({
                             ) : (
                               <span className={`inline-flex items-center gap-1 font-semibold truncate ${isLight ? 'text-indigo-800' : 'text-indigo-200'}`}>
                                 <span className="truncate">{item.stageName}</span>
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleOpenQuickEdit(
-                                      item.lead.id,
-                                      'stage',
-                                      item.lead.current_stage_id || (stages[0]?.id ?? '')
-                                    );
-                                  }}
-                                  title="Editar estágio do funil"
-                                  className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                                    isLight ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70' : 'text-slate-300/80 hover:text-white hover:bg-black/30'
-                                  }`}
-                                >
-                                  <EditIcon className="w-3 h-3" />
-                                </button>
+                                {canChangeStage && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleOpenQuickEdit(
+                                        item.lead.id,
+                                        'stage',
+                                        item.lead.current_stage_id || (stages[0]?.id ?? '')
+                                      );
+                                    }}
+                                    title="Editar estágio do funil"
+                                    className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                      isLight ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70' : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                                    }`}
+                                  >
+                                    <EditIcon className="w-3 h-3" />
+                                  </button>
+                                )}
                               </span>
                             )
                           )}
@@ -1286,20 +1304,22 @@ export default function FollowUpsModule({
                           <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
                             Agendamento
                           </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              isEditingField('date')
-                                ? setQuickEdit(null)
-                                : handleOpenQuickEdit(item.lead.id, 'date', toDateInputValue(item.followUpDate))
-                            }
-                            title="Alterar data do agendamento"
-                            className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                              isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
-                            }`}
-                          >
-                            <EditIcon className="w-3 h-3" />
-                          </button>
+                          {canManageNotes && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                isEditingField('date')
+                                  ? setQuickEdit(null)
+                                  : handleOpenQuickEdit(item.lead.id, 'date', toDateInputValue(item.followUpDate))
+                              }
+                              title="Alterar data do agendamento"
+                              className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                              }`}
+                            >
+                              <EditIcon className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                         {isEditingField('date') ? (
                           <div className="flex items-center gap-1 mt-0.5">
@@ -1354,20 +1374,22 @@ export default function FollowUpsModule({
                           <span className={`text-[10px] uppercase tracking-wider font-semibold truncate ${isLight ? 'text-slate-600' : 'text-slate-300/80'}`}>
                             Horário
                           </span>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              isEditingField('time')
-                                ? setQuickEdit(null)
-                                : handleOpenQuickEdit(item.lead.id, 'time', displayTime)
-                            }
-                            title="Alterar horário do agendamento"
-                            className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                              isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
-                            }`}
-                          >
-                            <EditIcon className="w-3 h-3" />
-                          </button>
+                          {canManageNotes && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                isEditingField('time')
+                                  ? setQuickEdit(null)
+                                  : handleOpenQuickEdit(item.lead.id, 'time', displayTime)
+                              }
+                              title="Alterar horário do agendamento"
+                              className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                              }`}
+                            >
+                              <EditIcon className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                         {isEditingField('time') ? (
                           <div className="flex items-center gap-1 mt-0.5">
@@ -1423,20 +1445,22 @@ export default function FollowUpsModule({
                     <div className={`text-xs space-y-1.5 p-2.5 rounded-xl border mb-2 ${isLight ? 'bg-white/75 border-black/10 text-slate-800' : 'bg-black/25 border-white/10 text-slate-200'}`}>
                       <div className={`flex items-center justify-between text-[11px] ${isLight ? 'text-slate-600 font-medium' : 'text-slate-300/80'}`}>
                         <span>Última interação ({item.latestInteraction.interaction_type}):</span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            isEditingField('notes')
-                              ? setQuickEdit(null)
-                              : handleOpenQuickEdit(item.lead.id, 'notes', item.latestInteraction.notes || '')
-                          }
-                          title="Editar mensagem da nota"
-                          className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                            isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
-                          }`}
-                        >
-                          <EditIcon className="w-3 h-3" />
-                        </button>
+                        {canManageNotes && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              isEditingField('notes')
+                                ? setQuickEdit(null)
+                                : handleOpenQuickEdit(item.lead.id, 'notes', item.latestInteraction.notes || '')
+                            }
+                            title="Editar mensagem da nota"
+                            className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                              isLight ? 'text-slate-600 hover:text-slate-950 hover:bg-black/5' : 'text-slate-300 hover:text-white hover:bg-white/10'
+                            }`}
+                          >
+                            <EditIcon className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
 
                       {isEditingField('notes') ? (
@@ -1476,6 +1500,39 @@ export default function FollowUpsModule({
                       ) : (
                         <p className={`text-[11px] italic ${isLight ? 'text-slate-500' : 'text-slate-400'}`}>Sem mensagem registrada</p>
                       )}
+
+                      {(() => {
+                        const authorName = item.latestInteraction.created_by_user_id
+                          ? profileMap.get(item.latestInteraction.created_by_user_id) || null
+                          : null;
+                        const editorName = item.latestInteraction.last_edited_by_user_id
+                          ? profileMap.get(item.latestInteraction.last_edited_by_user_id) || null
+                          : null;
+                        const createdFormatted = formatDateTimeBR(
+                          item.latestInteraction.created_at || item.latestInteraction.occurred_at
+                        );
+                        const editedFormatted = item.latestInteraction.last_edited_at
+                          ? formatDateTimeBR(item.latestInteraction.last_edited_at)
+                          : '';
+                        return (
+                          <div className={`pt-1 border-t flex flex-wrap items-center justify-between gap-1 text-[10px] ${
+                            isLight ? 'border-black/10 text-slate-600' : 'border-white/10 text-slate-400'
+                          }`}>
+                            <span>
+                              {authorName
+                                ? `Criada por ${authorName} em ${createdFormatted}`
+                                : `Criada em ${createdFormatted}`}
+                            </span>
+                            {editedFormatted && (
+                              <span className="italic">
+                                {editorName
+                                  ? `Última edição: ${editorName} em ${editedFormatted}`
+                                  : `Última edição em ${editedFormatted}`}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
 
@@ -1507,18 +1564,20 @@ export default function FollowUpsModule({
                           ) : (
                             <>
                               <span className="truncate max-w-[135px]">{item.responsibleName}</span>
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  handleOpenQuickEdit(item.lead.id, 'responsible', currentResponsibleId)
-                                }
-                                title="Alterar responsável pela demanda"
-                                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                                  isLight ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70' : 'text-slate-300/80 hover:text-white hover:bg-black/30'
-                                }`}
-                              >
-                                <EditIcon className="w-3 h-3" />
-                              </button>
+                              {canManageLeads && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleOpenQuickEdit(item.lead.id, 'responsible', currentResponsibleId)
+                                  }
+                                  title="Alterar responsável pela demanda"
+                                  className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                                    isLight ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70' : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                                  }`}
+                                >
+                                  <EditIcon className="w-3 h-3" />
+                                </button>
+                              )}
                             </>
                           )}
                         </div>
@@ -1552,7 +1611,10 @@ export default function FollowUpsModule({
                     onOpenWhatsApp={() => handleOpenWhatsAppPopover(item.lead)}
                     onOpenEmail={() => handleOpenEmailPopover(item.lead)}
                     onOpenFolder={() => setFolderPopover({ open: true, lead: item.lead, folderUrl: getLeadFolderLink(item.lead.id), error: null })}
-                    onOpenNotes={() => setActiveNoteModalLead(item.lead)}
+                    onOpenNotes={() => {
+                      setActiveNoteModalInteractionId(null);
+                      setActiveNoteModalLead(item.lead);
+                    }}
                   />
                 )}
               </div>
@@ -1573,7 +1635,10 @@ export default function FollowUpsModule({
             getContactsForLead={getContactsForLead}
             onOpenLead={onOpenLead}
             onOpenTimeline={(l) => setActiveTimelineLead(l)}
-            onOpenNotes={(l) => setActiveNoteModalLead(l)}
+            onOpenNotes={(l) => {
+              setActiveNoteModalInteractionId(null);
+              setActiveNoteModalLead(l);
+            }}
             onOpenWhatsApp={(l) => handleOpenWhatsAppPopover(l)}
             onOpenEmail={(l) => handleOpenEmailPopover(l)}
             onOpenFolder={(l) =>
@@ -1659,17 +1724,22 @@ export default function FollowUpsModule({
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                           </svg>
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setActiveNoteModalLead(item.lead)}
-                          title="Adicionar nota ou registrar follow-up"
-                          aria-label="Registrar interação"
-                          className="w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500 active:scale-90 text-white inline-flex items-center justify-center shadow-md shadow-indigo-950/80 hover:shadow-indigo-500/40 ring-2 ring-indigo-500/25 transition-all cursor-pointer shrink-0"
-                        >
-                          <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-                            <path d="M12 5v14M5 12h14" />
-                          </svg>
-                        </button>
+                        {canManageNotes && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveNoteModalInteractionId(null);
+                              setActiveNoteModalLead(item.lead);
+                            }}
+                            title="Adicionar nota ou registrar follow-up"
+                            aria-label="Registrar interação"
+                            className="w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500 active:scale-90 text-white inline-flex items-center justify-center shadow-md shadow-indigo-950/80 hover:shadow-indigo-500/40 ring-2 ring-indigo-500/25 transition-all cursor-pointer shrink-0"
+                          >
+                            <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12 5v14M5 12h14" />
+                            </svg>
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -1699,22 +1769,25 @@ export default function FollowUpsModule({
       />
 
       {/* UNIFIED CONVERSATIONAL TYPEFORM NOTE MODAL */}
-      <UnifiedNoteModal
-        isOpen={Boolean(activeNoteModalLead)}
-        lead={activeNoteModalLead}
-        editingInteractionId={activeNoteModalInteractionId}
-        currentProfile={currentProfile}
-        onClose={() => {
-          setActiveNoteModalLead(null);
-          setActiveNoteModalInteractionId(null);
-        }}
-        onSuccessFeedback={(msg) => setStatusFeedback({ type: 'success', message: msg })}
-        onSavedSuccess={(ld) => {
-          setActiveNoteModalLead(null);
-          setActiveNoteModalInteractionId(null);
-          setActiveTimelineLead(ld);
-        }}
-      />
+      {Boolean(activeNoteModalLead) && (
+        <UnifiedNoteModal
+          key={`unified-note-fu-${activeNoteModalLead!.id}-${activeNoteModalInteractionId || 'new'}`}
+          isOpen={true}
+          lead={activeNoteModalLead}
+          editingInteractionId={activeNoteModalInteractionId}
+          currentProfile={currentProfile}
+          onClose={() => {
+            setActiveNoteModalLead(null);
+            setActiveNoteModalInteractionId(null);
+          }}
+          onSuccessFeedback={(msg) => setStatusFeedback({ type: 'success', message: msg })}
+          onSavedSuccess={(ld) => {
+            setActiveNoteModalLead(null);
+            setActiveNoteModalInteractionId(null);
+            setActiveTimelineLead(ld);
+          }}
+        />
+      )}
 
       {/* INDEPENDENT WHATSAPP POPOVER WITH FULL CRUD */}
       {whatsappPopover.open && whatsappPopover.lead && (
@@ -1738,7 +1811,7 @@ export default function FollowUpsModule({
               </div>
 
               <div className="flex items-center gap-1.5">
-                {whatsappPopover.mode === 'list' && (
+                {whatsappPopover.mode === 'list' && canManageContacts && (
                   <button
                     type="button"
                     onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
@@ -1772,14 +1845,16 @@ export default function FollowUpsModule({
                           <p className="text-xs text-slate-400 mb-3">
                             Nenhum contato com telefone/WhatsApp cadastrado para este condomínio.
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
-                            className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
-                          >
-                            <WhatsAppIcon className="w-3.5 h-3.5" />
-                            <span>+ Adicionar WhatsApp</span>
-                          </button>
+                          {canManageContacts && (
+                            <button
+                              type="button"
+                              onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <WhatsAppIcon className="w-3.5 h-3.5" />
+                              <span>+ Adicionar WhatsApp</span>
+                            </button>
+                          )}
                         </div>
                       );
                     }
@@ -1795,24 +1870,26 @@ export default function FollowUpsModule({
                               <span className="font-semibold text-white block text-xs">{contact.name}</span>
                               <span className="text-[11px] text-slate-400">{contact.role_title || 'Contato Geral'}</span>
                             </div>
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditWhatsAppContact(contact)}
-                                title="Editar contato"
-                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
-                              >
-                                <EditIcon className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDeleteContact(contact, whatsappPopover.lead!.id)}
-                                title="Excluir contato"
-                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
-                              >
-                                <TrashIcon className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
+                            {canManageContacts && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditWhatsAppContact(contact)}
+                                  title="Editar contato"
+                                  className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
+                                >
+                                  <EditIcon className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteContact(contact, whatsappPopover.lead!.id)}
+                                  title="Excluir contato"
+                                  className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                >
+                                  <TrashIcon className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 gap-2">
@@ -1930,7 +2007,7 @@ export default function FollowUpsModule({
               </div>
 
               <div className="flex items-center gap-1.5">
-                {emailPopover.mode === 'list' && (
+                {emailPopover.mode === 'list' && canManageContacts && (
                   <button
                     type="button"
                     onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
@@ -1964,14 +2041,16 @@ export default function FollowUpsModule({
                           <p className="text-xs text-slate-400 mb-3">
                             Nenhum contato com e-mail cadastrado para este condomínio.
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
-                            className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
-                          >
-                            <EmailIcon className="w-3.5 h-3.5" />
-                            <span>+ Adicionar E-mail</span>
-                          </button>
+                          {canManageContacts && (
+                            <button
+                              type="button"
+                              onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
+                              className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
+                            >
+                              <EmailIcon className="w-3.5 h-3.5" />
+                              <span>+ Adicionar E-mail</span>
+                            </button>
+                          )}
                         </div>
                       );
                     }
@@ -1983,24 +2062,26 @@ export default function FollowUpsModule({
                             <span className="font-semibold text-white block text-xs">{contact.name}</span>
                             <span className="text-[11px] text-slate-400">{contact.role_title || 'Contato Geral'}</span>
                           </div>
-                          <div className="flex items-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditEmailContact(contact)}
-                              title="Editar contato"
-                              className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
-                            >
-                              <EditIcon className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteContact(contact, emailPopover.lead!.id)}
-                              title="Excluir contato"
-                              className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
-                            >
-                              <TrashIcon className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
+                          {canManageContacts && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditEmailContact(contact)}
+                                title="Editar contato"
+                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
+                              >
+                                <EditIcon className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteContact(contact, emailPopover.lead!.id)}
+                                title="Excluir contato"
+                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         {/* Linha com E-mail e Botão Copiar (SEM ENVIAR) */}
@@ -2339,6 +2420,7 @@ export default function FollowUpsModule({
                       type="button"
                       onClick={() => {
                         setIsPickerOpen(false);
+                        setActiveNoteModalInteractionId(null);
                         setActiveNoteModalLead(lead);
                       }}
                       className="w-full text-left p-3 rounded-2xl bg-slate-950/80 hover:bg-slate-800/80 border border-slate-800/80 hover:border-indigo-500/50 transition-all cursor-pointer flex items-center justify-between group"

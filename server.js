@@ -89,36 +89,22 @@ function getScopedSupabaseClient(token) {
   });
 }
 
-function getAdminSupabaseClient() {
+function getAdminSupabaseClient(bearerToken) {
   const rawUrl = process.env.VITE_SUPABASE_URL || SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
   const hasUrl = Boolean(rawUrl && rawUrl.trim());
   const hasKey = Boolean(serviceKey && serviceKey.trim());
-  const keyLength = serviceKey ? serviceKey.trim().length : 0;
 
-  let parsedHost = null;
-  let parsedProtocol = null;
   let urlError = null;
 
   if (hasUrl) {
     try {
-      const parsed = new URL(rawUrl.trim());
-      parsedHost = parsed.hostname;
-      parsedProtocol = parsed.protocol;
+      new URL(rawUrl.trim());
     } catch (err) {
       urlError = err && err.message ? err.message : 'Invalid URL format';
     }
   }
-
-  console.log('[SUPABASE_ADMIN_DIAG] Inicializando getAdminSupabaseClient:', {
-    has_vite_supabase_url: hasUrl,
-    url_protocol: parsedProtocol,
-    url_hostname: parsedHost,
-    url_parse_error: urlError,
-    has_service_role_key: hasKey,
-    service_role_key_length: keyLength,
-  });
 
   if (!hasKey || !hasUrl || urlError) {
     console.warn('[SUPABASE_ADMIN_DIAG] Abortando criação do cliente admin Supabase devido a parâmetros ausentes ou URL inválida.');
@@ -131,6 +117,15 @@ function getAdminSupabaseClient() {
       autoRefreshToken: false,
       detectSessionInUrl: false,
     },
+    ...(bearerToken
+      ? {
+          global: {
+            headers: {
+              Authorization: `Bearer ${bearerToken}`,
+            },
+          },
+        }
+      : {}),
   });
 }
 
@@ -431,6 +426,473 @@ function verifyOAuthState(state, secret, maxAgeMs = 10 * 60 * 1000) {
 
   return { valid: true, userId: payload.user_id };
 }
+
+// ==============================================================================
+// GESTÃO DE USUÁRIOS E PERMISSÕES GRANULARES (EXCLUSIVO PARA ADMINISTRADORES)
+// ==============================================================================
+
+async function requireAdminUser(req, res, next) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token de autorização não fornecido.' });
+  }
+
+  const token = authHeader.slice(7).trim();
+  const supabaseAdmin = getAdminSupabaseClient();
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Cliente administrativo Supabase não configurado.' });
+  }
+
+  try {
+    const { data: { user }, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    if (userErr || !user) {
+      return res.status(401).json({ error: 'Sessão inválida ou expirada.' });
+    }
+
+    const adminScopedClient = getScopedSupabaseClient(token);
+
+    const { data: profile, error: profErr } = await adminScopedClient
+      .from('profiles')
+      .select('id, role, is_active, full_name, email')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profErr || !profile) {
+      return res.status(403).json({ error: 'Perfil de usuário não localizado no sistema.' });
+    }
+
+    const role = (profile.role || '').toLowerCase();
+    const isAdmin = role === 'admin' || role === 'administrador';
+    if (!isAdmin || profile.is_active === false) {
+      return res.status(403).json({ error: 'Acesso restrito: apenas administradores ativos possuem autorização.' });
+    }
+
+    req.adminUser = user;
+    req.adminProfile = profile;
+    req.adminScopedClient = adminScopedClient;
+    next();
+  } catch (err) {
+    return res.status(500).json({ error: 'Falha interna ao validar credenciais administrativas: ' + (err?.message || err) });
+  }
+}
+
+// 1. Listar todos os usuários com perfis e permissões granulares
+app.get('/api/admin/users', requireAdminUser, async (req, res) => {
+  const supabaseAdmin = getAdminSupabaseClient();
+  const adminScopedClient = req.adminScopedClient;
+  if (!supabaseAdmin || !adminScopedClient) return res.status(500).json({ error: 'Serviço indisponível' });
+
+  try {
+    const [authRes, profilesRes, permRes] = await Promise.all([
+      supabaseAdmin.auth.admin.listUsers({ perPage: 1000 }),
+      adminScopedClient.from('profiles').select('*').order('created_at', { ascending: true }),
+      adminScopedClient.from('user_permissions').select('*'),
+    ]);
+
+    const authUsers = authRes.data?.users || [];
+    const profiles = profilesRes.data || [];
+    const permissions = permRes.data || [];
+
+    const profileMap = new Map(profiles.map((p) => [p.id, p]));
+    const permMap = new Map(permissions.map((pm) => [pm.user_id, pm]));
+
+    const allUserIds = new Set();
+    authUsers.forEach((u) => allUserIds.add(u.id));
+    profiles.forEach((p) => allUserIds.add(p.id));
+
+    const combinedList = Array.from(allUserIds).map((userId) => {
+      const authUser = authUsers.find((u) => u.id === userId);
+      const profile = profileMap.get(userId);
+      const perm = permMap.get(userId);
+
+      const email = profile?.email || authUser?.email || '';
+      const fullName = profile?.full_name || authUser?.user_metadata?.full_name || email.split('@')[0] || 'Usuário';
+      const role = profile?.role || 'user';
+      const isActive = profile?.is_active !== undefined ? Boolean(profile.is_active) : true;
+
+      const isAdmin = role.toLowerCase() === 'admin' || role.toLowerCase() === 'administrador';
+
+      return {
+        id: userId,
+        email,
+        full_name: fullName,
+        role: isAdmin ? 'admin' : 'user',
+        is_active: isActive,
+        created_at: profile?.created_at || authUser?.created_at || new Date().toISOString(),
+        last_sign_in_at: authUser?.last_sign_in_at || null,
+        permissions: perm ? {
+          can_manage_notes: Boolean(perm.can_manage_notes),
+          can_delete_notes: Boolean(perm.can_delete_notes),
+          can_manage_leads: Boolean(perm.can_manage_leads),
+          can_delete_leads: Boolean(perm.can_delete_leads),
+          can_change_stage: Boolean(perm.can_change_stage),
+          can_manage_contacts: Boolean(perm.can_manage_contacts),
+        } : {
+          can_manage_notes: true,
+          can_delete_notes: false,
+          can_manage_leads: true,
+          can_delete_leads: false,
+          can_change_stage: true,
+          can_manage_contacts: true,
+        },
+      };
+    });
+
+    return res.json({ users: combinedList });
+  } catch (err) {
+    console.error('[ADMIN_USERS_LIST_ERROR]', err);
+    return res.status(500).json({ error: 'Erro ao listar usuários: ' + (err?.message || err) });
+  }
+});
+
+// Helper interno para convidar usuário sem definição de senha pelo administrador
+async function handleInviteUserAdmin(req, res) {
+  const supabaseAdmin = getAdminSupabaseClient();
+  const adminScopedClient = req.adminScopedClient;
+  if (!supabaseAdmin || !adminScopedClient) return res.status(500).json({ error: 'Serviço indisponível' });
+
+  const {
+    email,
+    full_name,
+    role = 'user',
+    is_active = true,
+    permissions = {},
+  } = req.body || {};
+
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: 'E-mail corporativo inválido.' });
+  }
+
+  const cleanEmail = email.trim().toLowerCase();
+  const cleanName = (full_name || cleanEmail.split('@')[0]).trim();
+  const targetRole = role === 'admin' ? 'admin' : 'user';
+
+  try {
+    let createdUser = null;
+    let inviteLink = null;
+
+    // 1. Tenta enviar convite oficial por e-mail via Supabase Auth Admin (service_role)
+    const { data: inviteRes, error: inviteErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(cleanEmail, {
+      data: { full_name: cleanName },
+    });
+
+    if (!inviteErr && inviteRes?.user) {
+      createdUser = inviteRes.user;
+      // Também gera link de primeiro acesso/recuperação para que o administrador possa encaminhar se desejar
+      const { data: recData } = await supabaseAdmin.auth.admin.generateLink({
+        type: 'recovery',
+        email: cleanEmail,
+      });
+      inviteLink = recData?.properties?.action_link || null;
+    } else {
+      // 2. Fallback: gera link de convite diretamente via Auth Admin (service_role)
+      const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
+        type: 'invite',
+        email: cleanEmail,
+        options: { data: { full_name: cleanName } },
+      });
+
+      if (linkErr) {
+        if (linkErr.message.includes('already been registered')) {
+          const { data: recData, error: recErr } = await supabaseAdmin.auth.admin.generateLink({
+            type: 'recovery',
+            email: cleanEmail,
+          });
+          if (recErr) throw recErr;
+          inviteLink = recData.properties?.action_link || null;
+          createdUser = recData.user;
+        } else {
+          throw linkErr;
+        }
+      } else {
+        inviteLink = linkData.properties?.action_link || null;
+        createdUser = linkData.user;
+      }
+    }
+
+    if (!createdUser?.id) {
+      throw new Error('Falha ao registrar novo usuário no sistema.');
+    }
+
+    const userId = createdUser.id;
+
+    // Atualizar perfil em public.profiles usando adminScopedClient (satisfaz auth.uid(), RLS e trigger is_admin())
+    const { error: profErr } = await adminScopedClient
+      .from('profiles')
+      .update({
+        full_name: cleanName,
+        email: cleanEmail,
+        role: targetRole,
+        is_active: Boolean(is_active),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', userId);
+    if (profErr) {
+      console.warn('Aviso ao atualizar perfil:', profErr.message);
+    }
+
+    // Configurar permissões iniciais em public.user_permissions usando adminScopedClient
+    const finalPerms = {
+      user_id: userId,
+      can_manage_notes: Boolean(permissions.can_manage_notes ?? true),
+      can_delete_notes: Boolean(permissions.can_delete_notes ?? false),
+      can_manage_leads: Boolean(permissions.can_manage_leads ?? true),
+      can_delete_leads: Boolean(permissions.can_delete_leads ?? false),
+      can_change_stage: Boolean(permissions.can_change_stage ?? true),
+      can_manage_contacts: Boolean(permissions.can_manage_contacts ?? true),
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error: permErr } = await adminScopedClient.from('user_permissions').upsert(finalPerms);
+    if (permErr) {
+      console.warn('Aviso ao registrar permissões:', permErr.message);
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        id: userId,
+        email: cleanEmail,
+        full_name: cleanName,
+        role: targetRole,
+        is_active: Boolean(is_active),
+        permissions: finalPerms,
+      },
+      inviteLink,
+      message: 'Convite enviado com sucesso!',
+    });
+  } catch (err) {
+    console.error('[ADMIN_USERS_INVITE_ERROR]', err);
+    return res.status(400).json({ error: err?.message || 'Erro ao convidar usuário.' });
+  }
+}
+
+// 2. Convidar novo usuário (sem senha definida pelo admin)
+app.post('/api/admin/users/invite', requireAdminUser, handleInviteUserAdmin);
+app.post('/api/admin/invite-user', requireAdminUser, handleInviteUserAdmin);
+
+// 3. PATCH /api/admin/users/:id
+app.patch('/api/admin/users/:id', requireAdminUser, async (req, res) => {
+  const adminScopedClient = req.adminScopedClient;
+  if (!adminScopedClient) return res.status(500).json({ error: 'Serviço indisponível' });
+
+  const { id } = req.params;
+  const { full_name, role, is_active } = req.body;
+  const currentAdmin = req.adminUser;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Identificador de usuário não informado.' });
+  }
+
+  if (currentAdmin.id === id) {
+    if (is_active === false) {
+      return res.status(400).json({ error: 'Você não pode desativar seu próprio usuário administrador.' });
+    }
+    if (role && role !== 'admin') {
+      return res.status(400).json({ error: 'Você não pode remover seus próprios privilégios de administrador.' });
+    }
+  }
+
+  try {
+    const updateProfileData = {
+      updated_at: new Date().toISOString(),
+    };
+    if (full_name !== undefined) updateProfileData.full_name = full_name.trim();
+    if (role !== undefined) updateProfileData.role = role === 'admin' ? 'admin' : 'user';
+    if (is_active !== undefined) updateProfileData.is_active = Boolean(is_active);
+
+    const { error: profErr } = await adminScopedClient
+      .from('profiles')
+      .update(updateProfileData)
+      .eq('id', id);
+
+    if (profErr) throw profErr;
+
+    // Garantir que a linha user_permissions existe sem apagar ou sobrescrever permissões existentes ao promover/rebaixar
+    const { data: existingPerms } = await adminScopedClient
+      .from('user_permissions')
+      .select('user_id')
+      .eq('user_id', id)
+      .maybeSingle();
+
+    if (!existingPerms) {
+      await adminScopedClient.from('user_permissions').insert({
+        user_id: id,
+        can_manage_notes: true,
+        can_delete_notes: false,
+        can_manage_leads: true,
+        can_delete_leads: false,
+        can_change_stage: true,
+        can_manage_contacts: true,
+      });
+    }
+
+    return res.json({ success: true, message: 'Usuário atualizado com sucesso.' });
+  } catch (err) {
+    console.error('[ADMIN_PATCH_USER_ERROR]', err);
+    return res.status(400).json({ error: err?.message || 'Falha ao atualizar dados do usuário.' });
+  }
+});
+
+// 4. PATCH /api/admin/users/:id/permissions
+app.patch('/api/admin/users/:id/permissions', requireAdminUser, async (req, res) => {
+  const adminScopedClient = req.adminScopedClient;
+  if (!adminScopedClient) return res.status(500).json({ error: 'Serviço indisponível' });
+
+  const { id } = req.params;
+  const permissions = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({ error: 'Identificador de usuário não informado.' });
+  }
+
+  try {
+    const permsPayload = {
+      user_id: id,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (permissions.can_manage_notes !== undefined) permsPayload.can_manage_notes = Boolean(permissions.can_manage_notes);
+    if (permissions.can_delete_notes !== undefined) permsPayload.can_delete_notes = Boolean(permissions.can_delete_notes);
+    if (permissions.can_manage_leads !== undefined) permsPayload.can_manage_leads = Boolean(permissions.can_manage_leads);
+    if (permissions.can_delete_leads !== undefined) permsPayload.can_delete_leads = Boolean(permissions.can_delete_leads);
+    if (permissions.can_change_stage !== undefined) permsPayload.can_change_stage = Boolean(permissions.can_change_stage);
+    if (permissions.can_manage_contacts !== undefined) permsPayload.can_manage_contacts = Boolean(permissions.can_manage_contacts);
+
+    const { error: permErr } = await adminScopedClient
+      .from('user_permissions')
+      .upsert(permsPayload);
+
+    if (permErr) throw permErr;
+
+    return res.json({
+      success: true,
+      message: 'Permissões salvas com sucesso em public.user_permissions.',
+      permissions: permsPayload,
+    });
+  } catch (err) {
+    console.error('[ADMIN_PATCH_PERMS_ERROR]', err);
+    return res.status(400).json({ error: err?.message || 'Falha ao atualizar permissões.' });
+  }
+});
+
+// 5. POST /api/admin/update-user - Atualizar perfil + permissões preservando user_permissions ao promover/rebaixar
+app.post('/api/admin/update-user', requireAdminUser, async (req, res) => {
+  const adminScopedClient = req.adminScopedClient;
+  if (!adminScopedClient) return res.status(500).json({ error: 'Serviço indisponível' });
+
+  const { id, full_name, role, is_active, permissions } = req.body;
+  const currentAdmin = req.adminUser;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Identificador de usuário não informado.' });
+  }
+
+  if (currentAdmin.id === id) {
+    if (is_active === false) {
+      return res.status(400).json({ error: 'Você não pode desativar seu próprio usuário administrador.' });
+    }
+    if (role && role !== 'admin') {
+      return res.status(400).json({ error: 'Você não pode remover seus próprios privilégios de administrador.' });
+    }
+  }
+
+  try {
+    const targetRole = role === 'admin' ? 'admin' : 'user';
+
+    const updateProfileData = {
+      updated_at: new Date().toISOString(),
+    };
+    if (full_name !== undefined) updateProfileData.full_name = full_name.trim();
+    if (role !== undefined) updateProfileData.role = targetRole;
+    if (is_active !== undefined) updateProfileData.is_active = Boolean(is_active);
+
+    const { error: profErr } = await adminScopedClient
+      .from('profiles')
+      .update(updateProfileData)
+      .eq('id', id);
+
+    if (profErr) throw profErr;
+
+    const { data: existingPerms } = await adminScopedClient
+      .from('user_permissions')
+      .select('user_id')
+      .eq('user_id', id)
+      .maybeSingle();
+
+    if (targetRole === 'user' && permissions) {
+      const permsPayload = {
+        user_id: id,
+        can_manage_notes: Boolean(permissions.can_manage_notes ?? true),
+        can_delete_notes: Boolean(permissions.can_delete_notes ?? false),
+        can_manage_leads: Boolean(permissions.can_manage_leads ?? true),
+        can_delete_leads: Boolean(permissions.can_delete_leads ?? false),
+        can_change_stage: Boolean(permissions.can_change_stage ?? true),
+        can_manage_contacts: Boolean(permissions.can_manage_contacts ?? true),
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error: permErr } = await adminScopedClient
+        .from('user_permissions')
+        .upsert(permsPayload);
+
+      if (permErr) throw permErr;
+    } else if (!existingPerms) {
+      await adminScopedClient.from('user_permissions').insert({
+        user_id: id,
+        can_manage_notes: true,
+        can_delete_notes: false,
+        can_manage_leads: true,
+        can_delete_leads: false,
+        can_change_stage: true,
+        can_manage_contacts: true,
+      });
+    }
+
+    return res.json({ success: true, message: 'Usuário atualizado com sucesso.' });
+  } catch (err) {
+    console.error('[ADMIN_UPDATE_USER_ERROR]', err);
+    return res.status(400).json({ error: err?.message || 'Falha ao atualizar dados do usuário.' });
+  }
+});
+
+// 6. Gerar link de recuperação de acesso / redefinição de senha pelo próprio usuário
+app.post('/api/admin/reset-password', requireAdminUser, async (req, res) => {
+  const supabaseAdmin = getAdminSupabaseClient();
+  const adminScopedClient = req.adminScopedClient;
+  if (!supabaseAdmin || !adminScopedClient) return res.status(500).json({ error: 'Serviço indisponível' });
+
+  const { id, email } = req.body || {};
+  if (!id && !email) {
+    return res.status(400).json({ error: 'Usuário ou e-mail não informado.' });
+  }
+
+  try {
+    let targetEmail = email;
+    if (!targetEmail && id) {
+      const { data: prof } = await adminScopedClient.from('profiles').select('email').eq('id', id).maybeSingle();
+      targetEmail = prof?.email;
+    }
+
+    if (targetEmail) {
+      const { data: linkData, error } = await supabaseAdmin.auth.admin.generateLink({
+        type: 'recovery',
+        email: targetEmail.trim().toLowerCase(),
+      });
+      if (error) throw error;
+      return res.json({
+        success: true,
+        recoveryLink: linkData?.properties?.action_link || null,
+        message: 'Link de recuperação de acesso gerado com sucesso.',
+      });
+    }
+
+    return res.status(400).json({ error: 'Não foi possível localizar o e-mail do usuário.' });
+  } catch (err) {
+    return res.status(400).json({ error: err?.message || 'Falha ao gerar link de recuperação.' });
+  }
+});
+
 
 app.post('/api/google/oauth/start', async (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID;

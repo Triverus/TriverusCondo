@@ -162,6 +162,7 @@ export function deduplicateProfiles(rawProfiles: UserProfile[]): UserProfile[] {
         full_name: formattedName || null,
         role: p.role || null,
         email: p.email || null,
+        is_active: p.is_active !== undefined ? Boolean(p.is_active) : true,
       });
     }
   }
@@ -203,6 +204,9 @@ export interface Interaction {
   next_follow_up_date?: string | null;
   next_follow_up_at?: string | null;
   google_event_id?: string | null;
+  created_by_user_id?: string | null;
+  last_edited_by_user_id?: string | null;
+  last_edited_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }

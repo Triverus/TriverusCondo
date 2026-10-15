@@ -6,8 +6,6 @@ interface ProfileAvatarProps {
   className?: string;
 }
 
-const TRIVERUS_LOGO_URL = 'https://adm.triveruscondo.com/wp-content/uploads/2026/10/7.png';
-
 const sizeMap = {
   xs: 'w-6 h-6 text-[10px]',
   sm: 'w-7 h-7 text-xs',
@@ -21,33 +19,15 @@ export const ProfileAvatar: React.FC<ProfileAvatarProps> = ({
   size = 'md',
   className = '',
 }) => {
-  const [hasError, setHasError] = useState(false);
-
-  const initial = (name || 'U').charAt(0).toUpperCase();
+  const initial = (name || 'U').trim().charAt(0).toUpperCase();
   const dimensionClass = sizeMap[size] || sizeMap.md;
-
-  if (hasError) {
-    return (
-      <div
-        className={`${dimensionClass} rounded-full bg-[#FF6600]/15 border border-[#FF6600]/30 flex items-center justify-center font-bold text-[#FF6600] shrink-0 ${className}`}
-        title={name}
-      >
-        {initial}
-      </div>
-    );
-  }
 
   return (
     <div
-      className={`${dimensionClass} rounded-full bg-slate-900 border border-slate-700/80 p-0.5 flex items-center justify-center overflow-hidden shrink-0 shadow-xs ${className}`}
+      className={`${dimensionClass} rounded-full bg-slate-800 border border-slate-700/80 flex items-center justify-center font-bold text-slate-200 shrink-0 select-none shadow-xs ${className}`}
       title={name}
     >
-      <img
-        src={TRIVERUS_LOGO_URL}
-        alt={name}
-        className="w-full h-full object-contain rounded-full"
-        onError={() => setHasError(true)}
-      />
+      {initial}
     </div>
   );
 };

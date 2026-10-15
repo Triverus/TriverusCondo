@@ -3,6 +3,7 @@ import { CircleCheck, CircleX } from 'lucide-react';
 import type { Lead, PipelineStage } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
 import { useTheme } from '../lib/themeContext.tsx';
+import { useUserPermissions } from '../lib/permissionsContext.tsx';
 import { getStageVisualConfig } from '../lib/stageVisuals.ts';
 import {
   toDateInputValue,
@@ -123,6 +124,7 @@ export function PipelineToolbar({
   isRefreshing,
 }: PipelineToolbarProps) {
   const { theme } = useTheme();
+  const { canManageLeads } = useUserPermissions();
   const isLight = theme === 'light';
   const isPersonaFiltered = responsibleFilter !== 'all';
 
@@ -299,19 +301,21 @@ export function PipelineToolbar({
       </div>
 
       {/* Right Action Button */}
-      <div className="shrink-0 flex items-center justify-end">
-        <button
-          type="button"
-          data-help-id="new-condominium"
-          onClick={onOpenCreate}
-          className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#E65C00] active:bg-[#CC5200] text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
-        >
-          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          <span className="text-white">Novo Condomínio</span>
-        </button>
-      </div>
+      {canManageLeads && (
+        <div className="shrink-0 flex items-center justify-end">
+          <button
+            type="button"
+            data-help-id="new-condominium"
+            onClick={onOpenCreate}
+            className="w-full sm:w-auto px-4 py-2 bg-[#FF6600] hover:bg-[#E65C00] active:bg-[#CC5200] text-white font-bold rounded-xl text-xs transition-colors flex items-center justify-center gap-1.5 shadow-sm cursor-pointer"
+          >
+            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            <span className="text-white">Novo Condomínio</span>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -344,6 +348,7 @@ export function CardQuickActions({
   onOpenNotes,
 }: CardQuickActionsProps) {
   const { theme } = useTheme();
+  const { canManageNotes } = useUserPermissions();
   const isLight = theme === 'light';
 
   return (
@@ -446,21 +451,23 @@ export function CardQuickActions({
       </div>
 
       {/* Círculo com "+" padronizado para registrar nova nota */}
-      <button
-        type="button"
-        data-help-id="lead-card-notes"
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenNotes();
-        }}
-        title="Adicionar nota ou registrar follow-up"
-        aria-label="Adicionar nota / follow-up"
-        className="w-7 h-7 rounded-full bg-[#FF6600] hover:bg-[#e65c00] active:scale-90 text-white flex items-center justify-center shadow-md ring-2 ring-[#FF6600]/25 transition-all cursor-pointer shrink-0 ml-auto"
-      >
-        <svg className="w-3.5 h-3.5 shrink-0 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
-      </button>
+      {canManageNotes && (
+        <button
+          type="button"
+          data-help-id="lead-card-notes"
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenNotes();
+          }}
+          title="Adicionar nota ou registrar follow-up"
+          aria-label="Adicionar nota / follow-up"
+          className="w-7 h-7 rounded-full bg-[#FF6600] hover:bg-[#e65c00] active:scale-90 text-white flex items-center justify-center shadow-md ring-2 ring-[#FF6600]/25 transition-all cursor-pointer shrink-0 ml-auto"
+        >
+          <svg className="w-3.5 h-3.5 shrink-0 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+      )}
     </div>
   );
 }
@@ -561,6 +568,7 @@ export function LeadCard({
   onRequestDelete,
 }: LeadCardProps) {
   const { theme } = useTheme();
+  const { canManageLeads, canDeleteLeads, canChangeStage, canManageNotes } = useUserPermissions();
   const isLight = theme === 'light';
 
 
@@ -597,8 +605,12 @@ export function LeadCard({
 
   return (
     <div
-      draggable
+      draggable={canChangeStage}
       onDragStart={(e) => {
+        if (!canChangeStage) {
+          e.preventDefault();
+          return;
+        }
         const target = e.target as HTMLElement;
         if (target.closest('button, a, input, select, textarea, .card-dropdown-menu')) {
           e.preventDefault();
@@ -622,7 +634,9 @@ export function LeadCard({
         e.preventDefault();
         onDropOnCard(e);
       }}
-      className={`${getStageCardClasses(lead.current_stage_id, stageName)} rounded-[22px] p-3.5 transition-all cursor-grab active:cursor-grabbing flex flex-col justify-between group relative select-none ${
+      className={`${getStageCardClasses(lead.current_stage_id, stageName)} rounded-[22px] p-3.5 transition-all ${
+        canChangeStage ? 'cursor-grab active:cursor-grabbing' : 'cursor-default'
+      } flex flex-col justify-between group relative select-none ${
         isDragging ? 'opacity-35 scale-[0.98]' : ''
       }`}
       data-lead-id={lead.id}
@@ -681,32 +695,38 @@ export function LeadCard({
                 </button>
 
                 {/* 2. Editar card */}
-                <button
-                  type="button"
-                  data-help-id="lead-card-edit"
-                  onClick={() => {
-                    onCloseMenu();
-                    onOpenEdit();
-                  }}
-                  className="w-full text-left px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800 flex items-center gap-2 cursor-pointer"
-                >
-                  <EditIcon className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Editar card</span>
-                </button>
+                {canManageLeads && (
+                  <button
+                    type="button"
+                    data-help-id="lead-card-edit"
+                    onClick={() => {
+                      onCloseMenu();
+                      onOpenEdit();
+                    }}
+                    className="w-full text-left px-3 py-2 text-slate-300 hover:text-white hover:bg-slate-800 flex items-center gap-2 cursor-pointer"
+                  >
+                    <EditIcon className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Editar card</span>
+                  </button>
+                )}
 
-                <div className="border-t border-slate-800 my-1" />
+                {canDeleteLeads && (
+                  <>
+                    <div className="border-t border-slate-800 my-1" />
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    onCloseMenu();
-                    onRequestDelete();
-                  }}
-                  className="w-full text-left px-3 py-2 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 flex items-center gap-2 cursor-pointer"
-                >
-                  <TrashIcon className="w-3.5 h-3.5" />
-                  <span>Excluir condomínio</span>
-                </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCloseMenu();
+                        onRequestDelete();
+                      }}
+                      className="w-full text-left px-3 py-2 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 flex items-center gap-2 cursor-pointer"
+                    >
+                      <TrashIcon className="w-3.5 h-3.5" />
+                      <span>Excluir condomínio</span>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -737,29 +757,33 @@ export function LeadCard({
 
             <div className="flex items-center gap-1 min-w-0">
               <span
-                onClick={onOpenEdit}
-                className={`text-[11px] truncate max-w-[150px] cursor-pointer hover:underline ${
+                onClick={canManageLeads ? onOpenEdit : undefined}
+                className={`text-[11px] truncate max-w-[150px] ${
+                  canManageLeads ? 'cursor-pointer hover:underline' : ''
+                } ${
                   isLight ? 'text-slate-900 font-medium' : 'text-slate-200'
                 }`}
-                title="Clique para editar responsável no condomínio"
+                title={canManageLeads ? 'Clique para editar responsável no condomínio' : `Responsável: ${responsibleName}`}
               >
                 {responsibleName}
               </span>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenEdit();
-                }}
-                title="Editar condomínio e responsável"
-                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                  isLight
-                    ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
-                    : 'text-slate-300/80 hover:text-white hover:bg-black/30'
-                }`}
-              >
-                <EditIcon className="w-3 h-3" />
-              </button>
+              {canManageLeads && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenEdit();
+                  }}
+                  title="Editar condomínio e responsável"
+                  className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                    isLight
+                      ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
+                      : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                  }`}
+                >
+                  <EditIcon className="w-3 h-3" />
+                </button>
+              )}
             </div>
           </div>
         )}
