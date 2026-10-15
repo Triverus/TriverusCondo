@@ -65,13 +65,55 @@ export default function NotesTimelineModal({
   onOpenNewNote,
   onEditNote,
 }: NotesTimelineModalProps) {
-  const { interactions, profileMap, deleteInteractionLocally } = useCRM();
+  const {
+    interactions,
+    profileMap,
+    deleteInteractionLocally,
+    stageMap,
+    serviceMap,
+    getLeadServices,
+    getPrimaryContactForLead,
+  } = useCRM();
   const [isMaximized, setIsMaximized] = useState(false);
+  const [showInfo, setShowInfo] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // Limpa qualquer erro prévio imediatamente ao abrir o modal ou mudar de condomínio
+  React.useEffect(() => {
+    if (isOpen) {
+      setDeleteError(null);
+      setConfirmDeleteId(null);
+      setDeletingId(null);
+      setShowInfo(false);
+    }
+  }, [isOpen, lead?.id]);
+
   if (!isOpen || !lead) return null;
+
+  // Informações complementares reais do lead
+  const primaryContact = getPrimaryContactForLead(lead.id);
+  const leadServiceIds = getLeadServices(lead.id);
+  const leadServices = leadServiceIds
+    .map((id) => serviceMap.get(id))
+    .filter(Boolean) as string[];
+  const stageName = lead.current_stage_id ? stageMap.get(lead.current_stage_id) : null;
+  const responsibleName = lead.responsible_user_id ? profileMap.get(lead.responsible_user_id) : null;
+
+  const infoItems: { label: string; value: string }[] = [];
+  if (lead.condominium_type) infoItems.push({ label: 'Tipo', value: lead.condominium_type });
+  if (lead.unit_count && lead.unit_count > 0) infoItems.push({ label: 'Unidades', value: `${lead.unit_count} un.` });
+  if (lead.city) infoItems.push({ label: 'Cidade', value: lead.city });
+  if (lead.address) infoItems.push({ label: 'Endereço', value: lead.address });
+  if (lead.cnpj) infoItems.push({ label: 'CNPJ', value: lead.cnpj });
+  if (stageName) infoItems.push({ label: 'Estágio atual', value: stageName });
+  if (responsibleName) infoItems.push({ label: 'Responsável', value: responsibleName });
+  if (lead.administrator) infoItems.push({ label: 'Administradora', value: lead.administrator });
+  if (primaryContact?.name) infoItems.push({ label: 'Contato principal', value: primaryContact.name });
+  if (primaryContact?.role_title) infoItems.push({ label: 'Cargo', value: primaryContact.role_title });
+  if (primaryContact?.phone) infoItems.push({ label: 'Telefone', value: primaryContact.phone });
+  if (primaryContact?.email) infoItems.push({ label: 'E-mail', value: primaryContact.email });
 
   // Ordenação: Da mais recente (topo) para as mais antigas (base)
   const leadInteractions = interactions
@@ -101,7 +143,10 @@ export default function NotesTimelineModal({
         const result = await deleteInteractionCalendar(interactionId);
         // Validar sucesso de acordo com o contrato real do helper
         if (!result.ok || result.data?.success === false) {
-          throw new Error(result.error || result.data?.message || 'Falha ao remover evento do Google Calendar.');
+          const errMsg = result.error?.includes('401')
+            ? 'Sessão expirada. Por favor, recarregue a página.'
+            : (result.error || result.data?.message || 'Falha ao remover evento do Google Calendar.');
+          throw new Error(errMsg);
         }
       }
 
@@ -134,7 +179,7 @@ export default function NotesTimelineModal({
             : 'max-w-xl max-h-[85vh] h-[640px] rounded-3xl my-auto'
         } overflow-hidden`}
       >
-        {/* Header: Nome do condomínio, tags e no topo direito: botão circular "+" idêntico aos cards + maximizar + X */}
+        {/* Header: Nome do condomínio, subtítulo, botões Maximizar e Fechar X */}
         <div className="px-5 py-4 border-b border-slate-800/90 bg-slate-950/90 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center font-bold shrink-0">
@@ -157,24 +202,8 @@ export default function NotesTimelineModal({
             </div>
           </div>
 
-          {/* Topo direito: Botão circular "+" idêntico aos cards, Maximizar e Fechar X */}
+          {/* Topo direito: Apenas Maximizar e Fechar X (botão "+" movido para o footer) */}
           <div className="flex items-center gap-2 shrink-0">
-            {/* Círculo "+" idêntico aos cards para registrar nova nota */}
-            <button
-              type="button"
-              onClick={() => {
-                onClose();
-                onOpenNewNote(lead);
-              }}
-              title="Adicionar nota ou registrar follow-up"
-              aria-label="Adicionar nota / follow-up"
-              className="w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500 active:scale-90 text-white flex items-center justify-center shadow-md shadow-indigo-950/80 hover:shadow-indigo-500/40 ring-2 ring-indigo-500/25 transition-all cursor-pointer shrink-0"
-            >
-              <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </button>
-
             {/* Maximizar / Restaurar */}
             <button
               type="button"
@@ -206,6 +235,76 @@ export default function NotesTimelineModal({
             </button>
           </div>
         </div>
+
+        {/* Painel Interno de Informações Expansível (Accordion / Painel no mesmo modal) */}
+        {showInfo && (
+          <div className="border-b border-slate-800 bg-slate-950/95 px-5 py-3.5 shrink-0 max-h-56 overflow-y-auto custom-scrollbar animate-in slide-in-from-top-2 duration-150">
+            <div className="flex items-center justify-between pb-2 mb-2.5 border-b border-slate-800/80">
+              <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5 text-[#FF6600]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span>Informações do Condomínio</span>
+              </h4>
+              <button
+                type="button"
+                onClick={() => setShowInfo(false)}
+                className="text-[11px] text-slate-400 hover:text-white transition-colors cursor-pointer"
+              >
+                Recolher ✕
+              </button>
+            </div>
+
+            {infoItems.length === 0 && leadServices.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">
+                Nenhuma informação complementar preenchida para este condomínio.
+              </p>
+            ) : (
+              <div className="space-y-2.5">
+                {/* Grade compacta de Infotags preenchidas */}
+                {infoItems.length > 0 && (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {infoItems.map((item) => (
+                      <div
+                        key={item.label}
+                        className="bg-slate-900/90 border border-slate-800/80 rounded-xl p-2 min-w-0"
+                      >
+                        <span className="block text-[10px] font-medium text-slate-400 truncate">
+                          {item.label}
+                        </span>
+                        <span
+                          className="block text-xs font-semibold text-slate-100 truncate"
+                          title={item.value}
+                        >
+                          {item.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Serviços de interesse */}
+                {leadServices.length > 0 && (
+                  <div className="pt-1">
+                    <span className="block text-[10px] font-medium text-slate-400 mb-1">
+                      Serviços de Interesse
+                    </span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {leadServices.map((srv) => (
+                        <span
+                          key={srv}
+                          className="px-2 py-0.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[11px] font-medium"
+                        >
+                          {srv}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Timeline Body - Da mais recente para a mais antiga */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-slate-950/60 custom-scrollbar">
@@ -380,6 +479,47 @@ export default function NotesTimelineModal({
               </div>
             ))
           )}
+        </div>
+
+        {/* Rodapé Fixo: [ Informações ]                         [ + ] */}
+        <div className="px-5 py-3 border-t border-slate-800/90 bg-slate-950/90 flex items-center justify-between shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowInfo((prev) => !prev)}
+            className={`px-3.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+              showInfo
+                ? 'bg-slate-800 text-white border-slate-700 shadow-inner'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800'
+            }`}
+          >
+            <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span>Informações</span>
+            <svg
+              className={`w-3 h-3 text-slate-400 transition-transform duration-200 ${showInfo ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              onClose();
+              onOpenNewNote(lead);
+            }}
+            title="Adicionar nota ou registrar follow-up"
+            aria-label="Adicionar nota / follow-up"
+            className="w-8 h-8 rounded-full bg-[#FF6600] hover:bg-[#e65c00] active:scale-90 text-white flex items-center justify-center shadow-md ring-2 ring-[#FF6600]/25 transition-all cursor-pointer shrink-0"
+          >
+            <svg className="w-4 h-4 shrink-0 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
         </div>
       </div>
     </div>

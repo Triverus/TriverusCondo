@@ -25,10 +25,13 @@ export type SavePhase =
   | 'refreshing'
   | 'done';
 
+export type InitialStepType = number | 'notes' | 'date' | 'time' | 'responsible' | 'followup' | 'type';
+
 export interface UnifiedNoteModalProps {
   isOpen: boolean;
   lead: Lead | null;
   editingInteractionId?: string | null;
+  initialStep?: InitialStepType;
   currentProfile: UserProfile;
   onClose: () => void;
   onSuccessFeedback?: (msg: string) => void;
@@ -112,10 +115,23 @@ async function saveInteractionToSupabase(
   throw res.error;
 }
 
+function resolveStepNumber(initialStep?: InitialStepType, isEditing?: boolean): number {
+  if (typeof initialStep === 'number') {
+    return Math.min(Math.max(initialStep, 1), 5);
+  }
+  if (initialStep === 'type') return 1;
+  if (initialStep === 'notes') return 2;
+  if (initialStep === 'date' || initialStep === 'time' || initialStep === 'followup') return 5;
+  if (initialStep === 'responsible') return 4;
+  if (isEditing) return 2; // Edição canônica abre diretamente nas anotações
+  return 1;
+}
+
 export default function UnifiedNoteModal({
   isOpen,
   lead,
   editingInteractionId = null,
+  initialStep = 1,
   currentProfile,
   onClose,
   onSuccessFeedback,
@@ -124,7 +140,7 @@ export default function UnifiedNoteModal({
   const { profiles, interactions, upsertInteractionLocally, refreshAll } = useCRM();
 
   // Typeform Step state (1 to 5)
-  const [step, setStep] = useState<number>(1);
+  const [step, setStep] = useState<number>(() => resolveStepNumber(initialStep, Boolean(editingInteractionId)));
   const totalSteps = 5;
 
   // Form states
@@ -176,8 +192,9 @@ export default function UnifiedNoteModal({
   // Track previous opened state to only initialize when modal transitions to open
   const wasOpenRef = React.useRef(false);
   const prevEditingIdRef = React.useRef<string | null | undefined>(undefined);
+  const prevInitialStepRef = React.useRef<InitialStepType | undefined>(undefined);
 
-  // Reset/Initialize state strictly when modal opens or editingInteractionId changes
+  // Reset/Initialize state strictly when modal opens or editingInteractionId / initialStep changes
   useEffect(() => {
     if (!isOpen) {
       setSavePhase('idle');
@@ -186,15 +203,18 @@ export default function UnifiedNoteModal({
 
     const justOpened = isOpen && !wasOpenRef.current;
     const editingChanged = isOpen && editingInteractionId !== prevEditingIdRef.current;
+    const stepChanged = isOpen && initialStep !== prevInitialStepRef.current;
     wasOpenRef.current = isOpen;
     prevEditingIdRef.current = editingInteractionId;
+    prevInitialStepRef.current = initialStep;
 
     // Se estiver em processo de save ou se o modal já estava aberto e nada mudou, NÃO resetar
     if (formSaving) return;
     if (!isOpen || !lead) return;
-    if (!justOpened && !editingChanged) return;
+    if (!justOpened && !editingChanged && !stepChanged) return;
 
-    setStep(1);
+    const targetStep = resolveStepNumber(initialStep, Boolean(editingInteractionId));
+    setStep(targetStep);
     setFormError(null);
 
     const now = new Date();
@@ -235,18 +255,29 @@ export default function UnifiedNoteModal({
       }
     }
 
-    // Default new note values (no pre-selected type so user explicitly chooses)
-    setFormType('');
+    // Default new note values
+    setFormType(targetStep === 5 ? 'Ligação' : '');
     setFormNotes('');
     setFormDate(`${yyyy}-${mm}-${dd}`);
     setFormTime(`${hh}:${min}`);
     setViewCalendarMonth(new Date());
     setFormResponsibleId(currentProfile.id);
     setWantNextFollowUp(true);
-    setFormNextFollowUpDate('');
+
+    // Se aberto diretamente para agendamento (passo 5), sugerir amanhã se vazio
+    if (targetStep === 5) {
+      const tmrw = new Date();
+      tmrw.setDate(tmrw.getDate() + 1);
+      const tmrwY = tmrw.getFullYear();
+      const tmrwM = String(tmrw.getMonth() + 1).padStart(2, '0');
+      const tmrwD = String(tmrw.getDate()).padStart(2, '0');
+      setFormNextFollowUpDate(`${tmrwY}-${tmrwM}-${tmrwD}`);
+    } else {
+      setFormNextFollowUpDate('');
+    }
     setFormNextFollowUpTime('09:00');
     setFormNextChannel('WhatsApp');
-  }, [isOpen, lead?.id, editingInteractionId]);
+  }, [isOpen, lead?.id, editingInteractionId, initialStep]);
 
   if (!isOpen || !lead) return null;
 
@@ -905,6 +936,17 @@ export default function UnifiedNoteModal({
           </div>
 
           <div className="flex items-center gap-2">
+            {editingInteractionId && step < totalSteps && (
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={formSaving}
+                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50 shadow-md shadow-emerald-950/60"
+              >
+                {formSaving ? 'Salvando...' : 'Salvar Alterações'}
+              </button>
+            )}
+
             {step < totalSteps ? (
               // Step 1 doesn't have Avançar button (user clicks the option to advance)
               step !== 1 && (
@@ -923,7 +965,7 @@ export default function UnifiedNoteModal({
                 disabled={formSaving}
                 className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer disabled:opacity-50 shadow-md shadow-emerald-950/60"
               >
-                {formSaving ? 'Salvando...' : 'Finalizar e Salvar Nota'}
+                {formSaving ? 'Salvando...' : editingInteractionId ? 'Salvar Alterações' : 'Finalizar e Salvar Nota'}
               </button>
             )}
           </div>

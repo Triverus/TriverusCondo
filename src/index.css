@@ -59,56 +59,6 @@ html:not(.light) input[type="datetime-local"]::-webkit-calendar-picker-indicator
 }
 
 /* =========================================================
-   TEMPERATURE CARD BASE STYLING (DARK MODE)
-   ========================================================= */
-html.dark .card-temp-frio,
-html:not(.light) .card-temp-frio {
-  background-color: #0a2f4a !important;
-  border-color: #38bdf8 !important;
-  color: #ffffff !important;
-  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.22) !important;
-}
-html.dark .card-temp-frio:hover,
-html:not(.light) .card-temp-frio:hover {
-  background-color: #0e3b5e !important;
-}
-
-html.dark .card-temp-morno,
-html:not(.light) .card-temp-morno {
-  background-color: #453403 !important;
-  border-color: #facc15 !important;
-  color: #ffffff !important;
-  box-shadow: 0 4px 14px rgba(250, 204, 21, 0.22) !important;
-}
-html.dark .card-temp-morno:hover,
-html:not(.light) .card-temp-morno:hover {
-  background-color: #574104 !important;
-}
-
-html.dark .card-temp-quente,
-html:not(.light) .card-temp-quente {
-  background-color: #4a1f03 !important;
-  border-color: #fb923c !important;
-  color: #ffffff !important;
-  box-shadow: 0 4px 14px rgba(251, 146, 60, 0.22) !important;
-}
-html.dark .card-temp-quente:hover,
-html:not(.light) .card-temp-quente:hover {
-  background-color: #5f2804 !important;
-}
-
-html.dark .card-temp-cliente,
-html:not(.light) .card-temp-cliente {
-  background-color: #063321 !important;
-  border-color: #34d399 !important;
-  color: #ffffff !important;
-  box-shadow: 0 4px 14px rgba(52, 211, 153, 0.22) !important;
-}
-html.dark .card-temp-cliente:hover,
-html:not(.light) .card-temp-cliente:hover {
-  background-color: #09422c !important;
-}
-
 /* =========================================================
    LIGHT MODE THEME
    ========================================================= */
@@ -500,53 +450,6 @@ html.light .card-stage-perdido:hover {
 }
 
 /* =========================================================
-   LIGHT MODE TEMPERATURE CARD STYLING (BACKWARD COMPAT)
-   ========================================================= */
-html.light .card-temp-frio {
-  background-color: #bfdbfe !important;
-  border-color: #0284c7 !important;
-  border-width: 2px !important;
-  color: #0c4a6e !important;
-  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.22) !important;
-}
-html.light .card-temp-frio:hover {
-  background-color: #93c5fd !important;
-}
-
-html.light .card-temp-morno {
-  background-color: #fef08a !important;
-  border-color: #ca8a04 !important;
-  border-width: 2px !important;
-  color: #422006 !important;
-  box-shadow: 0 4px 14px rgba(202, 138, 4, 0.28) !important;
-}
-html.light .card-temp-morno:hover {
-  background-color: #fde047 !important;
-}
-
-html.light .card-temp-quente {
-  background-color: #fed7aa !important;
-  border-color: #ea580c !important;
-  border-width: 2px !important;
-  color: #431407 !important;
-  box-shadow: 0 4px 14px rgba(234, 88, 12, 0.28) !important;
-}
-html.light .card-temp-quente:hover {
-  background-color: #fdba74 !important;
-}
-
-html.light .card-temp-cliente {
-  background-color: #bbf7d0 !important;
-  border-color: #059669 !important;
-  border-width: 2px !important;
-  color: #064e3b !important;
-  box-shadow: 0 4px 14px rgba(5, 150, 105, 0.22) !important;
-}
-html.light .card-temp-cliente:hover {
-  background-color: #86efac !important;
-}
-
-/* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

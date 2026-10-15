@@ -5,7 +5,6 @@ import { useTheme } from '../lib/themeContext.tsx';
 // Pipeline View Configuration
 export interface PipelineViewConfig {
   showCityAndType: boolean;
-  showStage: boolean;
   showResponsible: boolean;
   showNextContact: boolean;
   showQuickActions?: boolean;
@@ -17,7 +16,6 @@ import ProfileAvatar from './ProfileAvatar.tsx';
 export interface FollowUpsViewConfig {
   showCityAndType: boolean;
   showStage: boolean;
-  showTemperature?: boolean;
   showFollowUpDate: boolean;
   showLatestNotes: boolean;
   showResponsible: boolean;
@@ -26,7 +24,6 @@ export interface FollowUpsViewConfig {
 
 export const DEFAULT_PIPELINE_VIEW_CONFIG: PipelineViewConfig = {
   showCityAndType: true,
-  showStage: true,
   showResponsible: true,
   showNextContact: true,
   showQuickActions: true,
@@ -35,7 +32,6 @@ export const DEFAULT_PIPELINE_VIEW_CONFIG: PipelineViewConfig = {
 export const DEFAULT_FOLLOWUPS_VIEW_CONFIG: FollowUpsViewConfig = {
   showCityAndType: true,
   showStage: true,
-  showTemperature: false,
   showFollowUpDate: true,
   showLatestNotes: true,
   showResponsible: true,

@@ -30,6 +30,7 @@ export interface Lead {
   address?: string | null;
   city?: string | null;
   lead_source?: string | null;
+  /** @deprecated campo legado do banco de dados; não usar na UI ou regras comerciais */
   temperature?: string | null;
   current_stage_id?: string | null;
   responsible_user_id?: string | null;

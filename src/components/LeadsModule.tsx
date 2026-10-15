@@ -112,17 +112,6 @@ function normalizePhoneForMatch(phone?: string | null): string {
   return digits;
 }
 
-export const TEMPERATURE_OPTIONS = ['Frio', 'Morno', 'Quente', 'Cliente'] as const;
-
-export function sanitizeTemperatureForDB(temp?: string | null): string {
-  if (!temp) return 'Morno';
-  const val = temp.trim().toLowerCase();
-  if (val === 'frio' || val === 'cold') return 'Frio';
-  if (val === 'morno' || val === 'warm') return 'Morno';
-  if (val === 'quente' || val === 'hot') return 'Quente';
-  if (val === 'cliente' || val === 'client' || val === 'ganho' || val === 'won') return 'Cliente';
-  return 'Morno';
-}
 
 export function sanitizeInteractionTypeForDB(type?: string | null): string {
   if (!type) return 'Ligação';
@@ -229,7 +218,6 @@ interface LeadDraftData {
   formUnitCount: string;
   formAddress: string;
   formCity: string;
-  formTemperature: string;
   formCurrentStageId: string;
   formResponsibleUserId: string;
 }
@@ -711,11 +699,13 @@ export default function LeadsModule({
     lead: Lead | null;
     mode: 'list' | 'create' | 'edit';
     editingInteractionId?: string | null;
+    initialStep?: any;
   }>({
     open: false,
     lead: null,
     mode: 'create',
     editingInteractionId: null,
+    initialStep: 1,
   });
   const [noteType, setNoteType] = useState('WhatsApp');
   const [noteOccurredAt, setNoteOccurredAt] = useState('');
@@ -766,7 +756,6 @@ export default function LeadsModule({
   const [formUnitCount, setFormUnitCount] = useState('');
   const [formAddress, setFormAddress] = useState('');
   const [formCity, setFormCity] = useState('');
-  const [formTemperature, setFormTemperature] = useState<'Frio' | 'Morno' | 'Quente' | 'Cliente'>('Morno');
   const [formCurrentStageId, setFormCurrentStageId] = useState('stg_inicio');
   const [formLossReason, setFormLossReason] = useState('');
   const [formResponsibleUserId, setFormResponsibleUserId] = useState('');
@@ -819,7 +808,6 @@ export default function LeadsModule({
       setFormUnitCount(createDraft.formUnitCount || '');
       setFormAddress(createDraft.formAddress || '');
       setFormCity(createDraft.formCity || '');
-      setFormTemperature((createDraft.formTemperature as 'Frio' | 'Morno' | 'Quente' | 'Cliente') || 'Morno');
       setFormCurrentStageId(createDraft.formCurrentStageId || '');
       setFormResponsibleUserId(createDraft.formResponsibleUserId || currentProfile.id);
       setQuizStep(createDraft.quizStep || 1);
@@ -845,7 +833,6 @@ export default function LeadsModule({
         formUnitCount,
         formAddress,
         formCity,
-        formTemperature,
         formCurrentStageId,
         formResponsibleUserId,
       };
@@ -875,7 +862,6 @@ export default function LeadsModule({
         formUnitCount,
         formAddress,
         formCity,
-        formTemperature,
         formCurrentStageId,
         formResponsibleUserId,
       };
@@ -897,7 +883,6 @@ export default function LeadsModule({
     formUnitCount,
     formAddress,
     formCity,
-    formTemperature,
     formCurrentStageId,
     formResponsibleUserId,
   ]);
@@ -907,8 +892,7 @@ export default function LeadsModule({
     if (initialSelectedLeadId && leads.length > 0) {
       const target = leads.find((l) => l.id === initialSelectedLeadId);
       if (target) {
-        setSelectedLead(target);
-        setModalMode('view');
+        setTimelineLead(target);
       }
       if (onClearInitialLead) {
         onClearInitialLead();
@@ -1234,7 +1218,7 @@ export default function LeadsModule({
   // Inline quick update handler for LeadCard shortcuts
   const handleQuickUpdateLead = async (
     leadId: string,
-    field: 'stage' | 'responsible' | 'temperature' | 'follow_up_date',
+    field: 'stage' | 'responsible' | 'follow_up_date',
     value: string
   ) => {
     const lead = leads.find((l) => l.id === leadId);
@@ -1291,18 +1275,6 @@ export default function LeadsModule({
       } catch (err: any) {
         console.error('Erro ao atualizar responsável:', err);
         setStatusFeedback({ type: 'error', message: 'Erro ao atualizar responsável.' });
-      }
-    } else if (field === 'temperature') {
-      const updated = { ...lead, temperature: value };
-      upsertLeadLocally(updated);
-      try {
-        const dbTemp = sanitizeTemperatureForDB(value);
-        const { error: tempErr } = await supabase.from('leads').update({ temperature: dbTemp }).eq('id', leadId);
-        if (tempErr) throw tempErr;
-        setStatusFeedback({ type: 'success', message: `Temperatura alterada para ${value}!` });
-      } catch (err: any) {
-        console.error('Erro ao alterar temperatura:', err);
-        setStatusFeedback({ type: 'error', message: 'Erro ao atualizar temperatura.' });
       }
     } else if (field === 'follow_up_date') {
       const leadInteractions = getInteractionsForLead(leadId);
@@ -1449,7 +1421,6 @@ export default function LeadsModule({
       setFormUnitCount(draft.formUnitCount || '');
       setFormAddress(draft.formAddress || '');
       setFormCity(draft.formCity || '');
-      setFormTemperature((draft.formTemperature as 'Frio' | 'Morno' | 'Quente' | 'Cliente') || 'Morno');
       setFormCurrentStageId(draft.formCurrentStageId || (stages.length > 0 ? stages[0].id : ''));
       setFormResponsibleUserId(draft.formResponsibleUserId || currentProfile.id);
       setQuizStep(draft.quizStep || 1);
@@ -1470,7 +1441,6 @@ export default function LeadsModule({
       setFormUnitCount('');
       setFormAddress('');
       setFormCity('');
-      setFormTemperature('Morno');
       setFormCurrentStageId(stages.length > 0 ? stages[0].id : '');
       setFormResponsibleUserId(currentProfile.id);
       setQuizStep(1);
@@ -1538,7 +1508,6 @@ export default function LeadsModule({
       setFormUnitCount(editDraft.formUnitCount || '');
       setFormAddress(editDraft.formAddress || '');
       setFormCity(editDraft.formCity || '');
-      setFormTemperature((editDraft.formTemperature as 'Frio' | 'Morno' | 'Quente' | 'Cliente') || 'Morno');
       setFormCurrentStageId(editDraft.formCurrentStageId || '');
       setFormResponsibleUserId(editDraft.formResponsibleUserId ?? (lead.responsible_user_id || ''));
       setQuizStep(editDraft.quizStep || 1);
@@ -1570,7 +1539,6 @@ export default function LeadsModule({
       setFormUnitCount(lead.unit_count != null ? String(lead.unit_count) : '');
       setFormAddress(lead.address || '');
       setFormCity(lead.city || '');
-      setFormTemperature((lead.temperature as 'Frio' | 'Morno' | 'Quente' | 'Cliente') || 'Morno');
       const stageId = lead.current_stage_id || (stages.length > 0 ? stages[0].id : '');
       setFormCurrentStageId(stageId);
       setFormLossReason(lead.loss_reason || '');
@@ -1728,8 +1696,7 @@ export default function LeadsModule({
     setFormSaving(true);
 
     try {
-      const dbTemperature = sanitizeTemperatureForDB(formTemperature);
-      const leadPayload = {
+      const leadPayload: any = {
         name: formName.trim(),
         cnpj: formCnpj.trim() || null,
         condominium_type: finalCondominiumType,
@@ -1737,7 +1704,6 @@ export default function LeadsModule({
         unit_count: unitCountNum ?? 0,
         address: formAddress.trim() || null,
         city: formCity.trim() || null,
-        temperature: dbTemperature,
         current_stage_id: dbStageId,
         responsible_user_id: validResponsibleId,
       };
@@ -1758,7 +1724,6 @@ export default function LeadsModule({
           const fallbackPayload = {
             ...leadPayload,
             condominium_type: sanitizeCondominiumTypeForDB(finalCondominiumType),
-            temperature: 'Morno',
             current_stage_id: dbStageId,
             responsible_user_id: validResponsibleId,
           };
@@ -1803,7 +1768,6 @@ export default function LeadsModule({
           const fallbackPayload = {
             ...leadPayload,
             condominium_type: sanitizeCondominiumTypeForDB(finalCondominiumType),
-            temperature: 'Morno',
             current_stage_id: dbStageId,
             responsible_user_id: validResponsibleId,
           };
@@ -1966,7 +1930,7 @@ export default function LeadsModule({
       const localLead: Lead = {
         ...savedLead,
         condominium_type: finalCondominiumType,
-        temperature: formTemperature || savedLead.temperature,
+        temperature: savedLead.temperature || selectedLead?.temperature || undefined,
         current_stage_id: formCurrentStageId || savedLead.current_stage_id,
         created_at: savedLead.created_at || selectedLead?.created_at || new Date().toISOString(),
       };
@@ -2411,28 +2375,36 @@ export default function LeadsModule({
   };
 
   // Notas / Follow-up Handlers
-  const handleOpenNotesPopover = (lead: Lead) => {
+  const handleOpenNotesPopover = (
+    lead: Lead,
+    options?: {
+      editingInteractionId?: string | null;
+      initialStep?: any;
+    }
+  ) => {
     setNotesPopover({
       open: true,
       lead,
-      mode: 'create',
-      editingInteractionId: null,
+      mode: options?.editingInteractionId ? 'edit' : 'create',
+      editingInteractionId: options?.editingInteractionId || null,
+      initialStep: options?.initialStep || 1,
     });
     setNoteError(null);
   };
 
-  const handleOpenEditNotesPopover = (lead: Lead, interactionId: string) => {
+  const handleOpenEditNotesPopover = (lead: Lead, interactionId: string, initialStep: any = 'notes') => {
     setNotesPopover({
       open: true,
       lead,
       mode: 'edit',
       editingInteractionId: interactionId,
+      initialStep,
     });
     setNoteError(null);
   };
 
   const handleCloseNotesPopover = () => {
-    setNotesPopover({ open: false, lead: null, mode: 'create', editingInteractionId: null });
+    setNotesPopover({ open: false, lead: null, mode: 'create', editingInteractionId: null, initialStep: 1 });
     setNoteError(null);
   };
 
@@ -2561,7 +2533,10 @@ export default function LeadsModule({
           if (interaction?.google_event_id) {
             const result = await deleteInteractionCalendar(interactionId);
             if (!result.ok || result.data?.success === false) {
-              throw new Error(result.error || result.data?.message || 'Falha ao remover evento do Google Calendar.');
+              const errMsg = (result.error?.includes('401') || result.error?.includes('unauthorized'))
+                ? 'Sessão expirada. Por favor, recarregue a página.'
+                : (result.error || result.data?.message || 'Falha ao remover evento do Google Calendar.');
+              throw new Error(errMsg);
             }
           }
           const { error } = await supabase.from('interactions').delete().eq('id', interactionId);
@@ -2783,7 +2758,14 @@ export default function LeadsModule({
                           onOpenView={() => handleOpenView(lead)}
                           onOpenEdit={() => handleOpenEdit(lead)}
                           onOpenTimeline={() => setTimelineLead(lead)}
-                          onOpenNotes={() => handleOpenNotesPopover(lead)}
+                          onOpenNotes={() => handleOpenNotesPopover(lead, { initialStep: 1 })}
+                          onOpenFollowUp={() => {
+                            if (activeInteraction?.id) {
+                              handleOpenEditNotesPopover(lead, activeInteraction.id, 'followup');
+                            } else {
+                              handleOpenNotesPopover(lead, { initialStep: 'followup' });
+                            }
+                          }}
                           onOpenFolder={() => handleOpenFolderPopover(lead)}
                           onOpenWhatsApp={() => handleOpenWhatsAppPopover(lead)}
                           onOpenEmail={() => handleOpenEmailPopover(lead)}
@@ -3186,11 +3168,11 @@ export default function LeadsModule({
         onClose={() => setTimelineLead(null)}
         onOpenNewNote={(ld) => {
           setTimelineLead(null);
-          handleOpenNotesPopover(ld);
+          handleOpenNotesPopover(ld, { initialStep: 1 });
         }}
         onEditNote={(ld, interactionId) => {
           setTimelineLead(null);
-          handleOpenEditNotesPopover(ld, interactionId);
+          handleOpenEditNotesPopover(ld, interactionId, 'notes');
         }}
       />
 
@@ -3199,6 +3181,7 @@ export default function LeadsModule({
         isOpen={notesPopover.open && Boolean(notesPopover.lead)}
         lead={notesPopover.lead}
         editingInteractionId={notesPopover.editingInteractionId}
+        initialStep={notesPopover.initialStep}
         currentProfile={currentProfile}
         onClose={handleCloseNotesPopover}
         onSuccessFeedback={(msg) => setStatusFeedback({ type: 'success', message: msg })}
@@ -3987,7 +3970,10 @@ export default function LeadsModule({
                   <h3 className="font-bold uppercase tracking-wider text-slate-300">Histórico de Interações</h3>
                   <button
                     type="button"
-                    onClick={() => handleOpenCreateInteraction(selectedLead)}
+                    onClick={() => {
+                      setModalMode(null);
+                      handleOpenNotesPopover(selectedLead, { initialStep: 1 });
+                    }}
                     className="px-3 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold cursor-pointer"
                   >
                     + Registrar interação
@@ -3995,7 +3981,15 @@ export default function LeadsModule({
                 </div>
                 <div className="space-y-2 max-h-60 overflow-y-auto">
                   {getInteractionsForLead(selectedLead.id).map((i) => (
-                    <div key={i.id} className="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                    <div
+                      key={i.id}
+                      onClick={() => {
+                        setModalMode(null);
+                        handleOpenEditNotesPopover(selectedLead, i.id, 'notes');
+                      }}
+                      className="p-3 bg-slate-950 border border-slate-800 rounded-xl hover:border-slate-700 transition-colors cursor-pointer"
+                      title="Clique para editar esta nota no fluxo canônico"
+                    >
                       <div className="flex items-center justify-between mb-1">
                         <span className="font-semibold text-indigo-300">{i.interaction_type} · {formatDateBR(i.occurred_at)}</span>
                         {i.next_follow_up_date && (
@@ -4015,79 +4009,6 @@ export default function LeadsModule({
         </div>
       )}
 
-      {/* QUICK INTERACTION MODAL */}
-      {interactionModalMode && selectedLead && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="relative w-full max-w-lg bg-slate-900 border border-slate-800 rounded-3xl shadow-2xl overflow-hidden my-6 flex flex-col">
-            <div className="px-6 py-4 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between">
-              <h3 className="font-bold text-sm text-white">Registrar Interação · {selectedLead.name}</h3>
-              <button
-                type="button"
-                onClick={() => setInteractionModalMode(null)}
-                className="text-slate-400 hover:text-white cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
-            <form onSubmit={handleSubmitInteraction} className="p-6 space-y-4 text-xs">
-              {formInteractionError && <div className="p-3 bg-rose-950 border border-rose-600/50 rounded-xl text-rose-200">{formInteractionError}</div>}
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5">Tipo</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {INTERACTION_TYPES.map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setFormInteractionType(type)}
-                      className={`p-2 rounded-xl border text-center font-medium ${
-                        formInteractionType === type ? 'bg-emerald-600/20 border-emerald-500 text-emerald-200' : 'bg-slate-950 border-slate-800 text-slate-400'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Observações</label>
-                <textarea
-                  rows={4}
-                  value={formInteractionNotes}
-                  onChange={(e) => setFormInteractionNotes(e.target.value)}
-                  placeholder="Resumo do contato..."
-                  className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white focus:outline-none"
-                />
-              </div>
-              <div>
-                <label className="block text-slate-300 font-medium mb-1">Próximo Follow-up (opcional)</label>
-                <input
-                  type="date"
-                  value={formInteractionNextFollowUpDate}
-                  onChange={(e) => setFormInteractionNextFollowUpDate(e.target.value)}
-                  className="w-full px-3.5 py-2 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white focus:outline-none"
-                />
-              </div>
-              <div className="pt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => setInteractionModalMode(null)}
-                  className="px-3 py-2 text-slate-400 hover:text-white cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  disabled={formInteractionSaving}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold cursor-pointer disabled:opacity-50"
-                >
-                  {formInteractionSaving ? 'Salvando...' : 'Salvar interação'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {/* Bento Grid Visual Customization & Persona Filter Modal */}
       <BentoViewConfigModal
         isOpen={isBentoModalOpen}
@@ -4103,12 +4024,6 @@ export default function LeadsModule({
             label: 'Tipo e Cidade',
             checked: viewConfig.showCityAndType,
             onChange: (val) => handleUpdateViewConfig('showCityAndType', val),
-          },
-          {
-            key: 'showStage',
-            label: 'Estágio',
-            checked: viewConfig.showStage,
-            onChange: (val) => handleUpdateViewConfig('showStage', val),
           },
           {
             key: 'showResponsible',

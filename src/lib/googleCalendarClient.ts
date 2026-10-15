@@ -120,11 +120,24 @@ export async function callGoogleCalendarApi(
       reason: responseData?.reason || responseData?.error || null,
     });
 
+    let errorMessage: string | undefined = undefined;
+    if (!response.ok) {
+      if (responseData?.message) {
+        errorMessage = responseData.message;
+      } else if (responseData?.error) {
+        errorMessage = responseData.error === 'unauthorized' ? 'Sessão expirada. Por favor, recarregue a página.' : responseData.error;
+      } else if (response.status === 401) {
+        errorMessage = 'Sessão expirada. Por favor, recarregue a página.';
+      } else {
+        errorMessage = `HTTP ${response.status}`;
+      }
+    }
+
     return {
       ok: response.ok,
       status: response.status,
       data: responseData,
-      error: response.ok ? undefined : responseData?.error || responseData?.message || `HTTP ${response.status}`,
+      error: errorMessage,
     };
   } catch (err: any) {
     console.warn(`[GOOGLE_CALENDAR_CLIENT] Exceção de rede em ${endpoint}:`, err?.message || err);

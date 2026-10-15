@@ -564,7 +564,7 @@ export default function FunnelVisualizer({
                       <div>
                         {/* Linha 1: Nome do Condomínio */}
                         <h5
-                          onClick={() => onOpenLead(lead.id)}
+                          onClick={() => onOpenTimeline(lead)}
                           className={`font-bold text-xs cursor-pointer truncate mb-1.5 ${
                             isLight ? 'text-slate-950 hover:text-indigo-700' : 'text-white hover:text-indigo-300'
                           }`}

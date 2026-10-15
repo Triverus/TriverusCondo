@@ -1210,7 +1210,7 @@ export default function FollowUpsModule({
                   <div className={`flex items-start justify-between gap-2 pb-2 mb-2 border-b ${isLight ? 'border-black/10' : 'border-white/15'}`}>
                     <div className="flex-1 min-w-0">
                       <h3
-                        onClick={() => onOpenLead(item.lead.id)}
+                        onClick={() => setActiveTimelineLead(item.lead)}
                         className={`font-bold text-sm transition-colors cursor-pointer leading-snug truncate ${
                           isLight ? 'text-slate-950 hover:text-indigo-700' : 'text-white hover:text-indigo-300'
                         }`}
@@ -1613,7 +1613,7 @@ export default function FollowUpsModule({
                     <td className={`py-3.5 px-4 sm:px-6 font-medium ${isLight ? 'text-slate-900' : 'text-white'}`}>
                       <button
                         type="button"
-                        onClick={() => onOpenLead(item.lead.id)}
+                        onClick={() => setActiveTimelineLead(item.lead)}
                         className={`text-left font-semibold cursor-pointer ${
                           isLight ? 'text-slate-950 hover:text-indigo-600' : 'text-white hover:text-indigo-400'
                         }`}

@@ -89,7 +89,6 @@ export const PRESET_ROLES = [
 // Pipeline visual configuration schema
 export interface PipelineViewConfig {
   showCityAndType: boolean;
-  showStage: boolean;
   showResponsible: boolean;
   showNextContact: boolean;
   showQuickActions?: boolean;
@@ -484,14 +483,6 @@ export function getStageCardClasses(stageId?: string | null, stageName?: string 
   return 'card-stage-inicio';
 }
 
-export function getTemperatureCardClasses(temp?: string | null) {
-  const norm = temp ? temp.trim().toLowerCase() : 'morno';
-  if (norm === 'frio' || norm === 'cold') return 'card-stage-inicio';
-  if (norm === 'quente' || norm === 'hot') return 'card-stage-negociacao';
-  if (norm === 'cliente' || norm === 'client' || norm === 'won') return 'card-stage-cliente';
-  return 'card-stage-reuniao';
-}
-
 // ==========================================
 // 3. LeadCard (Card do Condomínio Reconstruído)
 // ==========================================
@@ -518,7 +509,7 @@ export interface LeadCardProps {
   profiles?: UserProfile[];
   onQuickUpdate?: (
     leadId: string,
-    field: 'stage' | 'responsible' | 'temperature' | 'follow_up_date',
+    field: 'stage' | 'responsible' | 'follow_up_date',
     value: string
   ) => void;
   onToggleMenu: () => void;
@@ -531,6 +522,7 @@ export interface LeadCardProps {
   onOpenEdit: () => void;
   onOpenTimeline?: () => void;
   onOpenNotes: () => void;
+  onOpenFollowUp?: () => void;
   onOpenFolder: () => void;
   onOpenWhatsApp: () => void;
   onOpenEmail: () => void;
@@ -562,6 +554,7 @@ export function LeadCard({
   onOpenEdit,
   onOpenTimeline,
   onOpenNotes,
+  onOpenFollowUp,
   onOpenFolder,
   onOpenWhatsApp,
   onOpenEmail,
@@ -570,12 +563,8 @@ export function LeadCard({
   const { theme } = useTheme();
   const isLight = theme === 'light';
 
-  const [inlineEditing, setInlineEditing] = React.useState<'stage' | 'responsible' | 'temperature' | 'followup_date' | null>(null);
-  const [quickDate, setQuickDate] = React.useState('');
-  const [quickTime, setQuickTime] = React.useState('09:00');
 
   const showCityAndType = viewConfig?.showCityAndType ?? true;
-  const showStage = viewConfig?.showStage ?? true;
   const showResponsible = viewConfig?.showResponsible ?? true;
   const showNextContact = viewConfig?.showNextContact ?? true;
   const showQuickActions = viewConfig?.showQuickActions ?? true;
@@ -644,7 +633,7 @@ export function LeadCard({
         <div className={`flex items-start justify-between gap-2 pb-2 mb-2 border-b ${isLight ? 'border-black/10' : 'border-white/15'}`}>
           <div className="flex items-center gap-1.5 flex-1 min-w-0">
             <h3
-              onClick={onOpenView}
+              onClick={onOpenTimeline || onOpenView}
               className={`text-sm transition-colors cursor-pointer leading-snug line-clamp-1 truncate ${
                 isLight
                   ? 'font-bold text-slate-950 hover:text-indigo-700'
@@ -731,79 +720,7 @@ export function LeadCard({
           </div>
         )}
 
-        {/* Stage Badge with Pencil Quick-Edit */}
-        {showStage && (
-          <div className="mb-2" data-help-id="pipeline-stage">
-            {inlineEditing === 'stage' && stages.length > 0 ? (
-              <select
-                autoFocus
-                value={lead.current_stage_id || stages[0]?.id || ''}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onChange={(e) => {
-                  const newStage = e.target.value;
-                  if (newStage && newStage !== lead.current_stage_id) {
-                    onQuickUpdate?.(lead.id, 'stage', newStage);
-                  }
-                  setInlineEditing(null);
-                }}
-                onBlur={() => setInlineEditing(null)}
-                className="w-full px-2 py-1 bg-slate-900 border border-indigo-500 rounded-lg text-[11px] text-slate-100 focus:outline-none"
-              >
-                {stages.map((stg) => (
-                  <option key={stg.id} value={stg.id}>
-                    {stg.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="flex items-center gap-1">
-                {(() => {
-                  const stageVis = getStageVisualConfig(lead.current_stage_id, stageName);
-                  return (
-                    <span
-                      className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold truncate max-w-[200px] border shadow-2xs"
-                      style={
-                        isLight
-                          ? {
-                              backgroundColor: stageVis.lightBadgeBg,
-                              color: stageVis.lightBadgeText,
-                              borderColor: stageVis.lightBadgeBorder,
-                            }
-                          : {
-                              backgroundColor: stageVis.darkBadgeBg,
-                              color: stageVis.darkBadgeText,
-                              borderColor: stageVis.darkBadgeBorder,
-                            }
-                      }
-                    >
-                      {stageName}
-                    </span>
-                  );
-                })()}
-                {onQuickUpdate && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setInlineEditing('stage');
-                    }}
-                    title="Editar estágio do funil"
-                    className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                      isLight
-                        ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
-                        : 'text-slate-300/80 hover:text-white hover:bg-black/30'
-                    }`}
-                  >
-                    <EditIcon className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Responsible with Persona Icon and Pencil Quick-Edit */}
+        {/* Responsible with Persona Icon and shortcut to canonical edit */}
         {showResponsible && (
           <div className="flex items-center gap-1.5 mb-2" title={`Responsável: ${responsibleName}`}>
             <div
@@ -818,133 +735,69 @@ export function LeadCard({
               </svg>
             </div>
 
-            {inlineEditing === 'responsible' && profiles.length > 0 ? (
-              <select
-                autoFocus
-                value={lead.responsible_user_id || profiles[0]?.id || ''}
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                onChange={(e) => {
-                  const newResp = e.target.value;
-                  if (newResp && newResp !== lead.responsible_user_id) {
-                    onQuickUpdate?.(lead.id, 'responsible', newResp);
-                  }
-                  setInlineEditing(null);
-                }}
-                onBlur={() => setInlineEditing(null)}
-                className="px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none max-w-[150px]"
+            <div className="flex items-center gap-1 min-w-0">
+              <span
+                onClick={onOpenEdit}
+                className={`text-[11px] truncate max-w-[150px] cursor-pointer hover:underline ${
+                  isLight ? 'text-slate-900 font-medium' : 'text-slate-200'
+                }`}
+                title="Clique para editar responsável no condomínio"
               >
-                {profiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.full_name || 'Usuário'}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="flex items-center gap-1 min-w-0">
-                <span className={`text-[11px] truncate max-w-[150px] ${isLight ? 'text-slate-900 font-medium' : 'text-slate-200'}`}>
-                  {responsibleName}
-                </span>
-                {onQuickUpdate && (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setInlineEditing('responsible');
-                    }}
-                    title="Alterar responsável"
-                    className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                      isLight
-                        ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
-                        : 'text-slate-300/80 hover:text-white hover:bg-black/30'
-                    }`}
-                  >
-                    <EditIcon className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-            )}
+                {responsibleName}
+              </span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenEdit();
+                }}
+                title="Editar condomínio e responsável"
+                className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                  isLight
+                    ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
+                    : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                }`}
+              >
+                <EditIcon className="w-3 h-3" />
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Operational Follow-up Row */}
+        {/* Operational Follow-up Row with canonical modal trigger */}
         {showNextContact && (
           <div className="pt-1.5 text-[11px]">
-            {inlineEditing === 'followup_date' ? (
-              <div
-                onClick={(e) => e.stopPropagation()}
-                onMouseDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1 bg-slate-900 p-1.5 rounded-xl border border-indigo-500/80 shadow-md"
-              >
-                <input
-                  type="date"
-                  autoFocus
-                  value={quickDate}
-                  onChange={(e) => setQuickDate(e.target.value)}
-                  className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-100 focus:outline-none flex-1 min-w-0"
-                />
-                <input
-                  type="time"
-                  value={quickTime}
-                  onChange={(e) => setQuickTime(e.target.value)}
-                  className="px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded text-[11px] text-slate-100 focus:outline-none w-16"
-                />
+            <div className="flex items-center justify-between">
+              <span className={isLight ? 'text-slate-800 font-medium' : 'text-slate-200/90'}>Próximo contato</span>
+              <div className="flex items-center gap-1 min-w-0">
+                <span
+                  onClick={onOpenFollowUp || onOpenNotes}
+                  className={`${getFollowUpBadgeThemedClass()} flex items-center gap-1 cursor-pointer hover:opacity-90 truncate max-w-[170px]`}
+                  title="Clique para agendar ou registrar follow-up no fluxo canônico"
+                >
+                  <span className="truncate">{followUpInfo.displayFull || followUpInfo.label}</span>
+                </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (quickDate && onQuickUpdate) {
-                      onQuickUpdate(lead.id, 'follow_up_date', `${quickDate}T${quickTime || '09:00'}:00`);
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (onOpenFollowUp) {
+                      onOpenFollowUp();
+                    } else {
+                      onOpenNotes();
                     }
-                    setInlineEditing(null);
                   }}
-                  className="px-2 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
-                  title="Salvar data e horário"
+                  title="Agendar ou registrar follow-up"
+                  className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
+                    isLight
+                      ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
+                      : 'text-slate-300/80 hover:text-white hover:bg-black/30'
+                  }`}
                 >
-                  ✓
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInlineEditing(null)}
-                  className="p-1 rounded text-slate-400 hover:text-slate-100 hover:bg-slate-800 text-[10px] cursor-pointer shrink-0"
-                  title="Cancelar"
-                >
-                  ✕
+                  <EditIcon className="w-3 h-3" />
                 </button>
               </div>
-            ) : (
-              <div className="flex items-center justify-between">
-                <span className={isLight ? 'text-slate-800 font-medium' : 'text-slate-200/90'}>Próximo contato</span>
-                <div className="flex items-center gap-1 min-w-0">
-                  <span
-                    onClick={onOpenNotes}
-                    className={`${getFollowUpBadgeThemedClass()} flex items-center gap-1 cursor-pointer hover:opacity-90 truncate max-w-[170px]`}
-                    title="Clique para agendar ou editar follow-up"
-                  >
-                    <span className="truncate">{followUpInfo.displayFull || followUpInfo.label}</span>
-                  </span>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const initialDate = followUpInfo.rawDate
-                        ? toDateInputValue(followUpInfo.rawDate)
-                        : toDateInputValue(new Date().toISOString());
-                      setQuickDate(initialDate);
-                      setQuickTime(followUpInfo.time || '09:00');
-                      setInlineEditing('followup_date');
-                    }}
-                    title="Alterar data e horário de próximo contato"
-                    className={`p-0.5 rounded transition-colors cursor-pointer shrink-0 ${
-                      isLight
-                        ? 'text-slate-700 hover:text-indigo-700 hover:bg-white/70'
-                        : 'text-slate-300/80 hover:text-white hover:bg-black/30'
-                    }`}
-                  >
-                    <EditIcon className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         )}
 
