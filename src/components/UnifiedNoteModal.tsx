@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase.ts';
 import {
   syncInteractionCalendar,
   updateGoogleCalendarInteraction,
+  syncInteractionWithControlledRetry,
 } from '../lib/googleCalendarClient.ts';
 import { useCRM, type Lead } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
@@ -125,6 +126,62 @@ function resolveStepNumber(initialStep?: InitialStepType, isEditing?: boolean): 
   if (initialStep === 'responsible') return 4;
   if (isEditing) return 2; // Edição canônica abre diretamente nas anotações
   return 1;
+}
+
+function HelpTooltip({ content, label = 'Mais informações' }: { content: React.ReactNode; label?: string }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative inline-flex items-center" ref={containerRef}>
+      <button
+        type="button"
+        onClick={() => setOpen((prev) => !prev)}
+        aria-label={label}
+        aria-expanded={open}
+        className="w-4 h-4 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white border border-slate-700/80 inline-flex items-center justify-center text-[10px] font-bold cursor-pointer transition-colors focus:outline-none focus:ring-1 focus:ring-indigo-500"
+      >
+        ?
+      </button>
+      {open && (
+        <div
+          role="tooltip"
+          className="absolute z-50 left-1/2 -translate-x-1/2 bottom-full mb-2 w-64 sm:w-72 p-3 bg-slate-900 border border-slate-700 rounded-xl shadow-xl text-xs text-slate-200 leading-relaxed animate-in fade-in zoom-in-95 duration-150"
+        >
+          <div className="flex items-start justify-between gap-2 mb-1">
+            <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-400">Dica contextual</span>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-slate-400 hover:text-white text-xs leading-none p-0.5 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+          <div>{content}</div>
+          <div className="absolute left-1/2 -bottom-1 -translate-x-1/2 w-2 h-2 bg-slate-900 border-r border-b border-slate-700 rotate-45" />
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function UnifiedNoteModal({
@@ -373,16 +430,42 @@ export default function UnifiedNoteModal({
 
           // ETAPA 2: GOOGLE CALENDAR (apenas se houver agendamento)
           const hasFollowUp = (!!nextFollowUpAtIso) || (!!savedData?.next_follow_up_at);
+          let calendarStatus: 'synced' | 'not_connected' | 'reauthorization_required' | 'not_scheduled' | 'failed' = 'not_scheduled';
+
           if (hasFollowUp && savedData.id) {
             setSavePhase('syncing_calendar');
             try {
-              await updateGoogleCalendarInteraction(savedData.id);
+              const syncResult = await syncInteractionWithControlledRetry(savedData.id);
+              calendarStatus = syncResult.calendar_status;
+              if (syncResult.googleEventId) {
+                upsertInteractionLocally({
+                  ...savedData,
+                  interaction_type: formType || savedData.interaction_type,
+                  next_follow_up_date: nextFollowUpDateOnly || savedData.next_follow_up_date,
+                  next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
+                  google_event_id: syncResult.googleEventId,
+                });
+              }
             } catch (syncErr: any) {
               console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de update:', syncErr?.message);
+              calendarStatus = 'failed';
+            }
+          }
+
+          if (onSuccessFeedback) {
+            if (!hasFollowUp) {
+              onSuccessFeedback('Nota atualizada com sucesso!');
+            } else if (calendarStatus === 'synced') {
+              onSuccessFeedback('Nota atualizada e sincronizada com o Google Calendar!');
+            } else if (calendarStatus === 'not_connected') {
+              onSuccessFeedback('A nota foi atualizada no Triverus, mas o Google Calendar não está conectado.');
+            } else if (calendarStatus === 'reauthorization_required') {
+              onSuccessFeedback('A nota foi atualizada no Triverus, mas o Google Calendar requer reautorização de conta.');
+            } else {
+              onSuccessFeedback('A nota foi salva no Triverus, mas o Google Calendar não foi sincronizado.');
             }
           }
         }
-        if (onSuccessFeedback) onSuccessFeedback('Nota atualizada com sucesso!');
       } else {
         const savedData = await saveInteractionToSupabase('insert', payload);
         if (savedData) {
@@ -399,21 +482,43 @@ export default function UnifiedNoteModal({
 
           // ETAPA 2: GOOGLE CALENDAR (apenas se houver agendamento)
           const hasFollowUp = (!!nextFollowUpAtIso) || (!!savedData?.next_follow_up_at);
+          let calendarStatus: 'synced' | 'not_connected' | 'reauthorization_required' | 'not_scheduled' | 'failed' = 'not_scheduled';
+
           if (hasFollowUp && savedData.id) {
             setSavePhase('syncing_calendar');
             try {
-              await syncInteractionCalendar(savedData.id);
+              const syncResult = await syncInteractionWithControlledRetry(savedData.id);
+              calendarStatus = syncResult.calendar_status;
+              if (syncResult.googleEventId) {
+                upsertInteractionLocally({
+                  ...savedData,
+                  interaction_type: formType || savedData.interaction_type,
+                  next_follow_up_date: nextFollowUpDateOnly || savedData.next_follow_up_date,
+                  next_follow_up_at: nextFollowUpAtIso || savedData.next_follow_up_at,
+                  google_event_id: syncResult.googleEventId,
+                });
+              }
             } catch (syncErr: any) {
               console.warn('[FOLLOWUP_GOOGLE_SYNC_RESULT] Exceção na chamada de sync:', syncErr?.message);
+              calendarStatus = 'failed';
             }
           }
-        }
-        if (onSuccessFeedback) {
-          onSuccessFeedback(
-            nextFollowUpAtIso
-              ? `Nota salva! Próximo contato (${formNextChannel}) agendado para ${formatDateBR(nextFollowUpAtIso)} às ${formNextFollowUpTime || '09:00'}.`
-              : 'Nota registrada com sucesso!'
-          );
+
+          if (onSuccessFeedback) {
+            if (!hasFollowUp) {
+              onSuccessFeedback('Nota registrada com sucesso!');
+            } else if (calendarStatus === 'synced') {
+              onSuccessFeedback(
+                `Nota salva e sincronizada com o Google Calendar! Próximo contato (${formNextChannel}) agendado para ${formatDateBR(nextFollowUpAtIso || savedData.next_follow_up_at)} às ${formNextFollowUpTime || '09:00'}.`
+              );
+            } else if (calendarStatus === 'not_connected') {
+              onSuccessFeedback('A nota foi salva no Triverus, mas o Google Calendar não está conectado.');
+            } else if (calendarStatus === 'reauthorization_required') {
+              onSuccessFeedback('A nota foi salva no Triverus, mas o Google Calendar requer reautorização de conta.');
+            } else {
+              onSuccessFeedback('A nota foi salva no Triverus, mas o Google Calendar não foi sincronizado.');
+            }
+          }
         }
       }
 
@@ -611,12 +716,19 @@ export default function UnifiedNoteModal({
                 <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-bold block mb-1">
                   Passo 3
                 </span>
-                <h3 className="text-lg sm:text-xl font-bold text-white leading-snug">
-                  Data do atendimento realizado
-                </h3>
-                <p className="text-xs text-indigo-300 bg-indigo-950/60 border border-indigo-800/50 p-2.5 rounded-xl mt-1.5 leading-relaxed">
-                  💡 <strong>Registro Histórico:</strong> Esta é a data em que o contato ocorreu (por padrão, <strong>Hoje</strong>). A data do próximo contato/follow-up futuro será definida no <strong>Passo 5</strong>.
-                </p>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg sm:text-xl font-bold text-white leading-snug">
+                    Data do atendimento realizado
+                  </h3>
+                  <HelpTooltip
+                    label="Informações sobre a data do atendimento"
+                    content={
+                      <span>
+                        <strong>Registro Histórico:</strong> Esta é a data em que o contato ocorreu (por padrão, <strong>Hoje</strong>). A data do próximo contato/follow-up futuro será definida no <strong>Passo 5</strong>.
+                      </span>
+                    }
+                  />
+                </div>
               </div>
 
               {/* Quick Date Buttons: Hoje, Ontem */}
@@ -803,11 +915,21 @@ export default function UnifiedNoteModal({
                 <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-bold block mb-1">
                   Passo 5
                 </span>
-                <h3 className="text-lg sm:text-xl font-bold text-white leading-snug">
-                  Quer agendar um próximo follow-up?
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg sm:text-xl font-bold text-white leading-snug">
+                    Quer agendar um próximo follow-up?
+                  </h3>
+                  <HelpTooltip
+                    label="Informações sobre o follow-up"
+                    content={
+                      <span>
+                        Ao agendar, a data fica registrada na aba <strong>Follow-ups</strong> e é sincronizada com o <strong>Google Calendar</strong> do atendente responsável.
+                      </span>
+                    }
+                  />
+                </div>
                 <p className="text-xs text-slate-400 mt-1">
-                  Defina a data do próximo contato. Isso aparecerá na aba Follow-ups.
+                  Defina a data do próximo contato.
                 </p>
               </div>
 

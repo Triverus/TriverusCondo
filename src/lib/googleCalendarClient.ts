@@ -122,11 +122,17 @@ export async function callGoogleCalendarApi(
 
     let errorMessage: string | undefined = undefined;
     if (!response.ok) {
-      if (responseData?.message) {
+      if (responseData?.reason === 'google_calendar_not_connected') {
+        errorMessage = responseData?.message || 'Conta do Google Calendar não conectada.';
+      } else if (responseData?.reason === 'google_calendar_reauthorization_required') {
+        errorMessage = responseData?.message || 'Reautorização do Google Calendar necessária.';
+      } else if (responseData?.message) {
         errorMessage = responseData.message;
+      } else if (responseData?.error === 'unauthorized') {
+        errorMessage = 'Sessão expirada. Por favor, recarregue a página.';
       } else if (responseData?.error) {
-        errorMessage = responseData.error === 'unauthorized' ? 'Sessão expirada. Por favor, recarregue a página.' : responseData.error;
-      } else if (response.status === 401) {
+        errorMessage = responseData.error;
+      } else if (response.status === 401 && !responseData?.reason) {
         errorMessage = 'Sessão expirada. Por favor, recarregue a página.';
       } else {
         errorMessage = `HTTP ${response.status}`;
@@ -171,7 +177,152 @@ export async function deleteInteractionCalendar(interactionId: string) {
   });
 }
 
+export type CalendarStatus = 'synced' | 'not_connected' | 'reauthorization_required' | 'not_scheduled' | 'failed';
+
+export interface ControlledSyncResult {
+  calendar_status: CalendarStatus;
+  googleEventId?: string | null;
+  reason?: string;
+  message?: string;
+  raw?: any;
+}
+
+/**
+ * Sincronização canônica com 1 retry controlado para falhas transitórias.
+ * Inspeciona o resultado real e distingue 'synced', 'not_connected', 'reauthorization_required' e 'failed'.
+ */
+export async function syncInteractionWithControlledRetry(
+  interactionId: string
+): Promise<ControlledSyncResult> {
+  const isSuccessSynced = (r: GoogleCalendarApiResponse) =>
+    r.ok === true && r.data?.success === true && r.data?.synced !== false;
+
+  const extractReason = (r: GoogleCalendarApiResponse): string =>
+    r.data?.reason || r.data?.error || r.error || '';
+
+  // 1ª tentativa
+  let res = await syncInteractionCalendar(interactionId);
+
+  if (isSuccessSynced(res)) {
+    return {
+      calendar_status: 'synced',
+      googleEventId: res.data?.googleEventId || res.data?.google_event_id || null,
+      raw: res.data,
+    };
+  }
+
+  let reason = extractReason(res);
+
+  // Motivos NÃO recuperáveis: não tentar retry inútil
+  if (reason === 'google_calendar_not_connected') {
+    return {
+      calendar_status: 'not_connected',
+      reason,
+      message: 'Conta do Google Calendar não conectada.',
+      raw: res.data,
+    };
+  }
+
+  if (reason === 'google_calendar_reauthorization_required') {
+    return {
+      calendar_status: 'reauthorization_required',
+      reason,
+      message: 'Reautorização do Google Calendar necessária.',
+      raw: res.data,
+    };
+  }
+
+  if (reason === 'no_next_follow_up_at' || reason === 'no_responsible_user_id') {
+    return {
+      calendar_status: 'not_scheduled',
+      reason,
+      raw: res.data,
+    };
+  }
+
+  // Motivo recuperável: permitir NO MÁXIMO 1 retry controlado
+  const isRecoverable =
+    reason === 'token_expired' ||
+    reason === 'token_refresh_required' ||
+    reason === 'sync_exception' ||
+    reason === 'google_api_error' ||
+    reason === 'network_error' ||
+    !res.ok ||
+    res.status >= 500 ||
+    res.status === 401;
+
+  if (isRecoverable) {
+    console.log(`[GOOGLE_CALENDAR_CLIENT] Tentando 1 retry controlado para a interaction ${interactionId} (motivo inicial: ${reason})...`);
+
+    // Antes do retry, reler a interaction do Supabase.
+    // Se google_event_id já tiver sido preenchido (ex: race condition resolvida), NÃO criar outro evento.
+    try {
+      const { data: currentInteraction } = await supabase
+        .from('interactions')
+        .select('id, google_event_id')
+        .eq('id', interactionId)
+        .single();
+
+      if (currentInteraction?.google_event_id && currentInteraction.google_event_id.trim()) {
+        console.log(`[GOOGLE_CALENDAR_CLIENT] google_event_id já existente (${currentInteraction.google_event_id}). Cancelando novo sync.`);
+        return {
+          calendar_status: 'synced',
+          googleEventId: currentInteraction.google_event_id.trim(),
+        };
+      }
+    } catch (checkErr) {
+      console.warn('[GOOGLE_CALENDAR_CLIENT] Erro ao inspecionar interaction antes do retry:', checkErr);
+    }
+
+    // Se continuar NULL: tentar renovar sessão Supabase se foi 401 e repetir sync UMA única vez
+    if (res.status === 401) {
+      try {
+        await supabase.auth.refreshSession();
+      } catch {
+        // Ignora falha de refresh
+      }
+    }
+
+    res = await syncInteractionCalendar(interactionId);
+
+    if (isSuccessSynced(res)) {
+      return {
+        calendar_status: 'synced',
+        googleEventId: res.data?.googleEventId || res.data?.google_event_id || null,
+        raw: res.data,
+      };
+    }
+
+    reason = extractReason(res);
+    if (reason === 'google_calendar_not_connected') {
+      return {
+        calendar_status: 'not_connected',
+        reason,
+        message: 'Conta do Google Calendar não conectada.',
+        raw: res.data,
+      };
+    }
+    if (reason === 'google_calendar_reauthorization_required') {
+      return {
+        calendar_status: 'reauthorization_required',
+        reason,
+        message: 'Reautorização do Google Calendar necessária.',
+        raw: res.data,
+      };
+    }
+  }
+
+  // Falha definitiva
+  return {
+    calendar_status: 'failed',
+    reason: reason || 'sync_failed',
+    message: res.data?.message || res.error || 'A nota foi salva no Triverus, mas o Google Calendar não foi sincronizado.',
+    raw: res.data,
+  };
+}
+
 // Aliases para compatibilidade total com os componentes existentes
 export const syncGoogleCalendarInteraction = syncInteractionCalendar;
 export const updateGoogleCalendarInteraction = syncInteractionCalendar;
 export const deleteGoogleCalendarInteraction = deleteInteractionCalendar;
+

@@ -2533,10 +2533,22 @@ export default function LeadsModule({
           if (interaction?.google_event_id) {
             const result = await deleteInteractionCalendar(interactionId);
             if (!result.ok || result.data?.success === false) {
-              const errMsg = (result.error?.includes('401') || result.error?.includes('unauthorized'))
-                ? 'Sessão expirada. Por favor, recarregue a página.'
-                : (result.error || result.data?.message || 'Falha ao remover evento do Google Calendar.');
-              throw new Error(errMsg);
+              const isIgnorable =
+                result.data?.reason === 'no_google_event' ||
+                result.data?.already_missing === true;
+              if (!isIgnorable) {
+                let errMsg = result.data?.message || result.error;
+                if (result.data?.reason === 'google_calendar_not_connected') {
+                  errMsg = 'Conta do Google Calendar não conectada. Conecte sua agenda para remover o evento vinculado.';
+                } else if (result.data?.reason === 'google_calendar_reauthorization_required') {
+                  errMsg = 'Reautorização do Google Calendar necessária para excluir este evento.';
+                } else if ((result.error?.includes('401') || result.error?.includes('unauthorized')) && !result.data?.reason) {
+                  errMsg = 'Sessão expirada. Por favor, recarregue a página.';
+                } else if (!errMsg) {
+                  errMsg = 'Falha ao remover evento do Google Calendar.';
+                }
+                throw new Error(errMsg);
+              }
             }
           }
           const { error } = await supabase.from('interactions').delete().eq('id', interactionId);

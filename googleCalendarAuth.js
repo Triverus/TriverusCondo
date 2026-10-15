@@ -506,9 +506,10 @@ export async function updateGoogleCalendarEventForInteraction(interactionId) {
     });
     console.log('[FOLLOWUP_GOOGLE_UPDATE_RESULT]', {
       interaction_id: interactionId,
-      http_status: 401,
-      success: false,
-      error_code: err?.code || 'google_calendar_not_connected',
+      http_status: 200,
+      success: true,
+      synced: false,
+      reason: err?.code || 'google_calendar_not_connected',
     });
     return { synced: false, reason: err?.code || 'google_calendar_not_connected' };
   }
@@ -688,8 +689,21 @@ export async function deleteGoogleCalendarEventForInteraction(interactionId) {
   try {
     accessToken = await getValidGoogleAccessToken(interaction.responsible_user_id);
   } catch (err) {
-    console.warn('[GOOGLE_CALENDAR_DELETE] Falha ao obter token:', { interaction_id: interactionId, error: err?.code });
-    return { success: false, reason: err?.code || 'google_calendar_not_connected', status: 401 };
+    const reason = err?.code || 'google_calendar_not_connected';
+    console.warn('[GOOGLE_CALENDAR_DELETE] Bloqueando exclusão pois não há token Google válido para remover google_event_id:', {
+      interaction_id: interactionId,
+      reason,
+    });
+    return {
+      success: false,
+      deleted: false,
+      reason,
+      message:
+        reason === 'google_calendar_reauthorization_required'
+          ? 'Reautorização do Google Calendar necessária para excluir este evento.'
+          : 'Conta do Google Calendar não conectada. Conecte sua agenda para remover o evento vinculado.',
+      status: 401,
+    };
   }
 
   const googleEventId = interaction.google_event_id.trim();
