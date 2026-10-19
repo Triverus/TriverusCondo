@@ -567,43 +567,52 @@ app.get('/api/admin/users', requireAdminUser, async (req, res) => {
     authUsers.forEach((u) => allUserIds.add(u.id));
     profiles.forEach((p) => allUserIds.add(p.id));
 
-    const combinedList = Array.from(allUserIds).map((userId) => {
-      const authUser = authUsers.find((u) => u.id === userId);
-      const profile = profileMap.get(userId);
-      const perm = permMap.get(userId);
+    const combinedList = Array.from(allUserIds)
+      .map((userId) => {
+        const authUser = authUsers.find((u) => u.id === userId);
+        const profile = profileMap.get(userId);
+        const perm = permMap.get(userId);
 
-      const email = profile?.email || authUser?.email || '';
-      const fullName = profile?.full_name || authUser?.user_metadata?.full_name || email.split('@')[0] || 'Usuário';
-      const role = profile?.role || 'user';
-      const isActive = profile?.is_active !== undefined ? Boolean(profile.is_active) : true;
+        // Ocultar usuários excluídos / desligados do painel administrativo
+        const isDeletedAuth = Boolean(authUser?.user_metadata?.is_deleted);
+        const isDeletedProfile = Boolean(profile?.deleted_at);
+        if (isDeletedAuth || isDeletedProfile || (!authUser && profile && profile.is_active === false)) {
+          return null;
+        }
 
-      const isAdmin = role.toLowerCase() === 'admin' || role.toLowerCase() === 'administrador';
+        const email = profile?.email || authUser?.email || '';
+        const fullName = profile?.full_name || authUser?.user_metadata?.full_name || email.split('@')[0] || 'Usuário';
+        const role = profile?.role || 'user';
+        const isActive = profile?.is_active !== undefined ? Boolean(profile.is_active) : true;
 
-      return {
-        id: userId,
-        email,
-        full_name: fullName,
-        role: isAdmin ? 'admin' : 'user',
-        is_active: isActive,
-        created_at: profile?.created_at || authUser?.created_at || new Date().toISOString(),
-        last_sign_in_at: authUser?.last_sign_in_at || null,
-        permissions: perm ? {
-          can_manage_notes: Boolean(perm.can_manage_notes),
-          can_delete_notes: Boolean(perm.can_delete_notes),
-          can_manage_leads: Boolean(perm.can_manage_leads),
-          can_delete_leads: Boolean(perm.can_delete_leads),
-          can_change_stage: Boolean(perm.can_change_stage),
-          can_manage_contacts: Boolean(perm.can_manage_contacts),
-        } : {
-          can_manage_notes: true,
-          can_delete_notes: false,
-          can_manage_leads: true,
-          can_delete_leads: false,
-          can_change_stage: true,
-          can_manage_contacts: true,
-        },
-      };
-    });
+        const isAdmin = role.toLowerCase() === 'admin' || role.toLowerCase() === 'administrador';
+
+        return {
+          id: userId,
+          email,
+          full_name: fullName,
+          role: isAdmin ? 'admin' : 'user',
+          is_active: isActive,
+          created_at: profile?.created_at || authUser?.created_at || new Date().toISOString(),
+          last_sign_in_at: authUser?.last_sign_in_at || null,
+          permissions: perm ? {
+            can_manage_notes: Boolean(perm.can_manage_notes),
+            can_delete_notes: Boolean(perm.can_delete_notes),
+            can_manage_leads: Boolean(perm.can_manage_leads),
+            can_delete_leads: Boolean(perm.can_delete_leads),
+            can_change_stage: Boolean(perm.can_change_stage),
+            can_manage_contacts: Boolean(perm.can_manage_contacts),
+          } : {
+            can_manage_notes: true,
+            can_delete_notes: false,
+            can_manage_leads: true,
+            can_delete_leads: false,
+            can_change_stage: true,
+            can_manage_contacts: true,
+          },
+        };
+      })
+      .filter((u) => u !== null);
 
     return res.json({ users: combinedList });
   } catch (err) {
@@ -974,6 +983,226 @@ app.post('/api/admin/reset-password', requireAdminUser, async (req, res) => {
     return res.status(400).json({ error: err?.message || 'Falha ao gerar link de recuperação.' });
   }
 });
+
+// 7. Exclusão definitiva de usuário e desligamento de funcionário
+async function handleDeleteUser(req, res) {
+  const supabaseAdmin = getAdminSupabaseClient();
+  const adminScopedClient = req.adminScopedClient;
+  const currentAdminUser = req.adminUser;
+  if (!supabaseAdmin || !adminScopedClient || !currentAdminUser) {
+    return res.status(500).json({ error: 'Serviço administrativo indisponível.' });
+  }
+
+  const targetId = (req.params.id || req.body?.id || '').trim();
+  if (!targetId) {
+    return res.status(400).json({ error: 'ID do usuário não fornecido.' });
+  }
+
+  // 1. Impedir exclusão da própria conta autenticada
+  if (currentAdminUser.id === targetId) {
+    return res.status(400).json({
+      error: 'Operação não permitida: não é possível excluir a sua própria conta autenticada.',
+    });
+  }
+
+  try {
+    // 2. Buscar perfil do usuário no banco
+    const { data: targetProfile } = await adminScopedClient
+      .from('profiles')
+      .select('*')
+      .eq('id', targetId)
+      .maybeSingle();
+
+    // Buscar dados no Auth Admin
+    const { data: authUserData } = await supabaseAdmin.auth.admin.getUserById(targetId);
+    const targetAuthUser = authUserData?.user || null;
+
+    if (!targetProfile && !targetAuthUser) {
+      return res.status(404).json({ error: 'Usuário não localizado no sistema.' });
+    }
+
+    const targetEmail = (targetProfile?.email || targetAuthUser?.email || '').trim().toLowerCase();
+    const confirmationEmail = (req.body?.confirmation_email || req.body?.email || '').trim().toLowerCase();
+
+    // 3. Exigir confirmação digitando o e-mail exato
+    if (!confirmationEmail || confirmationEmail !== targetEmail) {
+      return res.status(400).json({
+        error: `Confirmação inválida. É obrigatório digitar o e-mail exato do usuário (${targetEmail || 'cadastrado'}) para confirmar a exclusão.`,
+      });
+    }
+
+    // 4. Impedir exclusão do último administrador ativo
+    const isTargetAdmin =
+      targetProfile?.role === 'admin' ||
+      targetProfile?.role === 'administrador';
+
+    if (isTargetAdmin && targetProfile?.is_active !== false) {
+      const { data: activeAdmins, error: countErr } = await adminScopedClient
+        .from('profiles')
+        .select('id, role')
+        .in('role', ['admin', 'administrador'])
+        .eq('is_active', true);
+
+      if (!countErr && activeAdmins) {
+        const remainingAdmins = activeAdmins.filter((a) => a.id !== targetId);
+        if (remainingAdmins.length === 0) {
+          return res.status(400).json({
+            error: 'Operação não permitida: não é possível excluir o único administrador ativo do sistema.',
+          });
+        }
+      }
+    }
+
+    // 5. Tratar integração com Google Calendar (revogação e limpeza)
+    let googleCalendarRevoked = null;
+    let googleCalendarRevokeWarning = null;
+    try {
+      const { data: gcalConn } = await supabaseAdmin
+        .from('google_calendar_connections')
+        .select('*')
+        .eq('user_id', targetId)
+        .maybeSingle();
+
+      if (gcalConn) {
+        // Priorizar refresh_token (invalida a concessão inteira na Google). Se indisponível ou falhar, tenta access_token.
+        const candidateTokens = [];
+        if (gcalConn.refresh_token) candidateTokens.push(gcalConn.refresh_token);
+        if (gcalConn.access_token && !candidateTokens.includes(gcalConn.access_token)) {
+          candidateTokens.push(gcalConn.access_token);
+        }
+
+        for (const tokenToRevoke of candidateTokens) {
+          try {
+            const revokeRes = await fetch('https://oauth2.googleapis.com/revoke', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              body: new URLSearchParams({ token: tokenToRevoke }).toString(),
+            });
+
+            if (revokeRes.ok) {
+              googleCalendarRevoked = true;
+              googleCalendarRevokeWarning = null;
+              break; // Revogação confirmada na Google com sucesso
+            } else {
+              googleCalendarRevoked = false;
+              let errorDetail = '';
+              try {
+                const errData = await revokeRes.json();
+                if (errData?.error) {
+                  errorDetail = errData.error_description
+                    ? `${errData.error}: ${errData.error_description}`
+                    : errData.error;
+                }
+              } catch {
+                // Corpo da resposta não é JSON
+              }
+              googleCalendarRevokeWarning = `Status de revogação Google: ${revokeRes.status}${errorDetail ? ` (${errorDetail})` : ''}`;
+            }
+          } catch (revErr) {
+            googleCalendarRevoked = false;
+            googleCalendarRevokeWarning = revErr?.message || 'Falha ao contatar endpoint de revogação da Google.';
+          }
+        }
+
+        // Limpeza mandatória das credenciais locais no banco, mesmo se a revogação externa falhar
+        await supabaseAdmin.from('google_calendar_connections').delete().eq('user_id', targetId);
+      }
+    } catch (gcalErr) {
+      console.warn('[GCAL_DELETE_CLEANUP_WARN]', gcalErr);
+    }
+
+    // 6. Desvincular responsabilidade comercial sem apagar dados comerciais
+    // Leads: desvincula o responsável mantendo condomínios e dados intactos
+    await adminScopedClient
+      .from('leads')
+      .update({ responsible_user_id: null, updated_at: new Date().toISOString() })
+      .eq('responsible_user_id', targetId);
+
+    // Interações: desvincula responsabilidade comercial, preservando created_by_user_id e last_edited_by_user_id
+    await adminScopedClient
+      .from('interactions')
+      .update({ responsible_user_id: null })
+      .eq('responsible_user_id', targetId);
+
+    // 7. Remover permissões do usuário
+    await adminScopedClient
+      .from('user_permissions')
+      .delete()
+      .eq('user_id', targetId);
+
+    // 8. Atualizar perfil para desativado/arquivado mantendo o nome do autor histórico
+    const { error: profArchiveErr } = await adminScopedClient
+      .from('profiles')
+      .update({
+        is_active: false,
+        role: 'user',
+        deleted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', targetId);
+
+    if (profArchiveErr) {
+      // Se a coluna deleted_at ainda não existir no banco, atualiza sem ela
+      const { error: fallbackErr } = await adminScopedClient
+        .from('profiles')
+        .update({
+          is_active: false,
+          role: 'user',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', targetId);
+
+      if (fallbackErr) {
+        console.error('[ADMIN_DELETE_USER] Falha ao atualizar perfil para inativo:', fallbackErr);
+      }
+    }
+
+    // 9. Tentar exclusão definitiva no Supabase Auth Admin (service_role)
+    let authUserDeleted = false;
+    let authErrorMessage = null;
+
+    const { error: authDelErr } = await supabaseAdmin.auth.admin.deleteUser(targetId);
+    if (!authDelErr) {
+      authUserDeleted = true;
+    } else {
+      authErrorMessage = authDelErr.message;
+      console.warn('[AUTH_DELETE_CASCADE_BLOCKED]', authDelErr.message);
+
+      // Fallback robusto caso haja notas históricas protegidas por FK (antes da migration):
+      // Bloqueia permanentemente a conta, banindo o usuário por 100 anos e invalidando sessões
+      await supabaseAdmin.auth.admin.updateUserById(targetId, {
+        ban_duration: '876000h',
+        user_metadata: { is_deleted: true, deleted_at: new Date().toISOString() },
+      });
+      try {
+        await supabaseAdmin.auth.admin.signOut(targetId);
+      } catch {}
+    }
+
+    return res.json({
+      success: true,
+      authUserDeleted,
+      googleCalendarRevoked,
+      googleCalendarRevokeWarning,
+      message: authUserDeleted
+        ? 'Usuário excluído definitivamente do CRM com sucesso. Histórico comercial e autoria preservados.'
+        : 'Acesso do usuário revogado permanentemente e histórico comercial preservado.',
+      details: authErrorMessage
+        ? 'A conta foi permanentemente desativada e banida do Auth para salvaguardar a integridade referencial das notas históricas.'
+        : undefined,
+    });
+  } catch (err) {
+    console.error('[ADMIN_DELETE_USER_ERROR]', err);
+    return res.status(500).json({
+      error: err?.message || 'Falha ao processar exclusão de usuário.',
+    });
+  }
+}
+
+app.delete('/api/admin/users/:id', requireAdminUser, handleDeleteUser);
+app.post('/api/admin/users/:id/delete', requireAdminUser, handleDeleteUser);
+app.delete('/api/admin/delete-user', requireAdminUser, handleDeleteUser);
+app.post('/api/admin/delete-user', requireAdminUser, handleDeleteUser);
 
 
 app.post('/api/google/oauth/start', async (req, res) => {

@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase.ts';
 import type { UserProfile } from '../App.tsx';
 import ProfileAvatar from './ProfileAvatar.tsx';
 import { useUserPermissions, type UserPermissions } from '../lib/permissionsContext.tsx';
+import { useCRM } from '../lib/crmStore.tsx';
 
 interface AdminUserData {
   id: string;
@@ -32,6 +33,7 @@ export default function UsersManagementModule({
   onBackToPipeline,
 }: UsersManagementModuleProps) {
   const { isAdmin } = useUserPermissions();
+  const { refreshAll } = useCRM();
 
   const [users, setUsers] = useState<AdminUserData[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -39,6 +41,13 @@ export default function UsersManagementModule({
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'user'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+
+  // Modal de exclusão definitiva de usuário
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState<boolean>(false);
+  const [deleteTargetUser, setDeleteTargetUser] = useState<AdminUserData | null>(null);
+  const [deleteConfirmEmail, setDeleteConfirmEmail] = useState<string>('');
+  const [deleteLoading, setDeleteLoading] = useState<boolean>(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Modal de edição de usuário
   const [editingUser, setEditingUser] = useState<AdminUserData | null>(null);
@@ -353,6 +362,59 @@ export default function UsersManagementModule({
       setResetError(err?.message || 'Erro ao gerar link de acesso.');
     } finally {
       setResetSaving(false);
+    }
+  };
+
+  // Contagem de administradores ativos para impedir exclusão do último
+  const activeAdminCount = useMemo(() => {
+    return users.filter((u) => u.role === 'admin' && u.is_active).length;
+  }, [users]);
+
+  // Executar exclusão definitiva de usuário com validação de confirmação
+  const handleExecuteDeleteUser = async () => {
+    if (!deleteTargetUser) return;
+
+    if (deleteConfirmEmail.trim().toLowerCase() !== deleteTargetUser.email.trim().toLowerCase()) {
+      setDeleteError('O e-mail digitado não corresponde exatamente ao e-mail do usuário.');
+      return;
+    }
+
+    setDeleteLoading(true);
+    setDeleteError(null);
+
+    try {
+      const token = await getAccessToken();
+      if (!token) throw new Error('Sessão expirada. Faça login novamente.');
+
+      const res = await fetch(`/api/admin/users/${deleteTargetUser.id}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          confirmation_email: deleteConfirmEmail.trim().toLowerCase(),
+        }),
+      });
+
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error || 'Falha ao processar exclusão do usuário.');
+      }
+
+      showToast(body.message || 'Usuário excluído definitivamente com sucesso.');
+      setIsDeleteModalOpen(false);
+      setDeleteTargetUser(null);
+      setDeleteConfirmEmail('');
+      setEditingUser(null);
+      await fetchUsers();
+      if (refreshAll) {
+        await refreshAll(true, true);
+      }
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Erro ao processar exclusão de usuário.');
+    } finally {
+      setDeleteLoading(false);
     }
   };
 
@@ -821,7 +883,7 @@ export default function UsersManagementModule({
                 <div className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-slate-200">Status</span>
+                      <span className="font-semibold text-slate-200">Acesso ao CRM</span>
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
                           editIsActive
@@ -1019,6 +1081,45 @@ export default function UsersManagementModule({
                 )}
               </div>
 
+              {/* Seção Destrutiva / Desligamento: Excluir Usuário */}
+              {editingUser.id !== currentProfile.id && (
+                <div className="pt-4 mt-2 border-t border-rose-950/40 flex items-center justify-between gap-3">
+                  <div>
+                    <span className="block text-xs font-semibold text-rose-300">
+                      Excluir usuário
+                    </span>
+                    <span className="block text-[11px] text-slate-400">
+                      Remove a conta de acesso permanentemente, mantendo o histórico comercial e a autoria intactos.
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={editingUser.role === 'admin' && activeAdminCount <= 1}
+                    onClick={() => {
+                      setDeleteTargetUser(editingUser);
+                      setDeleteConfirmEmail('');
+                      setDeleteError(null);
+                      setIsDeleteModalOpen(true);
+                    }}
+                    title={
+                      editingUser.role === 'admin' && activeAdminCount <= 1
+                        ? 'Não é possível excluir o único administrador ativo do sistema'
+                        : 'Excluir usuário permanentemente'
+                    }
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors ${
+                      editingUser.role === 'admin' && activeAdminCount <= 1
+                        ? 'bg-slate-950 border-slate-800 text-slate-600 cursor-not-allowed opacity-50'
+                        : 'bg-rose-950/40 hover:bg-rose-900/60 border-rose-800/60 text-rose-300 hover:text-white cursor-pointer'
+                    }`}
+                  >
+                    <svg className="w-3.5 h-3.5 text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    <span>Excluir usuário</span>
+                  </button>
+                </div>
+              )}
+
               {/* Botões do Rodapé */}
               <div className="pt-4 border-t border-slate-800 flex items-center justify-end gap-3">
                 <button
@@ -1044,6 +1145,122 @@ export default function UsersManagementModule({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL: CONFIRMAR EXCLUSÃO DEFINITIVA DE USUÁRIO                       */}
+      {/* ===================================================================== */}
+      {isDeleteModalOpen && deleteTargetUser && (
+        <div
+          onClick={() => !deleteLoading && setIsDeleteModalOpen(false)}
+          className="fixed inset-0 z-60 overflow-y-auto bg-black/80 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-150"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="relative w-full max-w-md bg-slate-900 border border-rose-600/50 rounded-2xl shadow-2xl overflow-hidden my-6 flex flex-col"
+          >
+            {/* Header com ícone de alerta */}
+            <div className="px-5 py-4 border-b border-rose-900/50 bg-rose-950/40 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-rose-900/60 border border-rose-600/60 text-rose-300 flex items-center justify-center shrink-0">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm text-white">Exclusão Definitiva de Usuário</h3>
+                  <p className="text-[11px] text-rose-300/80">Desligamento e remoção permanente de conta</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={deleteLoading}
+                onClick={() => setIsDeleteModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer disabled:opacity-50"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              {/* Aviso de impacto */}
+              <div className="p-3.5 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2 text-slate-300 leading-relaxed">
+                <p className="font-semibold text-slate-200">
+                  Você está prestes a remover o acesso de <strong className="text-white">{deleteTargetUser.full_name || deleteTargetUser.email}</strong>:
+                </p>
+                <ul className="space-y-1.5 text-slate-400 pl-1">
+                  <li className="flex items-start gap-2">
+                    <span className="text-rose-400 font-bold">•</span>
+                    <span>A conta de acesso será removida permanentemente.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-rose-400 font-bold">•</span>
+                    <span>O usuário não poderá continuar utilizando o CRM.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-emerald-400 font-bold">•</span>
+                    <span>O histórico comercial — condomínios, notas, interações e movimentações — será preservado.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 font-bold">•</span>
+                    <span>A operação não poderá ser desfeita pelo painel.</span>
+                  </li>
+                </ul>
+              </div>
+
+              {/* Input de confirmação com e-mail exato */}
+              <div className="space-y-1.5">
+                <label className="block text-slate-300 font-semibold">
+                  Para confirmar, digite exatamente o e-mail do usuário (<span className="text-white font-mono">{deleteTargetUser.email}</span>):
+                </label>
+                <input
+                  type="email"
+                  value={deleteConfirmEmail}
+                  onChange={(e) => setDeleteConfirmEmail(e.target.value)}
+                  placeholder={deleteTargetUser.email}
+                  disabled={deleteLoading}
+                  className="w-full bg-slate-950 border border-slate-700 focus:border-rose-500 rounded-xl px-3.5 py-2.5 text-white placeholder-slate-600 text-xs focus:outline-none transition-colors"
+                />
+              </div>
+
+              {deleteError && (
+                <div className="p-3 bg-rose-950/70 border border-rose-500/60 rounded-xl text-rose-200 text-xs flex items-center gap-2">
+                  <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>{deleteError}</span>
+                </div>
+              )}
+
+              {/* Ações do Modal */}
+              <div className="pt-2 flex items-center justify-end gap-2.5 border-t border-slate-800">
+                <button
+                  type="button"
+                  disabled={deleteLoading}
+                  onClick={() => setIsDeleteModalOpen(false)}
+                  className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold cursor-pointer disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={deleteLoading || deleteConfirmEmail.trim().toLowerCase() !== deleteTargetUser.email.trim().toLowerCase()}
+                  onClick={handleExecuteDeleteUser}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-xl text-xs font-bold cursor-pointer transition-colors shadow-md flex items-center gap-2"
+                >
+                  {deleteLoading ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Excluindo...</span>
+                    </>
+                  ) : (
+                    'Confirmar Exclusão'
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
