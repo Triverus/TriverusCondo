@@ -113,6 +113,74 @@ function getOpenAIClient(): OpenAI | null {
   });
 }
 
+/**
+ * Retorna a URL canônica do frontend para redirecionamentos de autenticação (convite, recuperação).
+ * Produção: https://triveruscondo.com (ou definida via APP_URL / SITE_URL válida)
+ * Não aceita domínios temporários de preview (run.app, ais-dev, etc.)
+ * Desenvolvimento local: http://localhost:3000
+ */
+function getAppBaseUrl(): string {
+  const envUrl = (
+    process.env.APP_URL ||
+    loadedEnv.APP_URL ||
+    process.env.SITE_URL ||
+    process.env.FRONTEND_URL ||
+    ''
+  ).trim();
+
+  // Ignorar URLs temporárias de preview injetadas pela infraestrutura do Cloud Run / AI Studio
+  const isPreviewUrl =
+    envUrl.includes('run.app') ||
+    envUrl.includes('ais-dev') ||
+    envUrl.includes('ais-pre') ||
+    envUrl.includes('aistudio');
+
+  if (envUrl && !isPreviewUrl) {
+    return envUrl.replace(/\/+$/, '');
+  }
+
+  // Em desenvolvimento local puro (fora de containers Cloud Run)
+  if (process.env.NODE_ENV === 'development' && !process.env.K_SERVICE && !isPreviewUrl) {
+    return `http://localhost:${PORT || 3000}`;
+  }
+
+  // Fallback canônico final de produção
+  return 'https://triveruscondo.com';
+}
+
+/**
+ * Garante que action_links gerados pelo Supabase Auth Admin contenham a URL base de redirecionamento correta,
+ * prevenindo que links abram em localhost:3000 ou em domínios temporários de preview (run.app / ais-dev).
+ */
+function sanitizeActionLink(actionLink: string | null | undefined, targetBaseUrl: string): string | null {
+  if (!actionLink) return null;
+  try {
+    const parsed = new URL(actionLink);
+    const currentRedirect = parsed.searchParams.get('redirect_to');
+    const isBadRedirect =
+      !currentRedirect ||
+      currentRedirect.includes('localhost') ||
+      currentRedirect.includes('run.app') ||
+      currentRedirect.includes('ais-dev') ||
+      currentRedirect.includes('ais-pre') ||
+      currentRedirect !== targetBaseUrl;
+
+    if (isBadRedirect) {
+      parsed.searchParams.set('redirect_to', targetBaseUrl);
+    }
+
+    // Garantir formato percent-encoded padronizado: redirect_to=https%3A%2F%2Ftriveruscondo.com
+    const encodedTarget = encodeURIComponent(targetBaseUrl);
+    let finalUrl = parsed.toString();
+    if (finalUrl.includes(`redirect_to=${targetBaseUrl}`)) {
+      finalUrl = finalUrl.replace(`redirect_to=${targetBaseUrl}`, `redirect_to=${encodedTarget}`);
+    }
+    return finalUrl;
+  } catch {
+    return actionLink;
+  }
+}
+
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
@@ -548,10 +616,12 @@ async function handleInviteUserAdmin(req: express.Request, res: express.Response
   try {
     let createdUser: any = null;
     let inviteLink: string | null = null;
+    const appBaseUrl = getAppBaseUrl();
 
     // 1. Tenta enviar convite oficial por e-mail via Supabase Auth Admin (service_role)
     const { data: inviteRes, error: inviteErr } = await supabaseAdmin.auth.admin.inviteUserByEmail(cleanEmail, {
       data: { full_name: cleanName },
+      redirectTo: appBaseUrl,
     });
 
     if (!inviteErr && inviteRes?.user) {
@@ -560,14 +630,20 @@ async function handleInviteUserAdmin(req: express.Request, res: express.Response
       const { data: recData } = await supabaseAdmin.auth.admin.generateLink({
         type: 'recovery',
         email: cleanEmail,
+        options: {
+          redirectTo: appBaseUrl,
+        },
       });
-      inviteLink = recData?.properties?.action_link || null;
+      inviteLink = sanitizeActionLink(recData?.properties?.action_link, appBaseUrl);
     } else {
       // 2. Fallback: gera link de convite diretamente via Auth Admin (service_role)
       const { data: linkData, error: linkErr } = await supabaseAdmin.auth.admin.generateLink({
         type: 'invite',
         email: cleanEmail,
-        options: { data: { full_name: cleanName } },
+        options: {
+          data: { full_name: cleanName },
+          redirectTo: appBaseUrl,
+        },
       });
 
       if (linkErr) {
@@ -575,15 +651,18 @@ async function handleInviteUserAdmin(req: express.Request, res: express.Response
           const { data: recData, error: recErr } = await supabaseAdmin.auth.admin.generateLink({
             type: 'recovery',
             email: cleanEmail,
+            options: {
+              redirectTo: appBaseUrl,
+            },
           });
           if (recErr) throw recErr;
-          inviteLink = recData.properties?.action_link || null;
+          inviteLink = sanitizeActionLink(recData.properties?.action_link, appBaseUrl);
           createdUser = recData.user;
         } else {
           throw linkErr;
         }
       } else {
-        inviteLink = linkData.properties?.action_link || null;
+        inviteLink = sanitizeActionLink(linkData.properties?.action_link, appBaseUrl);
         createdUser = linkData.user;
       }
     }
@@ -855,14 +934,18 @@ app.post('/api/admin/reset-password', requireAdminUser, async (req, res) => {
     }
 
     if (targetEmail) {
+      const appBaseUrl = getAppBaseUrl();
       const { data: linkData, error } = await supabaseAdmin.auth.admin.generateLink({
         type: 'recovery',
         email: targetEmail.trim().toLowerCase(),
+        options: {
+          redirectTo: appBaseUrl,
+        },
       });
       if (error) throw error;
       return res.json({
         success: true,
-        recoveryLink: linkData?.properties?.action_link || null,
+        recoveryLink: sanitizeActionLink(linkData?.properties?.action_link, appBaseUrl),
         message: 'Link de recuperação de acesso gerado com sucesso.',
       });
     }
