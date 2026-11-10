@@ -20,8 +20,8 @@ END $$;
 
 -- 2. Tabela de Controle de Estado, Fila e Publicação Atômica do Índice
 CREATE TABLE IF NOT EXISTS public.auditoria_documentos_status (
-  document_id UUID PRIMARY KEY REFERENCES public.auditoria_documentos(id) ON DELETE CASCADE,
-  condo_id UUID NOT NULL REFERENCES public.leads(id) ON DELETE CASCADE,
+  document_id UUID PRIMARY KEY,
+  condo_id UUID NOT NULL,
   drive_file_id TEXT NOT NULL,
   drive_file_name TEXT NOT NULL,
   category TEXT NOT NULL,
@@ -38,7 +38,13 @@ CREATE TABLE IF NOT EXISTS public.auditoria_documentos_status (
   locked_by TEXT,
   last_indexed_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- Restrição Relacional Composta: Impede divergência entre condomínio e documento pai
+  CONSTRAINT fk_auditoria_doc_status_parent
+    FOREIGN KEY (document_id, condo_id)
+    REFERENCES public.auditoria_documentos(id, condo_id)
+    ON DELETE CASCADE
 );
 
 -- 3. Tabela Principal do Índice Documental Fragmentado (Chunks)
@@ -155,3 +161,29 @@ SELECT
   now()
 FROM public.auditoria_documentos
 ON CONFLICT (document_id) DO NOTHING;
+
+-- 9. Função Stored Procedure para Publicação Atômica de Versão do Índice Documental
+CREATE OR REPLACE FUNCTION public.publish_auditoria_document_index_version(
+  p_document_id UUID,
+  p_condo_id UUID,
+  p_new_version INTEGER
+)
+RETURNS VOID AS $$
+BEGIN
+  -- Atualizar a versão ativa na tabela de status
+  UPDATE public.auditoria_documentos_status
+  SET active_version = p_new_version,
+      indexing_status = 'indexed',
+      last_indexed_at = now(),
+      locked_at = NULL,
+      locked_by = NULL,
+      updated_at = now()
+  WHERE document_id = p_document_id AND condo_id = p_condo_id;
+
+  -- Remover versões antigas substituídas para evitar acúmulo no banco
+  DELETE FROM public.auditoria_documentos_index
+  WHERE document_id = p_document_id
+    AND condo_id = p_condo_id
+    AND indexing_version < p_new_version;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

@@ -439,6 +439,49 @@ const ModelModalContent: React.FC<ModelModalProps> = ({
             )}
           </div>
 
+          {/* Diagnostic Banners para Provedores sem Chave ou com Erro de Conexão */}
+          {(() => {
+            const hasMissingKey =
+              providerStatus.openai?.state === 'missing_key' || providerStatus.google?.state === 'missing_key';
+            const hasError =
+              providerStatus.openai?.state === 'network_error' || providerStatus.google?.state === 'network_error';
+
+            if (!hasMissingKey && !hasError) return null;
+
+            return (
+              <div className="mb-3 space-y-2 shrink-0">
+                {providerStatus.openai?.state === 'missing_key' && (
+                  <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        <strong>OpenAI:</strong> Chave <code className="font-mono bg-black/40 px-1 py-0.5 rounded text-amber-300">OPENAI_API_KEY</code> não configurada. Exibindo catálogo padrão homologado.
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {providerStatus.google?.state === 'missing_key' && (
+                  <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <KeyRound className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        <strong>Google Gemini:</strong> Chave <code className="font-mono bg-black/40 px-1 py-0.5 rounded text-amber-300">GEMINI_API_KEY</code> não configurada. Exibindo catálogo padrão homologado.
+                      </span>
+                    </div>
+                  </div>
+                )}
+                {(providerStatus.openai?.state === 'network_error' || providerStatus.google?.state === 'network_error') && (
+                  <div className="p-3 rounded-xl bg-rose-950/40 border border-rose-500/40 text-rose-200 text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>
+                      Falha de conexão ao consultar endpoint oficial do provedor. Exibindo modelos mantidos em cache.
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
           {/* Campo de Pesquisa */}
           <div className="relative pb-4 shrink-0">
             <Search className="w-4 h-4 text-slate-400 absolute left-4 top-3 pointer-events-none" />
@@ -490,16 +533,19 @@ const ModelModalContent: React.FC<ModelModalProps> = ({
                 const isSelected = selectedModelId?.toLowerCase() === model.id.toLowerCase();
                 const isGoogle = model.provider === 'google';
                 const compat = evaluateModelCompatibility(model, capabilities);
+                const isDiscontinued = model.status === 'unsupported';
 
                 return (
                   <div
                     key={model.id}
                     onClick={() => setSelectedModelId(model.id)}
                     className={`w-full p-4 rounded-2xl border transition-all flex items-center justify-between gap-4 cursor-pointer select-none text-left ${
-                      !compat.isCompatible
+                      isDiscontinued
+                        ? 'bg-rose-950/20 border-rose-500/30 opacity-60 hover:bg-rose-950/30'
+                        : !compat.isCompatible
                         ? isSelected
                           ? 'bg-amber-950/30 border-amber-500/70 shadow-[0_0_15px_rgba(245,158,11,0.2)]'
-                          : 'bg-[#242428]/80 border-amber-500/30 opacity-75 hover:bg-[#2b2b30]'
+                          : 'bg-[#242428]/80 border-amber-500/30 opacity-80 hover:bg-[#2b2b30]'
                         : isSelected
                         ? 'bg-[#303034] border-fuchsia-500 shadow-[0_0_15px_rgba(217,70,239,0.3)]'
                         : 'bg-[#242428] border-[#303034] hover:border-[#3f3f46] hover:bg-[#2b2b30]'
@@ -522,6 +568,14 @@ const ModelModalContent: React.FC<ModelModalProps> = ({
                             {model.displayName || model.id}
                           </span>
 
+                          {/* Category Badge */}
+                          {model.category === 'recommended' && !isDiscontinued && (
+                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-fuchsia-500/20 text-fuchsia-300 border border-fuchsia-500/40 inline-flex items-center gap-1">
+                              <Sparkles className="w-2.5 h-2.5 text-fuchsia-400" />
+                              Recomendado
+                            </span>
+                          )}
+
                           {/* Technical Tags */}
                           {model.supportsTools === true && (
                             <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-purple-500/10 text-purple-300 border border-purple-500/20">
@@ -538,14 +592,14 @@ const ModelModalContent: React.FC<ModelModalProps> = ({
                               PDFs
                             </span>
                           )}
-                          {model.supportsThinking && (
-                            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-fuchsia-500/10 text-fuchsia-300 border border-fuchsia-500/20">
-                              Raciocínio
-                            </span>
-                          )}
 
                           {/* Compatibility Badge */}
-                          {!compat.isCompatible && (
+                          {isDiscontinued ? (
+                            <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 inline-flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3 text-rose-400" />
+                              Descontinuado
+                            </span>
+                          ) : !compat.isCompatible ? (
                             <span
                               className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 inline-flex items-center gap-1"
                               title={compat.reason}
@@ -553,10 +607,17 @@ const ModelModalContent: React.FC<ModelModalProps> = ({
                               <AlertTriangle className="w-3 h-3 text-amber-400" />
                               Incompatível
                             </span>
+                          ) : (
+                            <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1">
+                              <Check className="w-3 h-3 text-emerald-400" />
+                              Compatível
+                            </span>
                           )}
                         </div>
                         <p className="text-xs text-slate-400 mt-0.5 line-clamp-1 leading-relaxed">
-                          {!compat.isCompatible ? (
+                          {isDiscontinued ? (
+                            <span className="text-rose-300/90 font-medium">Modelo descontinuado ou bloqueado no provedor oficial.</span>
+                          ) : !compat.isCompatible ? (
                             <span className="text-amber-300/90 font-medium">{compat.reason}</span>
                           ) : (
                             model.description || 'Modelo de inteligência artificial homologado pela plataforma.'
