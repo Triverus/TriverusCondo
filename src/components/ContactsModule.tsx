@@ -5,6 +5,7 @@ import type { UserProfile } from '../App.tsx';
 import { useCRM, type Contact, type Lead } from '../lib/crmStore.tsx';
 import { saveDraft, loadDraft, clearDraft, hasDraft } from '../lib/draftStorage.ts';
 import { useUserPermissions } from '../lib/permissionsContext.tsx';
+import { Skeleton } from './ui/Skeleton.tsx';
 
 interface ContactsModuleProps {
   currentProfile: UserProfile;
@@ -424,7 +425,7 @@ export default function ContactsModule({ currentProfile: _profile }: ContactsMod
             <button
               type="button"
               onClick={handleOpenCreate}
-              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs sm:text-sm font-semibold shadow-lg shadow-indigo-600/20 transition-all cursor-pointer flex items-center gap-2"
+              className="px-4 py-2.5 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-orange-500/10 transition-all cursor-pointer flex items-center gap-2"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" />
@@ -515,9 +516,36 @@ export default function ContactsModule({ currentProfile: _profile }: ContactsMod
 
       {/* Content */}
       {isInitialLoading && contacts.length === 0 ? (
-        <div className="mt-12 text-center py-16 bg-slate-900/40 border border-slate-800/60 rounded-2xl">
-          <div className="inline-block animate-spin w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full mb-3" />
-          <p className="text-sm text-slate-400">Carregando contatos...</p>
+        <div
+          aria-busy="true"
+          aria-label="Carregando contatos..."
+          className="mt-6 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 animate-in fade-in duration-150"
+        >
+          {Array.from({ length: 6 }).map((_, idx) => (
+            <div
+              key={idx}
+              className="bg-[#242428] border border-[#303034] rounded-2xl p-5 shadow-sm space-y-4 skeleton-shimmer select-none"
+            >
+              <div className="flex items-center gap-3">
+                <Skeleton variant="circular" width={44} height={44} theme="dark" />
+                <div className="space-y-1.5 flex-1">
+                  <Skeleton variant="rounded" width="60%" height={15} theme="dark" />
+                  <Skeleton variant="text" width="35%" height={11} theme="dark" />
+                </div>
+              </div>
+              <div className="space-y-2 p-3 rounded-xl bg-[#18181c] border border-[#303034]">
+                <Skeleton variant="text" width="50%" height={10} theme="dark" />
+                <Skeleton variant="text" width="70%" height={10} theme="dark" />
+              </div>
+              <div className="space-y-1.5 pt-1">
+                <Skeleton variant="text" width={110} height={9} theme="dark" />
+                <div className="flex gap-1.5">
+                  <Skeleton variant="rounded" width={75} height={18} theme="dark" />
+                  <Skeleton variant="rounded" width={90} height={18} theme="dark" />
+                </div>
+              </div>
+            </div>
+          ))}
         </div>
       ) : filteredContacts.length === 0 ? (
         <div className="mt-8 text-center py-16 bg-slate-900/40 border border-slate-800/60 rounded-3xl p-8">
@@ -538,7 +566,7 @@ export default function ContactsModule({ currentProfile: _profile }: ContactsMod
             <button
               type="button"
               onClick={handleOpenCreate}
-              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-md transition-all cursor-pointer"
+              className="px-4 py-2 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-xl text-xs font-bold shadow-md shadow-orange-500/10 transition-all cursor-pointer"
             >
               + Criar primeiro contato
             </button>
@@ -978,7 +1006,7 @@ export default function ContactsModule({ currentProfile: _profile }: ContactsMod
                   <button
                     type="button"
                     onClick={handleNextQuizStep}
-                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold cursor-pointer"
+                    className="px-5 py-2.5 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shadow-orange-500/10"
                   >
                     Avançar →
                   </button>

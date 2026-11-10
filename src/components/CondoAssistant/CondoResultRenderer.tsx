@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 
 export interface CondoResultItem {
-  type: 'lead' | 'contact' | 'whatsapp' | 'email' | 'link' | 'followup' | 'service' | 'help' | 'copyable_text';
+  type: 'lead' | 'contact' | 'whatsapp' | 'email' | 'link' | 'followup' | 'interaction' | 'service' | 'help' | 'copyable_text';
   id?: string;
   lead_id?: string;
   contact_id?: string;
@@ -18,6 +18,9 @@ export interface CondoResultItem {
   unit_count?: number | null;
   role_title?: string;
   interaction_type?: string;
+  interactionType?: string;
+  date?: string;
+  description?: string;
   notes?: string;
   next_follow_up_date_br?: string;
   status?: string;
@@ -415,6 +418,50 @@ function HelpResultCard({
   );
 }
 
+// Interaction Result Card (Compact, clean presentation matching Triverus design spec)
+function InteractionResultCard({
+  item,
+  onOpenLead,
+}: {
+  item: CondoResultItem;
+  onOpenLead?: (leadId: string) => void;
+}) {
+  const typeLabel = item.interactionType || item.interaction_type || 'Interação';
+  const dateLabel = item.date || item.next_follow_up_date_br || '';
+  const desc = item.description || item.notes || '';
+  const title = item.title || item.label || 'Registro de Interação';
+
+  return (
+    <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-white flex flex-col gap-1.5 shadow-xs hover:border-slate-700 transition-colors">
+      <div className="flex items-center justify-between gap-2 min-w-0">
+        <h4
+          onClick={() => item.lead_id && onOpenLead && onOpenLead(item.lead_id)}
+          className={`font-semibold text-xs text-slate-100 truncate ${
+            item.lead_id && onOpenLead ? 'cursor-pointer hover:text-[#FF6600]' : ''
+          }`}
+        >
+          {title}
+        </h4>
+        <span className="text-[10px] font-medium px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-300 border border-slate-700/60 shrink-0">
+          {typeLabel}
+        </span>
+      </div>
+
+      {dateLabel && (
+        <div className="text-[11px] text-slate-400 font-medium">
+          {dateLabel} {typeLabel ? `· ${typeLabel}` : ''}
+        </div>
+      )}
+
+      {desc && (
+        <p className="text-xs text-slate-300 leading-snug line-clamp-2 mt-0.5 font-normal">
+          {desc}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // Main Result Switcher Component
 export default function CondoResultRenderer({
   results,
@@ -429,9 +476,11 @@ export default function CondoResultRenderer({
   const remainingCount = results.length - 5;
 
   return (
-    <div className="flex flex-col gap-3 my-2 w-full">
+    <div className="flex flex-col gap-2 my-2 w-full">
       {displayedResults.map((item, idx) => {
         switch (item.type) {
+          case 'interaction':
+            return <InteractionResultCard key={idx} item={item} onOpenLead={onOpenLead} />;
           case 'whatsapp':
             return <WhatsAppResultCard key={idx} item={item} />;
           case 'email':

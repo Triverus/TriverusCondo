@@ -7,6 +7,8 @@ import { NotesIcon, EditIcon, TrashIcon } from './PipelineComponents.tsx';
 import { formatDateBR, parseCalendarDate } from '../lib/dateUtils.ts';
 import { renderFormattedTextWithLinks } from '../lib/linkUtils.tsx';
 import { useUserPermissions } from '../lib/permissionsContext.tsx';
+import { useTheme } from '../lib/themeContext.tsx';
+import { Skeleton, SkeletonTimelineItem } from './ui/Skeleton.tsx';
 
 export interface NotesTimelineModalProps {
   isOpen: boolean;
@@ -90,9 +92,12 @@ export default function NotesTimelineModal({
     serviceMap,
     getLeadServices,
     getPrimaryContactForLead,
+    isInitialLoading,
   } = useCRM();
 
   const { canManageNotes, canDeleteNotes } = useUserPermissions();
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
 
   const [activeTab, setActiveTab] = useState<'followups' | 'info'>('followups');
   const [isMaximized, setIsMaximized] = useState(false);
@@ -212,27 +217,37 @@ export default function NotesTimelineModal({
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-150"
+      className="fixed inset-0 z-50 overflow-y-auto bg-black/75 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 animate-in fade-in duration-150 font-['Roboto',sans-serif]"
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`relative w-full bg-slate-900 border border-slate-800 shadow-2xl flex flex-col transition-all duration-200 ${
+        className={`relative w-full border shadow-2xl flex flex-col transition-all duration-200 ${
+          isLight
+            ? 'bg-white border-[#D6DCE5] text-[#111827]'
+            : 'bg-[#141418] border-[#303034] text-white'
+        } ${
           isMaximized
             ? 'h-[96vh] max-w-[96vw] rounded-2xl'
             : 'max-w-xl max-h-[85vh] h-[640px] rounded-3xl my-auto'
         } overflow-hidden`}
       >
         {/* Header: Nome do condomínio, subtítulo, botões Maximizar e Fechar X */}
-        <div className="px-5 py-3.5 border-b border-slate-800/90 bg-slate-950 flex items-center justify-between shrink-0">
+        <div className={`px-5 py-3.5 border-b flex items-center justify-between shrink-0 ${
+          isLight ? 'bg-[#F8F9FB] border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+        }`}>
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-9 h-9 rounded-xl bg-orange-500/15 text-[#FF6600] border border-orange-500/30 flex items-center justify-center font-bold shrink-0">
               <NotesIcon className="w-4 h-4" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-sm text-white truncate max-w-[240px] sm:max-w-sm">
+              <h3 className={`font-bold text-sm truncate max-w-[240px] sm:max-w-sm ${
+                isLight ? 'text-[#111827]' : 'text-white'
+              }`}>
                 {lead.name}
               </h3>
-              <div className="flex items-center gap-2 text-[11px] text-slate-400 truncate">
+              <div className={`flex items-center gap-2 text-[11px] truncate ${
+                isLight ? 'text-[#667085]' : 'text-slate-400'
+              }`}>
                 <span>{lead.condominium_type || 'Residencial'}</span>
                 {lead.city && <span>· {lead.city}</span>}
                 {lead.administrator && <span>· {lead.administrator}</span>}
@@ -245,7 +260,11 @@ export default function NotesTimelineModal({
             <button
               type="button"
               onClick={() => setIsMaximized((prev) => !prev)}
-              className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
+                isLight
+                  ? 'text-[#667085] hover:text-[#111827] hover:bg-[#F1F3F5]'
+                  : 'text-slate-400 hover:text-white hover:bg-[#303034]'
+              }`}
               title={isMaximized ? 'Restaurar tamanho' : 'Maximizar tela'}
             >
               {isMaximized ? (
@@ -262,7 +281,11 @@ export default function NotesTimelineModal({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+              className={`p-1.5 rounded-xl transition-colors cursor-pointer ${
+                isLight
+                  ? 'text-[#667085] hover:text-[#111827] hover:bg-[#F1F3F5]'
+                  : 'text-slate-400 hover:text-white hover:bg-[#303034]'
+              }`}
               title="Fechar"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -273,25 +296,37 @@ export default function NotesTimelineModal({
         </div>
 
         {/* Chave Seletora Segmentada: [ Follow-ups ]  [ Informações ] */}
-        <div className="px-5 py-2.5 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between gap-3 shrink-0">
-          <div className="inline-flex p-1 bg-slate-900 border border-slate-800 rounded-xl" role="tablist">
+        <div className={`px-5 py-2.5 border-b flex items-center justify-between gap-3 shrink-0 ${
+          isLight ? 'bg-[#F8F9FB] border-[#D6DCE5]' : 'bg-[#141418] border-[#303034]'
+        }`}>
+          <div className={`inline-flex p-1 rounded-xl border ${
+            isLight ? 'bg-[#FFFFFF] border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+          }`} role="tablist">
             <button
               type="button"
               role="tab"
               aria-selected={activeTab === 'followups'}
               onClick={() => setActiveTab('followups')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-2 transition-all cursor-pointer ${
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
                 activeTab === 'followups'
-                  ? 'bg-slate-800 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? isLight
+                    ? 'bg-[#F1F3F5] text-[#111827] shadow-2xs font-bold'
+                    : 'bg-[#303034] text-[#FFFFFF] shadow-2xs font-bold'
+                  : isLight
+                    ? 'text-[#667085] hover:text-[#111827] hover:bg-[#F1F3F5]/50 font-medium'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#303034]/50 font-medium'
               }`}
             >
               <span>Follow-ups</span>
               <span
-                className={`px-1.5 py-0.2 rounded-md text-[10px] font-bold ${
+                className={`px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
                   activeTab === 'followups'
-                    ? 'bg-[#FF6600]/25 text-[#FF6600]'
-                    : 'bg-slate-800 text-slate-400'
+                    ? isLight
+                      ? 'bg-[#FF6600]/15 text-[#FF6600]'
+                      : 'bg-[#FF6600]/25 text-[#FF6600]'
+                    : isLight
+                      ? 'bg-[#F1F3F5] text-[#667085]'
+                      : 'bg-[#18181c] text-slate-400'
                 }`}
               >
                 {leadInteractions.length}
@@ -303,13 +338,30 @@ export default function NotesTimelineModal({
               role="tab"
               aria-selected={activeTab === 'info'}
               onClick={() => setActiveTab('info')}
-              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
                 activeTab === 'info'
-                  ? 'bg-slate-800 text-white shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
+                  ? isLight
+                    ? 'bg-[#F1F3F5] text-[#111827] shadow-2xs font-bold'
+                    : 'bg-[#303034] text-[#FFFFFF] shadow-2xs font-bold'
+                  : isLight
+                    ? 'text-[#667085] hover:text-[#111827] hover:bg-[#F1F3F5]/50 font-medium'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-[#303034]/50 font-medium'
               }`}
             >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg
+                className={`w-3.5 h-3.5 ${
+                  activeTab === 'info'
+                    ? isLight
+                      ? 'text-[#111827]'
+                      : 'text-white'
+                    : isLight
+                      ? 'text-[#667085]'
+                      : 'text-slate-400'
+                }`}
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
               <span>Informações</span>
@@ -317,12 +369,12 @@ export default function NotesTimelineModal({
           </div>
 
           {activeTab === 'followups' && leadInteractions.length > 0 && (
-            <span className="text-[11px] text-slate-400 hidden sm:inline">
+            <span className={`text-[11px] hidden sm:inline ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
               {leadInteractions.length} {leadInteractions.length === 1 ? 'interação registrada' : 'interações registradas'}
             </span>
           )}
           {activeTab === 'info' && (
-            <span className="text-[11px] text-slate-400 hidden sm:inline">
+            <span className={`text-[11px] hidden sm:inline ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
               Ficha do condomínio
             </span>
           )}
@@ -331,7 +383,9 @@ export default function NotesTimelineModal({
         {/* CORPO: ABA 1 (Follow-ups) OU ABA 2 (Informações) */}
         {activeTab === 'followups' ? (
           /* ABA FOLLOW-UPS: Timeline de interações (mais recente para a mais antiga) */
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 bg-slate-950/60 custom-scrollbar">
+          <div className={`flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 custom-scrollbar ${
+            isLight ? 'bg-[#F8F9FB]' : 'bg-[#141418]/60'
+          }`}>
             {deleteError && (
               <div className="p-3 bg-rose-950/90 border border-rose-600/70 rounded-xl flex items-center justify-between gap-3 text-rose-200 text-xs animate-in fade-in duration-150">
                 <div className="flex items-center gap-2">
@@ -351,13 +405,25 @@ export default function NotesTimelineModal({
               </div>
             )}
 
-            {leadInteractions.length === 0 ? (
+            {isInitialLoading && leadInteractions.length === 0 ? (
+              <div className="space-y-3.5 animate-in fade-in duration-150" aria-busy="true">
+                <div className="flex items-center justify-between pb-1 px-1">
+                  <span className={`text-xs font-medium ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
+                    Carregando histórico de follow-ups...
+                  </span>
+                  <span className="w-2.5 h-2.5 rounded-full border-2 border-[#FF6600] border-t-transparent animate-spin" />
+                </div>
+                {Array.from({ length: 3 }).map((_, idx) => (
+                  <SkeletonTimelineItem key={idx} theme={isLight ? 'light' : 'dark'} />
+                ))}
+              </div>
+            ) : leadInteractions.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-12">
                 <div className="w-12 h-12 rounded-2xl bg-orange-500/10 border border-orange-500/20 text-[#FF6600] flex items-center justify-center mb-3">
                   <NotesIcon className="w-6 h-6" />
                 </div>
-                <h4 className="font-bold text-white text-sm mb-1">Nenhum follow-up registrado</h4>
-                <p className="text-xs text-slate-400 max-w-xs mb-4">
+                <h4 className={`font-bold text-sm mb-1 ${isLight ? 'text-[#111827]' : 'text-white'}`}>Nenhum follow-up registrado</h4>
+                <p className={`text-xs max-w-xs mb-4 ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
                   Clique no botão "+" no rodapé para registrar a primeira interação com este condomínio.
                 </p>
                 {canManageNotes && (
@@ -401,14 +467,14 @@ export default function NotesTimelineModal({
                     const lastEditedDateFormatted = item.last_edited_at ? formatDateTimeBR(item.last_edited_at) : null;
 
                     const typeStyles: Record<string, { badge: string; border: string }> = {
-                      'WhatsApp': { badge: 'bg-emerald-950/90 text-emerald-300 border-emerald-700/50', border: 'border-emerald-500/30' },
-                      'Ligação': { badge: 'bg-indigo-950/90 text-indigo-300 border-indigo-700/50', border: 'border-indigo-500/30' },
-                      'E-mail': { badge: 'bg-sky-950/90 text-sky-300 border-sky-700/50', border: 'border-sky-500/30' },
-                      'Reunião': { badge: 'bg-violet-950/90 text-violet-300 border-violet-700/50', border: 'border-violet-500/30' },
-                      'Evento': { badge: 'bg-amber-950/90 text-amber-300 border-amber-700/50', border: 'border-amber-500/30' },
-                      'Redes Sociais': { badge: 'bg-pink-950/90 text-pink-300 border-pink-700/50', border: 'border-pink-500/30' },
-                      'Visita': { badge: 'bg-teal-950/90 text-teal-300 border-teal-700/50', border: 'border-teal-500/30' },
-                      'Outro': { badge: 'bg-slate-800 text-slate-300 border-slate-700', border: 'border-slate-700' },
+                      'WhatsApp': { badge: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300 border-emerald-500/30', border: 'border-emerald-500/30' },
+                      'Ligação': { badge: 'bg-indigo-500/15 text-indigo-600 dark:text-indigo-300 border-indigo-500/30', border: 'border-indigo-500/30' },
+                      'E-mail': { badge: 'bg-sky-500/15 text-sky-600 dark:text-sky-300 border-sky-500/30', border: 'border-sky-500/30' },
+                      'Reunião': { badge: 'bg-violet-500/15 text-violet-600 dark:text-violet-300 border-violet-500/30', border: 'border-violet-500/30' },
+                      'Evento': { badge: 'bg-amber-500/15 text-amber-600 dark:text-amber-300 border-amber-500/30', border: 'border-amber-500/30' },
+                      'Redes Sociais': { badge: 'bg-pink-500/15 text-pink-600 dark:text-pink-300 border-pink-500/30', border: 'border-pink-500/30' },
+                      'Visita': { badge: 'bg-teal-500/15 text-teal-600 dark:text-teal-300 border-teal-500/30', border: 'border-teal-500/30' },
+                      'Outro': { badge: 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-300 dark:border-slate-700', border: 'border-slate-300 dark:border-slate-700' },
                     };
 
                     const style = typeStyles[item.interaction_type || 'Outro'] || typeStyles['Outro'];
@@ -417,9 +483,11 @@ export default function NotesTimelineModal({
                     return (
                       <div
                         key={item.id}
-                        className={`w-full bg-slate-900 border ${style.border} rounded-2xl p-3.5 shadow-md space-y-2 relative group hover:border-slate-600 transition-all ${
-                          deletingId === item.id ? 'opacity-50 pointer-events-none' : ''
-                        }`}
+                        className={`w-full border ${style.border} rounded-2xl p-3.5 shadow-md space-y-2 relative group transition-all ${
+                          isLight
+                            ? 'bg-white border-[#D6DCE5] hover:border-slate-400'
+                            : 'bg-[#242428] border-[#303034] hover:border-slate-600'
+                        } ${deletingId === item.id ? 'opacity-50 pointer-events-none' : ''}`}
                       >
                         {isConfirmingDelete ? (
                           <div className="p-2.5 bg-rose-950/90 border border-rose-600/70 rounded-xl flex items-center justify-between gap-2 animate-in fade-in duration-150">
@@ -448,20 +516,22 @@ export default function NotesTimelineModal({
                         ) : (
                           <>
                             {/* Cabeçalho da nota: Canal + Atendente + Horário + Botões Editar e Excluir */}
-                            <div className="flex items-center justify-between text-xs pb-1.5 border-b border-slate-800/60">
+                            <div className={`flex items-center justify-between text-xs pb-1.5 border-b ${
+                              isLight ? 'border-[#D6DCE5]' : 'border-slate-800/60'
+                            }`}>
                               <div className="flex items-center gap-2">
                                 <span className={`px-2.5 py-0.5 rounded-lg border text-[11px] font-bold ${style.badge}`}>
                                   {item.interaction_type || 'Contato'}
                                 </span>
                                 {item.responsible_user_id && (
-                                  <span className="text-[11px] text-slate-400 font-medium" title="Responsável Comercial">
+                                  <span className={`text-[11px] font-medium ${isLight ? 'text-[#667085]' : 'text-slate-400'}`} title="Responsável Comercial">
                                     Resp: {respName}
                                   </span>
                                 )}
                               </div>
 
                               <div className="flex items-center gap-2">
-                                <span className="text-[11px] text-slate-500 font-mono mr-1">
+                                <span className={`text-[11px] font-mono mr-1 ${isLight ? 'text-[#667085]' : 'text-slate-500'}`}>
                                   {formatTimeBR(item.occurred_at)}
                                 </span>
 
@@ -480,7 +550,9 @@ export default function NotesTimelineModal({
                                         }}
                                         title="Editar nota"
                                         aria-label="Editar nota"
-                                        className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors cursor-pointer"
+                                        className={`p-1 rounded-lg transition-colors cursor-pointer ${
+                                          isLight ? 'text-slate-500 hover:text-[#111827] hover:bg-slate-100' : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                                        }`}
                                       >
                                         <EditIcon className="w-3.5 h-3.5" />
                                       </button>
@@ -504,30 +576,38 @@ export default function NotesTimelineModal({
 
                             {/* Conteúdo da anotação */}
                             {item.notes ? (
-                              <p className="text-xs text-slate-100 whitespace-pre-wrap leading-relaxed">
+                              <p className={`text-xs whitespace-pre-wrap leading-relaxed ${isLight ? 'text-[#111827]' : 'text-slate-100'}`}>
                                 {renderFormattedTextWithLinks(item.notes)}
                               </p>
                             ) : (
-                              <p className="text-xs text-slate-500 italic">
+                              <p className={`text-xs italic ${isLight ? 'text-[#667085]' : 'text-slate-500'}`}>
                                 Sem anotações de texto.
                               </p>
                             )}
 
                             {/* Próximo follow-up agendado */}
                             {item.next_follow_up_date && (
-                              <div className="pt-2 border-t border-slate-800/50 flex items-center justify-between">
-                                <div className="flex items-center gap-1.5 text-xs text-amber-300 bg-amber-950/40 border border-amber-800/40 px-2.5 py-1 rounded-xl font-medium">
+                              <div className={`pt-2 border-t flex items-center justify-between ${
+                                isLight ? 'border-[#D6DCE5]' : 'border-slate-800/50'
+                              }`}>
+                                <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-xl font-medium border ${
+                                  isLight
+                                    ? 'text-amber-800 bg-amber-50 border-amber-200'
+                                    : 'text-amber-300 bg-amber-950/40 border-amber-800/40'
+                                }`}>
                                   <span>📅 Próximo follow-up:</span>
                                   <strong className="font-bold">{formatDateBR(item.next_follow_up_date)}</strong>
                                 </div>
-                                <span className="text-[10px] text-slate-500">Agendado</span>
+                                <span className={`text-[10px] ${isLight ? 'text-[#667085]' : 'text-slate-500'}`}>Agendado</span>
                               </div>
                             )}
 
                             {/* Autoria Visual e Última Edição Humana (Auditada) */}
-                            <div className="pt-2 border-t border-slate-800/60 flex flex-wrap items-center justify-between gap-1.5 text-[11px] text-slate-400">
-                              <div className="flex items-center gap-1.5 text-slate-300">
-                                <svg className="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <div className={`pt-2 border-t flex flex-wrap items-center justify-between gap-1.5 text-[11px] ${
+                              isLight ? 'border-[#D6DCE5] text-[#667085]' : 'border-slate-800/60 text-slate-400'
+                            }`}>
+                              <div className={`flex items-center gap-1.5 ${isLight ? 'text-[#111827]' : 'text-slate-300'}`}>
+                                <svg className={`w-3.5 h-3.5 shrink-0 ${isLight ? 'text-[#667085]' : 'text-slate-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                                 </svg>
                                 <span>
@@ -538,7 +618,7 @@ export default function NotesTimelineModal({
                               </div>
 
                               {lastEditedDateFormatted && (
-                                <div className="flex items-center gap-1 text-[10px] text-slate-400 italic">
+                                <div className={`flex items-center gap-1 text-[10px] italic ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
                                   <span>•</span>
                                   <span>
                                     {editorName
@@ -559,16 +639,43 @@ export default function NotesTimelineModal({
           </div>
         ) : (
           /* ABA INFORMAÇÕES: Ficha interna organizada por seções lógicas */
-          <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 bg-slate-950/60 custom-scrollbar animate-in fade-in duration-150">
-            {!hasAnyInfo ? (
+          <div className={`flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 custom-scrollbar animate-in fade-in duration-150 ${
+            isLight ? 'bg-[#F8F9FB]' : 'bg-[#141418]/60'
+          }`}>
+            {isInitialLoading && !hasAnyInfo ? (
+              <div className="space-y-4 animate-in fade-in duration-150" aria-busy="true">
+                <div className="flex items-center justify-between pb-1 px-1">
+                  <span className={`text-xs font-medium ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
+                    Carregando ficha cadastral do condomínio...
+                  </span>
+                  <span className="w-2.5 h-2.5 rounded-full border-2 border-[#FF6600] border-t-transparent animate-spin" />
+                </div>
+                {Array.from({ length: 3 }).map((_, idx) => (
+                  <div
+                    key={idx}
+                    className={`border rounded-2xl p-4 shadow-sm skeleton-shimmer space-y-3 ${
+                      isLight ? 'bg-white border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+                    }`}
+                  >
+                    <Skeleton variant="rounded" width={110} height={14} theme={isLight ? 'light' : 'dark'} />
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                      <Skeleton variant="rounded" height={42} theme={isLight ? 'light' : 'dark'} />
+                      <Skeleton variant="rounded" height={42} theme={isLight ? 'light' : 'dark'} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : !hasAnyInfo ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-12">
-                <div className="w-12 h-12 rounded-2xl bg-slate-800 border border-slate-700 text-slate-400 flex items-center justify-center mb-3">
+                <div className={`w-12 h-12 rounded-2xl border flex items-center justify-center mb-3 ${
+                  isLight ? 'bg-slate-100 border-slate-200 text-slate-500' : 'bg-slate-800 border-slate-700 text-slate-400'
+                }`}>
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
                 </div>
-                <h4 className="font-bold text-white text-sm mb-1">Nenhuma informação adicional preenchida</h4>
-                <p className="text-xs text-slate-400 max-w-xs">
+                <h4 className={`font-bold text-sm mb-1 ${isLight ? 'text-[#111827]' : 'text-white'}`}>Nenhuma informação adicional preenchida</h4>
+                <p className={`text-xs max-w-xs ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
                   Os dados cadastrais deste condomínio ainda não foram informados.
                 </p>
               </div>
@@ -576,8 +683,12 @@ export default function NotesTimelineModal({
               <div className="space-y-5">
                 {/* 1. SEÇÃO: DADOS GERAIS */}
                 {generalData.length > 0 && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b border-slate-800/80">
+                  <div className={`border rounded-2xl p-4 shadow-sm ${
+                    isLight ? 'bg-white border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+                  }`}>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b ${
+                      isLight ? 'text-[#111827] border-[#D6DCE5]' : 'text-slate-200 border-slate-800/80'
+                    }`}>
                       <svg className="w-4 h-4 text-[#FF6600]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
                       </svg>
@@ -585,11 +696,13 @@ export default function NotesTimelineModal({
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {generalData.map((item) => (
-                        <div key={item.label} className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2.5">
-                          <span className="block text-[11px] font-medium text-slate-400">
+                        <div key={item.label} className={`border rounded-xl p-2.5 ${
+                          isLight ? 'bg-[#F1F3F5] border-[#D6DCE5]' : 'bg-[#18181c]/70 border-slate-800/80'
+                        }`}>
+                          <span className={`block text-[11px] font-medium ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
                             {item.label}
                           </span>
-                          <span className="block text-xs font-semibold text-white mt-0.5 break-words">
+                          <span className={`block text-xs font-semibold mt-0.5 break-words ${isLight ? 'text-[#111827]' : 'text-white'}`}>
                             {item.value}
                           </span>
                         </div>
@@ -600,8 +713,12 @@ export default function NotesTimelineModal({
 
                 {/* 2. SEÇÃO: COMERCIAL */}
                 {commercialData.length > 0 && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b border-slate-800/80">
+                  <div className={`border rounded-2xl p-4 shadow-sm ${
+                    isLight ? 'bg-white border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+                  }`}>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b ${
+                      isLight ? 'text-[#111827] border-[#D6DCE5]' : 'text-slate-200 border-slate-800/80'
+                    }`}>
                       <svg className="w-4 h-4 text-[#FF6600]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                       </svg>
@@ -609,11 +726,13 @@ export default function NotesTimelineModal({
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {commercialData.map((item) => (
-                        <div key={item.label} className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2.5">
-                          <span className="block text-[11px] font-medium text-slate-400">
+                        <div key={item.label} className={`border rounded-xl p-2.5 ${
+                          isLight ? 'bg-[#F1F3F5] border-[#D6DCE5]' : 'bg-[#18181c]/70 border-slate-800/80'
+                        }`}>
+                          <span className={`block text-[11px] font-medium ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
                             {item.label}
                           </span>
-                          <span className="block text-xs font-semibold text-white mt-0.5 break-words">
+                          <span className={`block text-xs font-semibold mt-0.5 break-words ${isLight ? 'text-[#111827]' : 'text-white'}`}>
                             {item.value}
                           </span>
                         </div>
@@ -624,8 +743,12 @@ export default function NotesTimelineModal({
 
                 {/* 3. SEÇÃO: CONTATO */}
                 {contactData.length > 0 && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b border-slate-800/80">
+                  <div className={`border rounded-2xl p-4 shadow-sm ${
+                    isLight ? 'bg-white border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+                  }`}>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b ${
+                      isLight ? 'text-[#111827] border-[#D6DCE5]' : 'text-slate-200 border-slate-800/80'
+                    }`}>
                       <svg className="w-4 h-4 text-[#FF6600]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                       </svg>
@@ -633,11 +756,13 @@ export default function NotesTimelineModal({
                     </h4>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {contactData.map((item) => (
-                        <div key={item.label} className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-2.5">
-                          <span className="block text-[11px] font-medium text-slate-400">
+                        <div key={item.label} className={`border rounded-xl p-2.5 ${
+                          isLight ? 'bg-[#F1F3F5] border-[#D6DCE5]' : 'bg-[#18181c]/70 border-slate-800/80'
+                        }`}>
+                          <span className={`block text-[11px] font-medium ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
                             {item.label}
                           </span>
-                          <span className="block text-xs font-semibold text-white mt-0.5 break-words">
+                          <span className={`block text-xs font-semibold mt-0.5 break-words ${isLight ? 'text-[#111827]' : 'text-white'}`}>
                             {item.value}
                           </span>
                         </div>
@@ -648,8 +773,12 @@ export default function NotesTimelineModal({
 
                 {/* 4. SEÇÃO: SERVIÇOS */}
                 {leadServices.length > 0 && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-sm">
-                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b border-slate-800/80">
+                  <div className={`border rounded-2xl p-4 shadow-sm ${
+                    isLight ? 'bg-white border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+                  }`}>
+                    <h4 className={`text-xs font-bold uppercase tracking-wider mb-3 flex items-center gap-2 pb-2 border-b ${
+                      isLight ? 'text-[#111827] border-[#D6DCE5]' : 'text-slate-200 border-slate-800/80'
+                    }`}>
                       <svg className="w-4 h-4 text-[#FF6600]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z" />
                       </svg>
@@ -659,7 +788,7 @@ export default function NotesTimelineModal({
                       {leadServices.map((srv) => (
                         <span
                           key={srv}
-                          className="px-3 py-1 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-300 text-xs font-semibold"
+                          className="px-3 py-1 rounded-xl bg-orange-500/10 border border-orange-500/30 text-orange-500 dark:text-orange-300 text-xs font-semibold"
                         >
                           {srv}
                         </span>
@@ -673,13 +802,19 @@ export default function NotesTimelineModal({
         )}
 
         {/* Rodapé Fixo: Navegação contextual na esquerda e o botão oficial "+" laranja (#FF6600) na direita */}
-        <div className="px-5 py-3 border-t border-slate-800/90 bg-slate-950 flex items-center justify-between shrink-0">
+        <div className={`px-5 py-3 border-t flex items-center justify-between shrink-0 ${
+          isLight ? 'bg-[#F8F9FB] border-[#D6DCE5]' : 'bg-[#242428] border-[#303034]'
+        }`}>
           <div>
             {activeTab === 'followups' ? (
               <button
                 type="button"
                 onClick={() => setActiveTab('info')}
-                className="px-3 py-1.5 rounded-xl border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                className={`px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  isLight
+                    ? 'border-[#D6DCE5] bg-white hover:bg-[#F1F3F5] text-[#111827]'
+                    : 'border-[#303034] bg-[#18181c] hover:bg-[#303034] text-slate-300 hover:text-white'
+                }`}
               >
                 <svg className="w-3.5 h-3.5 text-[#FF6600]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -690,7 +825,11 @@ export default function NotesTimelineModal({
               <button
                 type="button"
                 onClick={() => setActiveTab('followups')}
-                className="px-3 py-1.5 rounded-xl border border-slate-800 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                className={`px-3 py-1.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  isLight
+                    ? 'border-[#D6DCE5] bg-white hover:bg-[#F1F3F5] text-[#111827]'
+                    : 'border-[#303034] bg-[#18181c] hover:bg-[#303034] text-slate-300 hover:text-white'
+                }`}
               >
                 <NotesIcon className="w-3.5 h-3.5 text-[#FF6600]" />
                 <span>Voltar aos follow-ups</span>

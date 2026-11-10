@@ -4,20 +4,27 @@ export type ThemeMode = 'dark' | 'light';
 
 interface ThemeContextType {
   theme: ThemeMode;
+  crmTheme: ThemeMode;
   setTheme: (mode: ThemeMode) => void;
   toggleTheme: () => void;
+  setForcedTheme: (mode: ThemeMode | null) => void;
 }
 
 const THEME_STORAGE_KEY = 'triverus:theme';
 
 const ThemeContext = createContext<ThemeContextType>({
   theme: 'dark',
+  crmTheme: 'dark',
   setTheme: () => {},
   toggleTheme: () => {},
+  setForcedTheme: () => {},
 });
 
-export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [theme, setThemeState] = useState<ThemeMode>(() => {
+export const ThemeProvider: React.FC<{ forcedTheme?: ThemeMode | null; children: React.ReactNode }> = ({
+  forcedTheme = null,
+  children,
+}) => {
+  const [crmTheme, setCrmThemeState] = useState<ThemeMode>(() => {
     try {
       const stored = localStorage.getItem(THEME_STORAGE_KEY);
       if (stored === 'light' || stored === 'dark') {
@@ -27,20 +34,28 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return 'dark';
   });
 
+  const [activeForcedTheme, setActiveForcedTheme] = useState<ThemeMode | null>(forcedTheme);
+
+  useEffect(() => {
+    setActiveForcedTheme(forcedTheme);
+  }, [forcedTheme]);
+
+  const effectiveTheme: ThemeMode = activeForcedTheme || crmTheme;
+
   const setTheme = (mode: ThemeMode) => {
-    setThemeState(mode);
+    setCrmThemeState(mode);
     try {
       localStorage.setItem(THEME_STORAGE_KEY, mode);
     } catch {}
   };
 
   const toggleTheme = () => {
-    setTheme(theme === 'dark' ? 'light' : 'dark');
+    setTheme(crmTheme === 'dark' ? 'light' : 'dark');
   };
 
   useEffect(() => {
     const root = document.documentElement;
-    if (theme === 'light') {
+    if (effectiveTheme === 'light') {
       root.classList.remove('dark');
       root.classList.add('light');
       root.setAttribute('data-theme', 'light');
@@ -49,13 +64,22 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       root.classList.add('dark');
       root.setAttribute('data-theme', 'dark');
     }
-  }, [theme]);
+  }, [effectiveTheme]);
 
   return (
-    <ThemeContext.Provider value={{ theme, setTheme, toggleTheme }}>
+    <ThemeContext.Provider
+      value={{
+        theme: effectiveTheme,
+        crmTheme,
+        setTheme,
+        toggleTheme,
+        setForcedTheme: setActiveForcedTheme,
+      }}
+    >
       {children}
     </ThemeContext.Provider>
   );
 };
 
 export const useTheme = () => useContext(ThemeContext);
+

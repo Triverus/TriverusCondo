@@ -20,6 +20,8 @@ interface AdminUserData {
     can_delete_leads: boolean;
     can_change_stage: boolean;
     can_manage_contacts: boolean;
+    can_access_auditoria: boolean;
+    can_manage_auditoria: boolean;
   };
 }
 
@@ -32,7 +34,7 @@ export default function UsersManagementModule({
   currentProfile,
   onBackToPipeline,
 }: UsersManagementModuleProps) {
-  const { isAdmin } = useUserPermissions();
+  const { isAdmin, loading: permissionsLoading } = useUserPermissions();
   const { refreshAll } = useCRM();
 
   const [users, setUsers] = useState<AdminUserData[]>([]);
@@ -61,6 +63,8 @@ export default function UsersManagementModule({
     can_delete_leads: boolean;
     can_change_stage: boolean;
     can_manage_contacts: boolean;
+    can_access_auditoria: boolean;
+    can_manage_auditoria: boolean;
   }>({
     can_manage_notes: true,
     can_delete_notes: false,
@@ -68,6 +72,8 @@ export default function UsersManagementModule({
     can_delete_leads: false,
     can_change_stage: true,
     can_manage_contacts: true,
+    can_access_auditoria: false,
+    can_manage_auditoria: false,
   });
   const [editSaving, setEditSaving] = useState<boolean>(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -84,6 +90,8 @@ export default function UsersManagementModule({
     can_delete_leads: boolean;
     can_change_stage: boolean;
     can_manage_contacts: boolean;
+    can_access_auditoria: boolean;
+    can_manage_auditoria: boolean;
   }>({
     can_manage_notes: true,
     can_delete_notes: false,
@@ -91,6 +99,8 @@ export default function UsersManagementModule({
     can_delete_leads: false,
     can_change_stage: true,
     can_manage_contacts: true,
+    can_access_auditoria: false,
+    can_manage_auditoria: false,
   });
   const [inviteSaving, setInviteSaving] = useState<boolean>(false);
   const [inviteError, setInviteError] = useState<string | null>(null);
@@ -122,7 +132,7 @@ export default function UsersManagementModule({
     return data.session?.access_token || null;
   }, []);
 
-  // Carregar lista de usuários da API administrativa
+  // Carregar lista de usuários da API administrativa com fallback resiliente
   const fetchUsers = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -146,7 +156,60 @@ export default function UsersManagementModule({
       const data = await res.json();
       setUsers(data.users || []);
     } catch (err: any) {
-      console.error('Erro ao buscar usuários:', err);
+      console.error('Erro ao buscar usuários via API:', err);
+      // Fallback resiliente: consultar direto public.profiles e public.user_permissions
+      try {
+        const { data: profs, error: profErr } = await supabase
+          .from('profiles')
+          .select('id, email, full_name, role, is_active, created_at, deleted_at')
+          .order('created_at', { ascending: true });
+
+        if (!profErr && profs && profs.length > 0) {
+          const { data: perms } = await supabase.from('user_permissions').select('*');
+          const permMap = new Map((perms || []).map((pm) => [pm.user_id, pm]));
+
+          const fallbackUsers: AdminUserData[] = profs
+            .filter((p: any) => !p.deleted_at && p.is_active !== false)
+            .map((p: any) => {
+              const perm = permMap.get(p.id);
+              const isAdm = (p.role || '').toLowerCase() === 'admin' || (p.role || '').toLowerCase() === 'administrador';
+              return {
+                id: p.id,
+                email: p.email || '',
+                full_name: p.full_name || p.email?.split('@')[0] || 'Usuário',
+                role: isAdm ? 'admin' : 'user',
+                is_active: p.is_active !== undefined ? Boolean(p.is_active) : true,
+                created_at: p.created_at || new Date().toISOString(),
+                last_sign_in_at: null,
+                permissions: perm ? {
+                  can_manage_notes: Boolean(perm.can_manage_notes),
+                  can_delete_notes: Boolean(perm.can_delete_notes),
+                  can_manage_leads: Boolean(perm.can_manage_leads),
+                  can_delete_leads: Boolean(perm.can_delete_leads),
+                  can_change_stage: Boolean(perm.can_change_stage),
+                  can_manage_contacts: Boolean(perm.can_manage_contacts),
+                  can_access_auditoria: Boolean(perm.can_access_auditoria),
+                  can_manage_auditoria: Boolean(perm.can_manage_auditoria),
+                } : {
+                  can_manage_notes: true,
+                  can_delete_notes: false,
+                  can_manage_leads: true,
+                  can_delete_leads: false,
+                  can_change_stage: true,
+                  can_manage_contacts: true,
+                  can_access_auditoria: isAdm,
+                  can_manage_auditoria: isAdm,
+                },
+              };
+            });
+
+          setUsers(fallbackUsers);
+          return;
+        }
+      } catch (fallbackErr) {
+        console.warn('Fallback direto Supabase:', fallbackErr);
+      }
+
       setError(err?.message || 'Falha na comunicação com o servidor.');
     } finally {
       setLoading(false);
@@ -154,8 +217,10 @@ export default function UsersManagementModule({
   }, [getAccessToken]);
 
   useEffect(() => {
-    fetchUsers();
-  }, [fetchUsers]);
+    if (isAdmin) {
+      fetchUsers();
+    }
+  }, [isAdmin, fetchUsers]);
 
   const [confirmDeactivatePrompt, setConfirmDeactivatePrompt] = useState<boolean>(false);
 
@@ -173,6 +238,8 @@ export default function UsersManagementModule({
       can_delete_leads: user.permissions.can_delete_leads,
       can_change_stage: user.permissions.can_change_stage,
       can_manage_contacts: user.permissions.can_manage_contacts,
+      can_access_auditoria: Boolean(user.permissions.can_access_auditoria),
+      can_manage_auditoria: Boolean(user.permissions.can_manage_auditoria),
     });
     setEditError(null);
   };
@@ -434,6 +501,15 @@ export default function UsersManagementModule({
     });
   }, [users, searchTerm, roleFilter, statusFilter]);
 
+  if (permissionsLoading) {
+    return (
+      <div className="w-full max-w-4xl mx-auto px-4 py-20 text-center space-y-3">
+        <div className="w-8 h-8 border-2 border-[#FF6600] border-t-transparent rounded-full animate-spin mx-auto" />
+        <p className="text-xs text-slate-400">Verificando autorização...</p>
+      </div>
+    );
+  }
+
   if (!isAdmin) {
     return (
       <div className="w-full max-w-4xl mx-auto px-4 py-12 text-center">
@@ -449,7 +525,7 @@ export default function UsersManagementModule({
         <button
           type="button"
           onClick={onBackToPipeline}
-          className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors shadow-md"
+          className="px-5 py-2.5 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-lg shadow-orange-500/10"
         >
           Voltar ao Pipeline
         </button>
@@ -488,7 +564,7 @@ export default function UsersManagementModule({
             <button
               type="button"
               onClick={onBackToPipeline}
-              className="hover:text-indigo-400 transition-colors flex items-center gap-1 cursor-pointer"
+              className="hover:text-[#FF6600] transition-colors flex items-center gap-1 cursor-pointer"
             >
               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -555,7 +631,7 @@ export default function UsersManagementModule({
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Buscar por nome ou e-mail..."
-            className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+            className="w-full pl-9 pr-4 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6600] focus:ring-1 focus:ring-[#FF6600]"
           />
           <svg className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -567,7 +643,7 @@ export default function UsersManagementModule({
           <select
             value={roleFilter}
             onChange={(e) => setRoleFilter(e.target.value as any)}
-            className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-500 cursor-pointer"
+            className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-[#FF6600] cursor-pointer"
           >
             <option value="all">Todas as funções</option>
             <option value="admin">Administrador</option>
@@ -578,7 +654,7 @@ export default function UsersManagementModule({
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value as any)}
-            className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-indigo-500 cursor-pointer"
+            className="bg-slate-950 border border-slate-800 text-slate-300 text-xs rounded-xl px-3 py-2 focus:outline-none focus:border-[#FF6600] cursor-pointer"
           >
             <option value="all">Todos os status</option>
             <option value="active">Ativo</option>
@@ -606,7 +682,7 @@ export default function UsersManagementModule({
         </div>
       ) : loading && users.length === 0 ? (
         <div className="py-20 text-center space-y-3">
-          <div className="w-8 h-8 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mx-auto" />
+          <div className="w-8 h-8 border-2 border-[#FF6600] border-t-transparent rounded-full animate-spin mx-auto" />
           <p className="text-xs text-slate-400">Carregando usuários e permissões...</p>
         </div>
       ) : filteredUsers.length === 0 ? (
@@ -637,7 +713,7 @@ export default function UsersManagementModule({
                   !user.is_active
                     ? 'border-rose-900/40 opacity-75 bg-slate-950/80'
                     : isSelf
-                    ? 'border-indigo-500/50 shadow-md shadow-indigo-500/5'
+                    ? 'border-orange-500/50 shadow-md shadow-orange-500/5'
                     : 'border-slate-800 hover:border-slate-700'
                 }`}
               >
@@ -652,7 +728,7 @@ export default function UsersManagementModule({
                             {user.full_name || 'Sem nome'}
                           </h3>
                           {isSelf && (
-                            <span className="px-1.5 py-0.2 rounded-md bg-indigo-500/20 text-indigo-300 text-[10px] font-bold border border-indigo-500/40">
+                            <span className="px-1.5 py-0.2 rounded-md bg-orange-500/20 text-[#FF6600] text-[10px] font-bold border border-orange-500/40">
                               Você
                             </span>
                           )}
@@ -763,7 +839,7 @@ export default function UsersManagementModule({
                   <button
                     type="button"
                     onClick={() => handleOpenEdit(user)}
-                    className="px-3.5 py-1.5 bg-indigo-600/90 hover:bg-indigo-600 text-white rounded-xl text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm"
+                    className="px-3.5 py-1.5 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-xl text-xs font-bold cursor-pointer transition-all flex items-center gap-1.5 shadow-md shadow-orange-500/10"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -823,7 +899,7 @@ export default function UsersManagementModule({
                     required
                     value={editFullName}
                     onChange={(e) => setEditFullName(e.target.value)}
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-[#FF6600]"
                   />
                 </div>
                 <div>
@@ -851,7 +927,7 @@ export default function UsersManagementModule({
                     onClick={() => setEditRole('user')}
                     className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
                       editRole === 'user'
-                        ? 'bg-indigo-950/60 border-indigo-500 text-white'
+                        ? 'bg-orange-950/40 border-[#FF6600] text-white'
                         : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                     } ${editingUser.id === currentProfile.id ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
@@ -980,7 +1056,7 @@ export default function UsersManagementModule({
                           type="checkbox"
                           checked={editPerms.can_manage_notes}
                           onChange={(e) => handleTogglePermission('can_manage_notes', e.target.checked)}
-                          className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 focus:ring-0 cursor-pointer shrink-0"
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
                         />
                       </label>
 
@@ -995,7 +1071,7 @@ export default function UsersManagementModule({
                           type="checkbox"
                           checked={editPerms.can_delete_notes}
                           onChange={(e) => handleTogglePermission('can_delete_notes', e.target.checked)}
-                          className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 focus:ring-0 cursor-pointer shrink-0"
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
                         />
                       </label>
                     </div>
@@ -1016,7 +1092,7 @@ export default function UsersManagementModule({
                           type="checkbox"
                           checked={editPerms.can_manage_leads}
                           onChange={(e) => handleTogglePermission('can_manage_leads', e.target.checked)}
-                          className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 focus:ring-0 cursor-pointer shrink-0"
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
                         />
                       </label>
 
@@ -1031,7 +1107,7 @@ export default function UsersManagementModule({
                           type="checkbox"
                           checked={editPerms.can_delete_leads}
                           onChange={(e) => handleTogglePermission('can_delete_leads', e.target.checked)}
-                          className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 focus:ring-0 cursor-pointer shrink-0"
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
                         />
                       </label>
                     </div>
@@ -1052,7 +1128,7 @@ export default function UsersManagementModule({
                           type="checkbox"
                           checked={editPerms.can_change_stage}
                           onChange={(e) => handleTogglePermission('can_change_stage', e.target.checked)}
-                          className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 focus:ring-0 cursor-pointer shrink-0"
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
                         />
                       </label>
                     </div>
@@ -1073,7 +1149,42 @@ export default function UsersManagementModule({
                           type="checkbox"
                           checked={editPerms.can_manage_contacts}
                           onChange={(e) => handleTogglePermission('can_manage_contacts', e.target.checked)}
-                          className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 focus:ring-0 cursor-pointer shrink-0"
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
+                        />
+                      </label>
+                    </div>
+
+                    {/* Grupo: AUDITORIA */}
+                    <div className="space-y-2">
+                      <span className="block font-bold text-slate-400 text-[11px] uppercase tracking-wider">
+                        AUDITORIA
+                      </span>
+                      <label className="flex items-center justify-between gap-3 p-3 bg-slate-950/50 border border-slate-800/80 rounded-xl cursor-pointer hover:border-slate-700">
+                        <div>
+                          <span className="block font-semibold text-slate-200">Visualizar Auditoria e Documentos</span>
+                          <span className="text-[11px] text-slate-400">
+                            Permite consultar o módulo de Auditoria e visualizar documentos dos condomínios sob sua responsabilidade.
+                          </span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={editPerms.can_access_auditoria}
+                          onChange={(e) => handleTogglePermission('can_access_auditoria', e.target.checked)}
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
+                        />
+                      </label>
+                      <label className="flex items-center justify-between gap-3 p-3 bg-slate-950/50 border border-slate-800/80 rounded-xl cursor-pointer hover:border-slate-700">
+                        <div>
+                          <span className="block font-semibold text-slate-200">Gerenciar Vínculos e Análises</span>
+                          <span className="text-[11px] text-slate-400">
+                            Permite vincular e desvincular arquivos do Drive e executar análises inteligentes com IA.
+                          </span>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={editPerms.can_manage_auditoria}
+                          onChange={(e) => handleTogglePermission('can_manage_auditoria', e.target.checked)}
+                          className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer shrink-0"
                         />
                       </label>
                     </div>
@@ -1132,7 +1243,7 @@ export default function UsersManagementModule({
                 <button
                   type="submit"
                   disabled={editSaving}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md flex items-center gap-2"
+                  className="px-5 py-2 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] disabled:opacity-50 text-white rounded-xl text-xs font-bold cursor-pointer shadow-lg shadow-orange-500/10 flex items-center gap-2"
                 >
                   {editSaving ? (
                     <>
@@ -1327,7 +1438,7 @@ export default function UsersManagementModule({
                             showToast('Link copiado para a área de transferência!');
                           }
                         }}
-                        className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold cursor-pointer shrink-0"
+                        className="px-3 py-2 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-xl text-xs font-bold cursor-pointer transition-all shadow-md shrink-0"
                       >
                         Copiar
                       </button>
@@ -1367,7 +1478,7 @@ export default function UsersManagementModule({
                     value={inviteFullName}
                     onChange={(e) => setInviteFullName(e.target.value)}
                     placeholder="Ex: Carlos Silva"
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-[#FF6600]"
                   />
                 </div>
 
@@ -1381,7 +1492,7 @@ export default function UsersManagementModule({
                     value={inviteEmail}
                     onChange={(e) => setInviteEmail(e.target.value)}
                     placeholder="carlos@triverus.com.br"
-                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white text-xs focus:outline-none focus:border-[#FF6600]"
                   />
                 </div>
 
@@ -1396,7 +1507,7 @@ export default function UsersManagementModule({
                       onClick={() => setInviteRole('user')}
                       className={`p-3 rounded-xl border text-left cursor-pointer transition-all ${
                         inviteRole === 'user'
-                          ? 'bg-indigo-950/60 border-indigo-500 text-white'
+                          ? 'bg-orange-950/40 border-[#FF6600] text-white'
                           : 'bg-slate-950 border-slate-800 text-slate-400'
                       }`}
                     >
@@ -1451,7 +1562,7 @@ export default function UsersManagementModule({
                             type="checkbox"
                             checked={invitePerms.can_manage_notes}
                             onChange={(e) => setInvitePerms((p) => ({ ...p, can_manage_notes: e.target.checked }))}
-                            className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 cursor-pointer"
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
                           />
                         </label>
                         <label className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl cursor-pointer">
@@ -1460,7 +1571,7 @@ export default function UsersManagementModule({
                             type="checkbox"
                             checked={invitePerms.can_delete_notes}
                             onChange={(e) => setInvitePerms((p) => ({ ...p, can_delete_notes: e.target.checked }))}
-                            className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 cursor-pointer"
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
                           />
                         </label>
                       </div>
@@ -1473,7 +1584,7 @@ export default function UsersManagementModule({
                             type="checkbox"
                             checked={invitePerms.can_manage_leads}
                             onChange={(e) => setInvitePerms((p) => ({ ...p, can_manage_leads: e.target.checked }))}
-                            className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 cursor-pointer"
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
                           />
                         </label>
                         <label className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl cursor-pointer">
@@ -1482,7 +1593,7 @@ export default function UsersManagementModule({
                             type="checkbox"
                             checked={invitePerms.can_delete_leads}
                             onChange={(e) => setInvitePerms((p) => ({ ...p, can_delete_leads: e.target.checked }))}
-                            className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 cursor-pointer"
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
                           />
                         </label>
                       </div>
@@ -1495,7 +1606,7 @@ export default function UsersManagementModule({
                             type="checkbox"
                             checked={invitePerms.can_change_stage}
                             onChange={(e) => setInvitePerms((p) => ({ ...p, can_change_stage: e.target.checked }))}
-                            className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 cursor-pointer"
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
                           />
                         </label>
                       </div>
@@ -1508,7 +1619,35 @@ export default function UsersManagementModule({
                             type="checkbox"
                             checked={invitePerms.can_manage_contacts}
                             onChange={(e) => setInvitePerms((p) => ({ ...p, can_manage_contacts: e.target.checked }))}
-                            className="w-4 h-4 text-indigo-600 rounded bg-slate-900 border-slate-700 cursor-pointer"
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="space-y-1.5">
+                        <span className="block font-bold text-slate-400 text-[10px] uppercase tracking-wider">AUDITORIA</span>
+                        <label className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl cursor-pointer">
+                          <div>
+                            <span className="block text-slate-200 font-medium">Visualizar Auditoria e Documentos</span>
+                            <span className="text-[10px] text-slate-400">Consulta ao módulo e documentos</span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={invitePerms.can_access_auditoria}
+                            onChange={(e) => setInvitePerms((p) => ({ ...p, can_access_auditoria: e.target.checked }))}
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
+                          />
+                        </label>
+                        <label className="flex items-center justify-between p-2.5 bg-slate-950/50 border border-slate-800 rounded-xl cursor-pointer">
+                          <div>
+                            <span className="block text-slate-200 font-medium">Gerenciar Vínculos e Análises</span>
+                            <span className="text-[10px] text-slate-400">Vincular/desvincular e executar IA</span>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={invitePerms.can_manage_auditoria}
+                            onChange={(e) => setInvitePerms((p) => ({ ...p, can_manage_auditoria: e.target.checked }))}
+                            className="w-4 h-4 text-[#FF6600] accent-[#FF6600] rounded bg-slate-900 border-slate-700 cursor-pointer"
                           />
                         </label>
                       </div>
@@ -1527,7 +1666,7 @@ export default function UsersManagementModule({
                   <button
                     type="submit"
                     disabled={inviteSaving}
-                    className="px-5 py-2 bg-[#FF6600] hover:bg-[#e65c00] disabled:opacity-50 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md flex items-center gap-2"
+                    className="px-5 py-2 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] disabled:opacity-50 text-white rounded-xl text-xs font-bold cursor-pointer shadow-lg shadow-orange-500/10 flex items-center gap-2"
                   >
                     {inviteSaving ? (
                       <>
@@ -1601,7 +1740,7 @@ export default function UsersManagementModule({
                         navigator.clipboard.writeText(generatedRecoveryLink);
                         showToast('Link de recuperação copiado!');
                       }}
-                      className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-xs font-semibold cursor-pointer shrink-0"
+                      className="px-3 py-2 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-lg text-xs font-bold cursor-pointer transition-all shadow-md shrink-0"
                     >
                       Copiar
                     </button>
@@ -1626,7 +1765,7 @@ export default function UsersManagementModule({
                 <button
                   type="submit"
                   disabled={resetSaving}
-                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold cursor-pointer shadow-md flex items-center gap-2"
+                  className="px-5 py-2 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] disabled:opacity-50 text-white rounded-xl text-xs font-bold cursor-pointer shadow-lg shadow-orange-500/10 flex items-center gap-2"
                 >
                   {resetSaving ? (
                     <>

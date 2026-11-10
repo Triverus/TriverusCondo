@@ -257,7 +257,13 @@ export function CRMProvider({
     initialCacheRef.current = loadCRMCache();
   }
   const cached = initialCacheRef.current;
-  const hasCachedData = Boolean(cached && cached.stages && cached.stages.length > 0);
+  const hasCachedData = Boolean(
+    cached &&
+    cached.stages &&
+    cached.stages.length > 0 &&
+    cached.leads &&
+    cached.leads.length > 0
+  );
 
   // ETAPA 2: Inicializar o estado com o cache para renderizar no frame 0 sem spinner
   const [leads, setLeads] = useState<Lead[]>(() => cached?.leads || []);
@@ -317,16 +323,12 @@ export function CRMProvider({
             .order('occurred_at', { ascending: false }),
         ]);
 
-        const rawProfiles = profilesRes.data || [];
-        rawProfiles.forEach(async (p) => {
+        const rawProfiles = (profilesRes.data || []).map((p) => {
           if (p.full_name) {
             const formatted = formatProperName(p.full_name);
-            if (formatted !== p.full_name) {
-              try {
-                await supabase.from('profiles').update({ full_name: formatted }).eq('id', p.id);
-              } catch {}
-            }
+            return formatted !== p.full_name ? { ...p, full_name: formatted } : p;
           }
+          return p;
         });
         const nextProfiles = deduplicateProfiles(rawProfiles);
         const nextServices = normalizeAndSortServices(servicesRes.data || [], true);

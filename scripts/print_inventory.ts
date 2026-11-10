@@ -12,9 +12,10 @@ async function run() {
   const authUsersMap = new Map();
   authUsersData.users.forEach(u => authUsersMap.set(u.id, u));
 
-  const { data: profiles } = await supabaseAdmin.from('profiles').select('*').order('created_at', { ascending: true });
+  const { data: rawProfiles } = await supabaseAdmin.from('profiles').select('*').order('created_at', { ascending: true });
+  const profiles = rawProfiles || [];
 
-  const allUserIds = new Set();
+  const allUserIds = new Set<string>();
   authUsersData.users.forEach(u => allUserIds.add(u.id));
   profiles.forEach(p => allUserIds.add(p.id));
 

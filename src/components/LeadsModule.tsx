@@ -16,6 +16,7 @@ import ContactFields from './ContactFields.tsx';
 import {
   WhatsAppIcon,
   EmailIcon,
+  ContactIcon,
   EditIcon,
   NotesIcon,
   FolderIcon,
@@ -25,6 +26,7 @@ import {
   PipelineColumn,
   LeadCard,
 } from './PipelineComponents.tsx';
+import { SkeletonPipelineColumn } from './ui/Skeleton.tsx';
 import {
   BentoViewConfigModal,
   DEFAULT_PIPELINE_VIEW_CONFIG,
@@ -42,6 +44,7 @@ import {
 } from '../lib/dateUtils.ts';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
 import NotesTimelineModal from './NotesTimelineModal.tsx';
+import { UnifiedContactsModal } from './UnifiedContactsModal.tsx';
 import { celebrateClientConversion } from '../lib/celebration.ts';
 import { useUserPermissions } from '../lib/permissionsContext.tsx';
 import {
@@ -661,6 +664,61 @@ export default function LeadsModule({
 
   // Timeline Modal State (WhatsApp style conversation feed)
   const [timelineLead, setTimelineLead] = useState<Lead | null>(null);
+
+  // Unified Contacts Modal State (WhatsApp & E-mail in single window)
+  const [contactsModal, setContactsModal] = useState<{
+    open: boolean;
+    lead: Lead | null;
+  }>({
+    open: false,
+    lead: null,
+  });
+
+  const handleOpenContactsModal = (lead: Lead) => {
+    setContactsModal({
+      open: true,
+      lead,
+    });
+  };
+
+  const handleCloseContactsModal = () => {
+    setContactsModal({
+      open: false,
+      lead: null,
+    });
+  };
+
+  const handleSaveUnifiedContact = async (contactState: ContactFormState) => {
+    if (!contactsModal.lead) return { success: false, error: 'Condomínio não selecionado.' };
+
+    try {
+      const result = await resolveOrCreateContact({
+        leadId: contactsModal.lead.id,
+        leadName: contactsModal.lead.name,
+        contactState,
+        existingContacts: contacts,
+        isPrimary: getContactsForLead(contactsModal.lead.id).length === 0,
+      });
+
+      if (!result.success) {
+        return { success: false, error: result.error || 'Erro ao salvar contato.' };
+      }
+
+      upsertContactLocally(result.contact, [contactsModal.lead.id]);
+      setStatusFeedback({
+        type: 'success',
+        message: result.reused
+          ? `Contato "${result.contact.name}" vinculado a este condomínio!`
+          : `Contato "${result.contact.name}" salvo com sucesso!`,
+      });
+
+      await refreshAll(true, true);
+      return { success: true };
+    } catch (err: any) {
+      console.error('Error saving unified contact:', err);
+      return { success: false, error: err?.message || 'Falha ao salvar contato.' };
+    }
+  };
 
   // WhatsApp Independent Popover State (CRUD)
   const [whatsappPopover, setWhatsappPopover] = useState<{
@@ -2131,239 +2189,13 @@ export default function LeadsModule({
     }
   };
 
-  // WhatsApp Popover handlers
+  // Contacts Popover handlers (Redirects cleanly to the unified contacts modal)
   const handleOpenWhatsAppPopover = (lead: Lead) => {
-    setWhatsappPopover({
-      open: true,
-      lead,
-      mode: 'list',
-      editingContactId: null,
-    });
-    setWaError(null);
-    setWaName('');
-    setWaRole('Síndico');
-    setWaCustomRole('');
-    setWaPhone('');
-    setWaNotes('');
+    handleOpenContactsModal(lead);
   };
 
-  const handleCloseWhatsAppPopover = () => {
-    setWhatsappPopover({ open: false, lead: null, mode: 'list', editingContactId: null });
-    setWaError(null);
-  };
-
-  const handleOpenEditWhatsAppContact = (contact: Contact) => {
-    const isStandardRole = (PRESET_ROLES as readonly string[]).includes(contact.role_title || '');
-    setWhatsappPopover((prev) => ({
-      ...prev,
-      mode: 'edit',
-      editingContactId: contact.id,
-    }));
-    setWaError(null);
-    setWaName(contact.name || '');
-    setWaRole(isStandardRole ? (contact.role_title || 'Síndico') : 'Outro');
-    setWaCustomRole(isStandardRole ? '' : (contact.role_title || ''));
-    setWaPhone(contact.phone || '');
-    setWaNotes('');
-  };
-
-  const getWhatsAppLink = (phone?: string | null) => {
-    if (!phone) return '#';
-    const digits = phone.replace(/\D/g, '');
-    const cleanNumber = digits.startsWith('55') ? digits : `55${digits}`;
-    return `https://wa.me/${cleanNumber}`;
-  };
-
-  const handlePhoneInputChange = (val: string) => {
-    const digits = val.replace(/\D/g, '').slice(0, 11);
-    if (!digits) {
-      setWaPhone('');
-      return;
-    }
-    if (digits.length <= 2) {
-      setWaPhone(`(${digits}`);
-      return;
-    }
-    if (digits.length <= 6) {
-      setWaPhone(`(${digits.slice(0, 2)}) ${digits.slice(2)}`);
-      return;
-    }
-    if (digits.length <= 10) {
-      setWaPhone(`(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`);
-      return;
-    }
-    setWaPhone(`(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7)}`);
-  };
-
-  const handleSaveWhatsAppContact = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canManageContacts) return;
-    if (!whatsappPopover.lead) return;
-    setWaError(null);
-
-    if (!waName.trim()) {
-      setWaError('Informe o nome do contato.');
-      return;
-    }
-    const digits = waPhone.replace(/\D/g, '');
-    if (!digits) {
-      setWaError('Informe o número de WhatsApp / telefone.');
-      return;
-    }
-    if (digits.length < 8) {
-      setWaError('Informe um telefone ou WhatsApp válido com DDD (mínimo 8 dígitos).');
-      return;
-    }
-
-    setWaSaving(true);
-
-    try {
-      const contactFormState: ContactFormState = {
-        id: whatsappPopover.editingContactId || undefined,
-        name: waName.trim(),
-        roleTitle: waRole,
-        customRoleTitle: waCustomRole,
-        phone: waPhone.trim(),
-        email: '',
-      };
-
-      const result = await resolveOrCreateContact({
-        leadId: whatsappPopover.lead.id,
-        leadName: whatsappPopover.lead.name,
-        contactState: contactFormState,
-        existingContacts: contacts,
-        isPrimary: getContactsForLead(whatsappPopover.lead.id).length === 0,
-      });
-
-      if (!result.success) {
-        setWaError(result.error || 'Erro ao salvar contato.');
-        setWaSaving(false);
-        return;
-      }
-
-      upsertContactLocally(result.contact, [whatsappPopover.lead.id]);
-      setStatusFeedback({
-        type: 'success',
-        message: result.reused
-          ? `Contato "${result.contact.name}" vinculado a este condomínio!`
-          : `Contato "${result.contact.name}" adicionado com sucesso!`,
-      });
-
-      await refreshAll(true, true);
-      setWhatsappPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }));
-    } catch (err: any) {
-      console.error('Error saving WhatsApp contact:', err);
-      setWaError(err?.message || 'Erro ao salvar contato.');
-    } finally {
-      setWaSaving(false);
-    }
-  };
-
-  // E-mail Popover handlers
   const handleOpenEmailPopover = (lead: Lead) => {
-    setEmailPopover({
-      open: true,
-      lead,
-      mode: 'list',
-      editingContactId: null,
-    });
-    setEmError(null);
-    setEmName('');
-    setEmRole('Síndico');
-    setEmCustomRole('');
-    setEmEmail('');
-    setEmNotes('');
-  };
-
-  const handleCloseEmailPopover = () => {
-    setEmailPopover({ open: false, lead: null, mode: 'list', editingContactId: null });
-    setEmError(null);
-  };
-
-  const handleOpenEditEmailContact = (contact: Contact) => {
-    const isStandardRole = (PRESET_ROLES as readonly string[]).includes(contact.role_title || '');
-    setEmailPopover((prev) => ({
-      ...prev,
-      mode: 'edit',
-      editingContactId: contact.id,
-    }));
-    setEmError(null);
-    setEmName(contact.name || '');
-    setEmRole(isStandardRole ? (contact.role_title || 'Síndico') : 'Outro');
-    setEmCustomRole(isStandardRole ? '' : (contact.role_title || ''));
-    setEmEmail(contact.email || '');
-    setEmNotes('');
-  };
-
-  const handleCopyEmail = (email: string, id: string) => {
-    navigator.clipboard.writeText(email);
-    setCopiedEmailId(id);
-    setTimeout(() => setCopiedEmailId(null), 2000);
-  };
-
-  const handleSaveEmailContact = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canManageContacts) return;
-    if (!emailPopover.lead) return;
-    setEmError(null);
-
-    if (!emName.trim()) {
-      setEmError('Informe o nome do contato.');
-      return;
-    }
-    const emailTrimmed = emEmail.trim();
-    if (!emailTrimmed) {
-      setEmError('Informe o endereço de e-mail.');
-      return;
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(emailTrimmed)) {
-      setEmError('Informe um endereço de e-mail válido (ex: contato@exemplo.com).');
-      return;
-    }
-
-    setEmSaving(true);
-
-    try {
-      const contactFormState: ContactFormState = {
-        id: emailPopover.editingContactId || undefined,
-        name: emName.trim(),
-        roleTitle: emRole,
-        customRoleTitle: emCustomRole,
-        phone: '',
-        email: emailTrimmed,
-      };
-
-      const result = await resolveOrCreateContact({
-        leadId: emailPopover.lead.id,
-        leadName: emailPopover.lead.name,
-        contactState: contactFormState,
-        existingContacts: contacts,
-        isPrimary: getContactsForLead(emailPopover.lead.id).length === 0,
-      });
-
-      if (!result.success) {
-        setEmError(result.error || 'Erro ao salvar contato.');
-        setEmSaving(false);
-        return;
-      }
-
-      upsertContactLocally(result.contact, [emailPopover.lead.id]);
-      setStatusFeedback({
-        type: 'success',
-        message: result.reused
-          ? `Contato "${result.contact.name}" vinculado a este condomínio!`
-          : `Contato "${result.contact.name}" adicionado com sucesso!`,
-      });
-
-      await refreshAll(true, true);
-      setEmailPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }));
-    } catch (err: any) {
-      console.error('Error saving Email contact:', err);
-      setEmError(err?.message || 'Erro ao salvar contato.');
-    } finally {
-      setEmSaving(false);
-    }
+    handleOpenContactsModal(lead);
   };
 
   // Contact Unlink from Condominium (NÃO apaga de public.contacts)
@@ -2712,12 +2544,28 @@ export default function LeadsModule({
         ))}
       </div>
 
-      {/* 2. PipelineBoard & PipelineColumns */}
+      {/* 2. PipelineBoard & PipelineColumns com Skeleton Shimmer */}
       {isInitialLoading && leads.length === 0 ? (
-        <div className="mt-8 text-center py-16 bg-slate-900/30 border border-slate-800/60 rounded-xl">
-          <div className="inline-block animate-spin w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full mb-3" />
-          <p className="text-xs text-slate-400">Carregando pipeline comercial...</p>
-        </div>
+        <PipelineBoard
+          scrollRef={boardScrollRef}
+          onScroll={handleBoardScroll}
+          onDragOver={handleBoardDragOver}
+        >
+          {pipelineColumns.map((col) => {
+            const isColHiddenOnMobile = mobileActiveCol !== col.id;
+            return (
+              <div
+                key={col.id}
+                className={`h-full flex flex-col ${isColHiddenOnMobile ? 'hidden md:flex' : 'flex'}`}
+              >
+                <SkeletonPipelineColumn
+                  label={col.label}
+                  cardCount={3}
+                />
+              </div>
+            );
+          })}
+        </PipelineBoard>
       ) : (
         <PipelineBoard
           scrollRef={boardScrollRef}
@@ -2760,6 +2608,7 @@ export default function LeadsModule({
                       const leadContacts = getContactsForLead(lead.id);
                       const waContactsCount = leadContacts.filter((c) => c.phone).length;
                       const emContactsCount = leadContacts.filter((c) => c.email).length;
+                      const contactsCount = leadContacts.length;
                       const notesCount = leadInteractions.length;
                       const activeInteraction = getActiveFollowUpInteraction(leadInteractions);
                       const activeFollowUpDate = activeInteraction?.next_follow_up_at || activeInteraction?.next_follow_up_date || null;
@@ -2776,6 +2625,7 @@ export default function LeadsModule({
                           stageName={stageName}
                           responsibleName={responsibleName}
                           followUpInfo={followUpInfo}
+                          contactsCount={contactsCount}
                           waCount={waContactsCount}
                           emCount={emContactsCount}
                           notesCount={notesCount}
@@ -2803,8 +2653,9 @@ export default function LeadsModule({
                             }
                           }}
                           onOpenFolder={() => handleOpenFolderPopover(lead)}
-                          onOpenWhatsApp={() => handleOpenWhatsAppPopover(lead)}
-                          onOpenEmail={() => handleOpenEmailPopover(lead)}
+                          onOpenContacts={() => handleOpenContactsModal(lead)}
+                          onOpenWhatsApp={() => handleOpenContactsModal(lead)}
+                          onOpenEmail={() => handleOpenContactsModal(lead)}
                           onRequestDelete={() => handleRequestDeleteLead(lead)}
                         />
                       );
@@ -2817,392 +2668,16 @@ export default function LeadsModule({
         </PipelineBoard>
       )}
 
-      {/* INDEPENDENT WHATSAPP POPOVER */}
-      {whatsappPopover.open && whatsappPopover.lead && (
-        <div
-          onClick={handleCloseWhatsAppPopover}
-          className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-6 flex flex-col"
-          >
-            <div className="px-5 py-3.5 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-emerald-950 text-emerald-400 border border-emerald-700/50">
-                  <WhatsAppIcon className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-xs text-white">WhatsApp</h3>
-                  <p className="text-[11px] text-slate-400 truncate max-w-[190px]">{whatsappPopover.lead.name}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                {whatsappPopover.mode === 'list' && canManageContacts && (
-                  <button
-                    type="button"
-                    onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add' }))}
-                    className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold cursor-pointer transition-colors"
-                  >
-                    + Adicionar
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleCloseWhatsAppPopover}
-                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="p-4 overflow-y-auto max-h-80 text-xs">
-              {whatsappPopover.mode === 'list' ? (
-                <div className="space-y-2.5">
-                  {(() => {
-                    const leadContacts = getContactsForLead(whatsappPopover.lead.id);
-                    const waContacts = leadContacts.filter((c) => c.phone);
-
-                    if (waContacts.length === 0) {
-                      return (
-                        <div className="text-center py-6 bg-slate-950/60 rounded-xl border border-slate-800/80 p-4">
-                          <p className="text-xs text-slate-400 mb-3">
-                            Nenhum contato com WhatsApp cadastrado para este condomínio.
-                          </p>
-                          {canManageContacts && (
-                            <button
-                              type="button"
-                              onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'add' }))}
-                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
-                            >
-                              <WhatsAppIcon className="w-3.5 h-3.5" />
-                              <span>+ Adicionar WhatsApp</span>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    return waContacts.map((contact) => (
-                      <div key={contact.id} className="p-3 bg-slate-950 border border-slate-800/80 rounded-xl space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <span className="font-semibold text-white block text-xs">{contact.name}</span>
-                            <span className="text-[11px] text-slate-400">{contact.role_title || 'Contato Geral'}</span>
-                          </div>
-                          {canManageContacts && (
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditWhatsAppContact(contact)}
-                                title="Editar contato"
-                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
-                              >
-                                <EditIcon className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRequestDeleteContact(contact, whatsappPopover.lead!.id)}
-                                title="Desvincular contato deste condomínio"
-                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
-                              >
-                                <TrashIcon className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 gap-2">
-                          <span className="font-mono text-slate-300 text-xs truncate">{contact.phone}</span>
-                          <a
-                            href={getWhatsAppLink(contact.phone)}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-lg transition-colors inline-flex items-center gap-1.5 cursor-pointer shrink-0"
-                          >
-                            <WhatsAppIcon className="w-3.5 h-3.5" />
-                            <span>Conversar no WhatsApp</span>
-                          </a>
-                        </div>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              ) : (
-                <form onSubmit={handleSaveWhatsAppContact} className="space-y-3">
-                  {waError && <div className="p-2.5 bg-rose-950 border border-rose-600/50 rounded-xl text-rose-200 text-xs">{waError}</div>}
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-300 mb-1">Nome do contato *</label>
-                    <input
-                      type="text"
-                      autoFocus
-                      value={waName}
-                      onChange={(e) => setWaName(e.target.value)}
-                      placeholder="Ex: Carlos Síndico"
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-300 mb-1">Vínculo / Cargo</label>
-                    <select
-                      value={waRole}
-                      onChange={(e) => setWaRole(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none"
-                    >
-                      {PRESET_ROLES.map((role) => (
-                        <option key={role} value={role}>{role}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {waRole === 'Outro' && (
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-300 mb-1">Especifique o cargo</label>
-                      <input
-                        type="text"
-                        value={waCustomRole}
-                        onChange={(e) => setWaCustomRole(e.target.value)}
-                        placeholder="Ex: Zelador Chefe"
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none"
-                      />
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-300 mb-1">WhatsApp / Telefone *</label>
-                    <input
-                      type="text"
-                      value={waPhone}
-                      onChange={(e) => handlePhoneInputChange(e.target.value)}
-                      placeholder="(11) 99999-9999"
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-emerald-500 rounded-xl text-white text-xs focus:outline-none font-mono"
-                    />
-                  </div>
-
-                  <div className="pt-2 flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setWhatsappPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }))}
-                      disabled={waSaving}
-                      className="px-3 py-1.5 text-slate-400 hover:text-white cursor-pointer"
-                    >
-                      Voltar
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={waSaving}
-                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-semibold cursor-pointer disabled:opacity-50"
-                    >
-                      {waSaving ? 'Salvando...' : whatsappPopover.mode === 'edit' ? 'Salvar alterações' : 'Salvar WhatsApp'}
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* INDEPENDENT EMAIL POPOVER */}
-      {emailPopover.open && emailPopover.lead && (
-        <div
-          onClick={handleCloseEmailPopover}
-          className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="relative w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden my-6 flex flex-col"
-          >
-            <div className="px-5 py-3.5 border-b border-slate-800 bg-slate-950/70 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center bg-sky-950 text-sky-400 border border-sky-700/50">
-                  <EmailIcon className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-semibold text-xs text-white">E-mail</h3>
-                  <p className="text-[11px] text-slate-400 truncate max-w-[190px]">{emailPopover.lead.name}</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5">
-                {emailPopover.mode === 'list' && canManageContacts && (
-                  <button
-                    type="button"
-                    onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
-                    className="px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-500 text-white text-xs font-semibold cursor-pointer transition-colors"
-                  >
-                    + Adicionar
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleCloseEmailPopover}
-                  className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-            </div>
-
-            <div className="p-4 overflow-y-auto max-h-80 text-xs">
-              {emailPopover.mode === 'list' ? (
-                <div className="space-y-2.5">
-                  {(() => {
-                    const leadContacts = getContactsForLead(emailPopover.lead.id);
-                    const mailContacts = leadContacts.filter((c) => c.email);
-
-                    if (mailContacts.length === 0) {
-                      return (
-                        <div className="text-center py-6 bg-slate-950/60 rounded-xl border border-slate-800/80 p-4">
-                          <p className="text-xs text-slate-400 mb-3">
-                            Nenhum contato com e-mail cadastrado para este condomínio.
-                          </p>
-                          {canManageContacts && (
-                            <button
-                              type="button"
-                              onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'add', editingContactId: null }))}
-                              className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-semibold cursor-pointer inline-flex items-center gap-1.5"
-                            >
-                              <EmailIcon className="w-3.5 h-3.5" />
-                              <span>+ Adicionar E-mail</span>
-                            </button>
-                          )}
-                        </div>
-                      );
-                    }
-
-                    return mailContacts.map((contact) => (
-                      <div key={contact.id} className="p-3 bg-slate-950 border border-slate-800/80 rounded-xl space-y-2">
-                        <div className="flex items-start justify-between gap-2">
-                          <div>
-                            <span className="font-semibold text-white block text-xs">{contact.name}</span>
-                            <span className="text-[11px] text-slate-400">{contact.role_title || 'Contato Geral'}</span>
-                          </div>
-                          {canManageContacts && (
-                            <div className="flex items-center gap-1">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEditEmailContact(contact)}
-                                title="Editar contato"
-                                className="p-1 rounded text-slate-400 hover:text-white hover:bg-slate-850 transition-colors cursor-pointer"
-                              >
-                                <EditIcon className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleRequestDeleteContact(contact, emailPopover.lead!.id)}
-                                title="Desvincular contato deste condomínio"
-                                className="p-1 rounded text-slate-400 hover:text-rose-400 hover:bg-rose-950/40 transition-colors cursor-pointer"
-                              >
-                                <TrashIcon className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="flex items-center justify-between pt-2 border-t border-slate-800/60 gap-2">
-                          <span className="text-slate-300 text-xs truncate max-w-[160px]">{contact.email}</span>
-                          <button
-                            type="button"
-                            onClick={() => handleCopyEmail(contact.email!, contact.id)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
-                              copiedEmailId === contact.id
-                                ? 'bg-emerald-600 text-white shadow-xs'
-                                : 'bg-sky-600/20 hover:bg-sky-600/30 text-sky-300 border border-sky-500/40 hover:text-white'
-                            }`}
-                          >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                            </svg>
-                            <span>{copiedEmailId === contact.id ? 'Copiado!' : 'Copiar e-mail'}</span>
-                          </button>
-                        </div>
-                      </div>
-                    ));
-                  })()}
-                </div>
-              ) : (
-                <form onSubmit={handleSaveEmailContact} className="space-y-3">
-                  {emError && <div className="p-2.5 bg-rose-950 border border-rose-600/50 rounded-xl text-rose-200 text-xs">{emError}</div>}
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-300 mb-1">Nome do contato *</label>
-                    <input
-                      type="text"
-                      autoFocus
-                      value={emName}
-                      onChange={(e) => setEmName(e.target.value)}
-                      placeholder="Ex: Carlos Síndico"
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-white text-xs focus:outline-none"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-300 mb-1">Vínculo / Cargo</label>
-                    <select
-                      value={emRole}
-                      onChange={(e) => setEmRole(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-white text-xs focus:outline-none"
-                    >
-                      {PRESET_ROLES.map((role) => (
-                        <option key={role} value={role}>{role}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {emRole === 'Outro' && (
-                    <div>
-                      <label className="block text-[11px] font-medium text-slate-300 mb-1">Especifique o cargo</label>
-                      <input
-                        type="text"
-                        value={emCustomRole}
-                        onChange={(e) => setEmCustomRole(e.target.value)}
-                        placeholder="Ex: Zelador Chefe"
-                        className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-white text-xs focus:outline-none"
-                      />
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-[11px] font-medium text-slate-300 mb-1">E-mail *</label>
-                    <input
-                      type="email"
-                      value={emEmail}
-                      onChange={(e) => setEmEmail(e.target.value)}
-                      placeholder="contato@condominio.com"
-                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 focus:border-sky-500 rounded-xl text-white text-xs focus:outline-none"
-                    />
-                  </div>
-
-                  <div className="pt-2 flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setEmailPopover((prev) => ({ ...prev, mode: 'list', editingContactId: null }))}
-                      disabled={emSaving}
-                      className="px-3 py-1.5 text-slate-400 hover:text-white cursor-pointer"
-                    >
-                      Voltar
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={emSaving}
-                      className="px-3.5 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl font-semibold cursor-pointer disabled:opacity-50"
-                    >
-                      {emSaving ? 'Salvando...' : emailPopover.mode === 'edit' ? 'Salvar alterações' : 'Salvar E-mail'}
-                    </button>
-                  </div>
-                </form>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* UNIFIED CONTACTS MODAL (WhatsApp & E-mail em janela única) */}
+      <UnifiedContactsModal
+        isOpen={contactsModal.open}
+        onClose={handleCloseContactsModal}
+        lead={contactsModal.lead}
+        contacts={contactsModal.lead ? getContactsForLead(contactsModal.lead.id) : []}
+        canManageContacts={canManageContacts}
+        onSaveContact={handleSaveUnifiedContact}
+        onRequestDeleteContact={(contact, leadId) => handleRequestDeleteContact(contact, leadId)}
+      />
 
       {/* WHATSAPP-STYLE TIMELINE POPUP */}
       <NotesTimelineModal

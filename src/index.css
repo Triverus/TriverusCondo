@@ -1,11 +1,23 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, [data-theme="dark"], .dark *));
 
 /* =========================================================
-   DARK MODE (DEFAULT)
+   DARK MODE OFICIAL TRIVERUS (DEFAULT)
+   - Fundo principal: #141418
+   - Superfícies e cards: #242428
+   - Superfícies elevadas, campos e destaques: #303034
    ========================================================= */
+:root {
+  --bg-primary: #141418;
+  --bg-surface: #242428;
+  --bg-elevated: #303034;
+  --border-subtle: #2d2d32;
+  --border-elevated: #3a3a40;
+}
+
 html.dark,
 html:not(.light) {
-  background-color: #09090b;
+  background-color: #141418;
   color: #f4f4f5;
   color-scheme: dark;
 }
@@ -14,21 +26,23 @@ html.dark body,
 html:not(.light) body,
 html.dark #root,
 html:not(.light) #root {
-  background-color: #09090b;
+  background-color: #141418;
   color: #f4f4f5;
-  font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  word-spacing: 0.05em;
+  letter-spacing: normal;
   -webkit-font-smoothing: antialiased;
 }
 
 /* Scrollbar Dark */
 html.dark ::-webkit-scrollbar-track,
 html:not(.light) ::-webkit-scrollbar-track {
-  background: #09090b;
+  background: #141418;
 }
 
 html.dark ::-webkit-scrollbar-thumb,
 html:not(.light) ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #303034;
   border-radius: 9999px;
 }
 
@@ -59,26 +73,27 @@ html:not(.light) input[type="datetime-local"]::-webkit-calendar-picker-indicator
 }
 
 /* =========================================================
-/* =========================================================
    LIGHT MODE THEME
    ========================================================= */
 html.light {
-  background-color: #f4f6f9;
-  color: #0f172a;
+  background-color: #F8F9FB;
+  color: #172033;
   color-scheme: light;
 }
 
 html.light body,
 html.light #root {
-  background-color: #f4f6f9;
-  color: #0f172a;
+  background-color: #F8F9FB;
+  color: #172033;
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  word-spacing: 0.05em;
+  letter-spacing: normal;
   -webkit-font-smoothing: antialiased;
 }
 
 /* Light Scrollbar */
 html.light ::-webkit-scrollbar-track {
-  background: #f4f6f9;
+  background: #F8F9FB;
 }
 
 html.light ::-webkit-scrollbar-thumb {
@@ -105,17 +120,19 @@ html.light input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   opacity: 0.75;
 }
 
-/* Light Mode Core Surface Mapping */
+/* Light Mode Surface Mapping */
 html.light header,
 html.light .app-header {
-  background-color: #ffffff !important;
-  border-color: #e2e8f0 !important;
-  color: #0f172a !important;
+  background-color: #FFFFFF !important;
+  border-color: #DCE1E7 !important;
+  color: #172033 !important;
 }
 
 html.light .bg-slate-950,
-html.light main.bg-slate-950 {
-  background-color: #f4f6f9 !important;
+html.light main.bg-slate-950,
+html.light .bg-\[\#141418\],
+html.light main {
+  background-color: #F8F9FB !important;
 }
 
 /* Modals, Popovers and Cards in Light Mode */
@@ -127,9 +144,10 @@ html.light .bg-slate-900\/70,
 html.light .bg-slate-900\/60,
 html.light .bg-slate-900\/50,
 html.light .bg-slate-900\/40,
-html.light .bg-slate-900\/30 {
-  background-color: #ffffff !important;
-  border-color: #e2e8f0 !important;
+html.light .bg-slate-900\/30,
+html.light .bg-\[\#242428\] {
+  background-color: #FFFFFF !important;
+  border-color: #DCE1E7 !important;
 }
 
 /* Inner popover containers & modal headers */
@@ -139,8 +157,8 @@ html.light .bg-slate-950\/70,
 html.light .bg-slate-950\/60,
 html.light .bg-slate-950\/50,
 html.light .bg-slate-950\/40 {
-  background-color: #f8fafc !important;
-  border-color: #e2e8f0 !important;
+  background-color: #F1F3F5 !important;
+  border-color: #DCE1E7 !important;
 }
 
 html.light .bg-slate-800,
@@ -149,9 +167,10 @@ html.light .bg-slate-800\/80,
 html.light .bg-slate-800\/70,
 html.light .bg-slate-800\/60,
 html.light .bg-slate-800\/50,
-html.light .bg-slate-800\/40 {
-  background-color: #f1f5f9 !important;
-  border-color: #cbd5e1 !important;
+html.light .bg-slate-800\/40,
+html.light .bg-\[\#303034\] {
+  background-color: #F1F3F5 !important;
+  border-color: #DCE1E7 !important;
 }
 
 html.light .border-slate-800,
@@ -163,24 +182,37 @@ html.light .border-slate-800\/50,
 html.light .border-slate-700,
 html.light .border-slate-700\/80,
 html.light .border-slate-700\/60,
-html.light .border-slate-700\/50 {
-  border-color: #e2e8f0 !important;
+html.light .border-slate-700\/50,
+html.light .border-\[\#303034\],
+html.light .border-\[\#3a3a40\],
+html.light .border-\[\#2d2d32\] {
+  border-color: #DCE1E7 !important;
 }
 
 /* Typography High-Contrast Mapping in Light Mode */
 html.light .text-slate-100,
 html.light .text-slate-200,
-html.light .text-zinc-100 {
-  color: #0f172a !important;
+html.light .text-zinc-100,
+html.light .text-zinc-200,
+html.light .text-\[\#f8fafc\],
+html.light .text-\[\#f4f4f5\] {
+  color: #172033 !important;
 }
 
 html.light .text-slate-300,
-html.light .text-slate-400 {
-  color: #475569 !important;
+html.light .text-slate-400,
+html.light .text-zinc-300,
+html.light .text-zinc-400 {
+  color: #64748B !important;
 }
 
-/* Text white override: make black on white backgrounds, but PRESERVE on solid buttons */
-html.light .text-white:not(button):not(button *):not(.bg-indigo-600 *):not(.bg-indigo-500 *):not(.bg-emerald-600 *):not(.bg-rose-600 *):not(.bg-sky-600 *):not(.bg-blue-600 *):not(.bg-amber-600 *) {
+html.light .text-slate-500,
+html.light .text-zinc-500 {
+  color: #64748B !important;
+}
+
+/* Text white override: make dark on white backgrounds, but PRESERVE on solid buttons & badges */
+html.light .text-white:not(button):not(button *):not(.bg-\[\#FF6600\] *):not(.bg-indigo-600 *):not(.bg-indigo-500 *):not(.bg-emerald-600 *):not(.bg-rose-600 *):not(.bg-sky-600 *):not(.bg-blue-600 *):not(.bg-amber-600 *):not(.bg-orange-500 *):not(.bg-orange-600 *):not(.badge-white-text *) {
   color: #0f172a !important;
 }
 
@@ -218,8 +250,122 @@ html.light .bg-amber-950\/40 * {
 }
 
 /* =========================================================
+   PROTECT DARK-SCOPED CONTAINERS (AUDITORIA, CONDO AI DRAWER)
+   Official 3-tier hierarchy: #141418, #242428, #303034
+   ========================================================= */
+html.dark,
+html:not(.light),
+html.light .dark,
+html.light .dark body,
+html.light .dark #root {
+  background-color: #141418 !important;
+  color: #f4f4f5 !important;
+}
+
+html.dark .bg-slate-950,
+html:not(.light) .bg-slate-950,
+html.light .dark .bg-slate-950,
+html.dark main.bg-slate-950,
+html:not(.light) main.bg-slate-950,
+html.light .dark main.bg-slate-950 {
+  background-color: #141418 !important;
+}
+
+html.dark .bg-slate-900,
+html.dark .bg-slate-900\/95,
+html.dark .bg-slate-900\/90,
+html.dark .bg-slate-900\/80,
+html.dark .bg-slate-900\/70,
+html.dark .bg-slate-900\/60,
+html.dark .bg-slate-900\/50,
+html.dark .bg-slate-900\/40,
+html:not(.light) .bg-slate-900,
+html:not(.light) .bg-slate-900\/95,
+html:not(.light) .bg-slate-900\/90,
+html:not(.light) .bg-slate-900\/80,
+html:not(.light) .bg-slate-900\/70,
+html:not(.light) .bg-slate-900\/60,
+html:not(.light) .bg-slate-900\/50,
+html:not(.light) .bg-slate-900\/40,
+html.light .dark .bg-slate-900,
+html.light .dark .bg-slate-900\/95,
+html.light .dark .bg-slate-900\/90,
+html.light .dark .bg-slate-900\/80,
+html.light .dark .bg-slate-900\/70,
+html.light .dark .bg-slate-900\/60,
+html.light .dark .bg-slate-900\/50,
+html.light .dark .bg-slate-900\/40 {
+  background-color: #242428 !important;
+  border-color: #303034 !important;
+}
+
+html.dark .bg-slate-800,
+html.dark .bg-slate-800\/90,
+html.dark .bg-slate-800\/80,
+html.dark .bg-slate-800\/70,
+html.dark .bg-slate-800\/60,
+html.dark .bg-slate-800\/50,
+html:not(.light) .bg-slate-800,
+html:not(.light) .bg-slate-800\/90,
+html:not(.light) .bg-slate-800\/80,
+html:not(.light) .bg-slate-800\/70,
+html:not(.light) .bg-slate-800\/60,
+html:not(.light) .bg-slate-800\/50,
+html.light .dark .bg-slate-800,
+html.light .dark .bg-slate-800\/90,
+html.light .dark .bg-slate-800\/80,
+html.light .dark .bg-slate-800\/70 {
+  background-color: #303034 !important;
+  border-color: #3f3f46 !important;
+}
+
+html.dark .text-slate-100,
+html.dark .text-slate-200,
+html.dark .text-white,
+html:not(.light) .text-slate-100,
+html:not(.light) .text-slate-200,
+html:not(.light) .text-white,
+html.light .dark .text-slate-100,
+html.light .dark .text-slate-200,
+html.light .dark .text-white {
+  color: #f4f4f5 !important;
+}
+
+html.dark .text-slate-300,
+html.dark .text-slate-400,
+html:not(.light) .text-slate-300,
+html:not(.light) .text-slate-400,
+html.light .dark .text-slate-300,
+html.light .dark .text-slate-400 {
+  color: #a1a1aa !important;
+}
+
+html.dark .border-slate-800,
+html.dark .border-slate-700,
+html:not(.light) .border-slate-800,
+html:not(.light) .border-slate-700,
+html.light .dark .border-slate-800,
+html.light .dark .border-slate-700 {
+  border-color: #303034 !important;
+}
+
+html.dark input:not([type="checkbox"]):not([type="radio"]):not(.bg-transparent),
+html.dark select,
+html.dark textarea:not(.bg-transparent),
+html:not(.light) input:not([type="checkbox"]):not([type="radio"]):not(.bg-transparent),
+html:not(.light) select,
+html:not(.light) textarea:not(.bg-transparent) {
+  background-color: #303034;
+  color: #f4f4f5;
+  border-color: #3f3f46;
+}
+
+/* =========================================================
    PROTECT ALL PRIMARY CTA BUTTONS & ACTION LINKS IN LIGHT MODE
    ========================================================= */
+html.light button.bg-\[\#FF6600\],
+html.light a.bg-\[\#FF6600\],
+html.light .bg-\[\#FF6600\],
 html.light .bg-indigo-600,
 html.light .bg-indigo-500,
 html.light .bg-blue-600,
@@ -238,6 +384,8 @@ html.light a.bg-amber-600 {
   color: #ffffff !important;
 }
 
+html.light button.bg-\[\#FF6600\] *,
+html.light a.bg-\[\#FF6600\] *,
 html.light .bg-indigo-600 *,
 html.light .bg-indigo-500 *,
 html.light .bg-blue-600 *,
@@ -268,80 +416,80 @@ html.light a.bg-amber-600 * {
    Perdido: #DC2626 (Red)
    ========================================================= */
 .card-stage-inicio {
-  background-color: #0f172a;
-  background-image: linear-gradient(135deg, rgba(100, 116, 139, 0.06) 0%, transparent 100%);
-  border: 1px solid rgba(100, 116, 139, 0.35);
+  background-color: #24252a;
+  background-image: linear-gradient(135deg, rgba(100, 116, 139, 0.22) 0%, rgba(36, 36, 40, 0.95) 100%);
+  border: 1px solid rgba(100, 116, 139, 0.45);
   color: #f8fafc;
 }
 .card-stage-inicio:hover {
-  border-color: #64748b;
-  box-shadow: 0 4px 12px rgba(100, 116, 139, 0.15);
+  border-color: #94a3b8;
+  box-shadow: 0 6px 18px rgba(100, 116, 139, 0.25);
 }
 
 .card-stage-reuniao {
-  background-color: #0f172a;
-  background-image: linear-gradient(135deg, rgba(59, 130, 246, 0.07) 0%, transparent 100%);
-  border: 1px solid rgba(59, 130, 246, 0.35);
+  background-color: #1a2336;
+  background-image: linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(26, 35, 54, 0.95) 100%);
+  border: 1px solid rgba(59, 130, 246, 0.50);
   color: #f8fafc;
 }
 .card-stage-reuniao:hover {
-  border-color: #3b82f6;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.18);
+  border-color: #60a5fa;
+  box-shadow: 0 6px 18px rgba(59, 130, 246, 0.30);
 }
 
 .card-stage-proposta {
-  background-color: #0f172a;
-  background-image: linear-gradient(135deg, rgba(139, 92, 246, 0.07) 0%, transparent 100%);
-  border: 1px solid rgba(139, 92, 246, 0.35);
+  background-color: #251e36;
+  background-image: linear-gradient(135deg, rgba(139, 92, 246, 0.25) 0%, rgba(37, 30, 54, 0.95) 100%);
+  border: 1px solid rgba(139, 92, 246, 0.50);
   color: #f8fafc;
 }
 .card-stage-proposta:hover {
-  border-color: #8b5cf6;
-  box-shadow: 0 4px 12px rgba(139, 92, 246, 0.18);
+  border-color: #a78bfa;
+  box-shadow: 0 6px 18px rgba(139, 92, 246, 0.30);
 }
 
 .card-stage-negociacao {
-  background-color: #0f172a;
-  background-image: linear-gradient(135deg, rgba(245, 158, 11, 0.07) 0%, transparent 100%);
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  background-color: #2a2318;
+  background-image: linear-gradient(135deg, rgba(245, 158, 11, 0.25) 0%, rgba(42, 35, 24, 0.95) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.50);
   color: #f8fafc;
 }
 .card-stage-negociacao:hover {
-  border-color: #f59e0b;
-  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.18);
+  border-color: #fbbf24;
+  box-shadow: 0 6px 18px rgba(245, 158, 11, 0.30);
 }
 
 .card-stage-contrato {
-  background-color: #0f172a;
-  background-image: linear-gradient(135deg, rgba(255, 102, 0, 0.07) 0%, transparent 100%);
-  border: 1px solid rgba(255, 102, 0, 0.35);
+  background-color: #2c2016;
+  background-image: linear-gradient(135deg, rgba(255, 102, 0, 0.25) 0%, rgba(44, 32, 22, 0.95) 100%);
+  border: 1px solid rgba(255, 102, 0, 0.55);
   color: #f8fafc;
 }
 .card-stage-contrato:hover {
   border-color: #FF6600;
-  box-shadow: 0 4px 12px rgba(255, 102, 0, 0.18);
+  box-shadow: 0 6px 18px rgba(255, 102, 0, 0.32);
 }
 
 .card-stage-cliente {
-  background-color: #0f172a;
-  background-image: linear-gradient(135deg, rgba(22, 163, 74, 0.07) 0%, transparent 100%);
-  border: 1px solid rgba(22, 163, 74, 0.35);
+  background-color: #17281d;
+  background-image: linear-gradient(135deg, rgba(22, 163, 74, 0.25) 0%, rgba(23, 40, 29, 0.95) 100%);
+  border: 1px solid rgba(22, 163, 74, 0.50);
   color: #f8fafc;
 }
 .card-stage-cliente:hover {
-  border-color: #16a34a;
-  box-shadow: 0 4px 12px rgba(22, 163, 74, 0.18);
+  border-color: #4ade80;
+  box-shadow: 0 6px 18px rgba(22, 163, 74, 0.30);
 }
 
 .card-stage-perdido {
-  background-color: #0f172a;
-  background-image: linear-gradient(135deg, rgba(220, 38, 38, 0.06) 0%, transparent 100%);
-  border: 1px solid rgba(220, 38, 38, 0.35);
+  background-color: #2b1a1a;
+  background-image: linear-gradient(135deg, rgba(220, 38, 38, 0.25) 0%, rgba(43, 26, 26, 0.95) 100%);
+  border: 1px solid rgba(220, 38, 38, 0.50);
   color: #f8fafc;
 }
 .card-stage-perdido:hover {
-  border-color: #dc2626;
-  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.18);
+  border-color: #f87171;
+  box-shadow: 0 6px 18px rgba(220, 38, 38, 0.30);
 }
 
 /* Light Mode Stage Cards (Root Card Container Stage Tint ~8-12%) */
@@ -481,12 +629,12 @@ html.light .card-stage-perdido:hover {
 
 /* Driver.js Popover Customization */
 .driver-popover.triverus-spotlight-popover {
-  background-color: #0f172a !important;
-  color: #f8fafc !important;
-  border: 1px solid #FF6600 !important;
+  background-color: #242428 !important;
+  color: #f4f4f5 !important;
+  border: 1px solid #303034 !important;
   border-radius: 1rem !important;
   padding: 1rem 1.25rem !important;
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5) !important;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6), 0 8px 10px -6px rgba(0, 0, 0, 0.6) !important;
   font-family: inherit !important;
   max-width: 320px !important;
 }
@@ -501,7 +649,7 @@ html.light .card-stage-perdido:hover {
 .driver-popover.triverus-spotlight-popover .driver-popover-description {
   font-size: 0.75rem !important;
   line-height: 1.5 !important;
-  color: #cbd5e1 !important;
+  color: #d4d4d8 !important;
   margin-bottom: 0.75rem !important;
 }
 
@@ -534,3 +682,139 @@ html.light .card-stage-perdido:hover {
 .driver-popover.triverus-spotlight-popover .driver-popover-next-btn:hover {
   background-color: #e65c00 !important;
 }
+
+/* =========================================================
+   SHIMMER LOADING ANIMATION (TRIVERUS GLOBAL SKELETON SYSTEM)
+   ========================================================= */
+@keyframes shimmer-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+.animate-shimmer-sweep,
+.skeleton-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.animate-shimmer-sweep::after,
+.skeleton-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.04) 20%,
+    rgba(255, 255, 255, 0.18) 50%,
+    rgba(255, 255, 255, 0.04) 80%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: shimmer-sweep 1.8s infinite ease-in-out;
+  pointer-events: none;
+}
+
+html.light .animate-shimmer-sweep::after,
+html.light .skeleton-shimmer::after {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.45) 30%,
+    rgba(255, 255, 255, 0.8) 50%,
+    rgba(255, 255, 255, 0.45) 70%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+/* Overlay específico para transições e trocas de Avatar com Shimmer circular nítido */
+.avatar-shimmer-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background-color: rgba(36, 36, 40, 0.65);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.avatar-shimmer-overlay::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.08) 25%,
+    rgba(255, 255, 255, 0.28) 50%,
+    rgba(255, 255, 255, 0.08) 75%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  animation: shimmer-sweep 1.5s infinite ease-in-out;
+  pointer-events: none;
+}
+
+html.light .avatar-shimmer-overlay {
+  background-color: rgba(225, 228, 232, 0.7);
+}
+
+html.light .avatar-shimmer-overlay::after {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.5) 25%,
+    rgba(255, 255, 255, 0.85) 50%,
+    rgba(255, 255, 255, 0.5) 75%,
+    rgba(255, 255, 255, 0) 100%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-shimmer-sweep::after,
+  .skeleton-shimmer::after,
+  .avatar-shimmer-overlay::after {
+    animation: none !important;
+    display: none !important;
+  }
+}
+
+/* =========================================================
+   NEON MODAL GLOW & GRADIENT BORDERS (AGENT POPUPS)
+   ========================================================= */
+.neon-modal-shell {
+  position: relative;
+  border-radius: 1.75rem;
+  padding: 1.5px;
+  background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 35%, #3b82f6 70%, #06b6d4 100%);
+  box-shadow:
+    0 0 30px rgba(236, 72, 153, 0.25),
+    0 0 50px rgba(139, 92, 246, 0.2),
+    0 0 70px rgba(6, 182, 212, 0.15);
+}
+
+.neon-modal-shell-brain {
+  position: relative;
+  border-radius: 1.75rem;
+  padding: 1.5px;
+  background: linear-gradient(135deg, #ec4899 0%, #f97316 40%, #8b5cf6 80%, #06b6d4 100%);
+  box-shadow:
+    0 0 35px rgba(249, 115, 22, 0.25),
+    0 0 55px rgba(236, 72, 153, 0.2);
+}
+
+.neon-modal-inner {
+  border-radius: calc(1.75rem - 1.5px);
+  background-color: #242428;
+}
+

@@ -10,6 +10,8 @@ export interface UserPermissions {
   can_delete_leads: boolean;
   can_change_stage: boolean;
   can_manage_contacts: boolean;
+  can_access_auditoria: boolean;
+  can_manage_auditoria: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -21,6 +23,8 @@ export const DEFAULT_USER_PERMISSIONS: Omit<UserPermissions, 'user_id'> = {
   can_delete_leads: false,
   can_change_stage: true,
   can_manage_contacts: true,
+  can_access_auditoria: false,
+  can_manage_auditoria: false,
 };
 
 export const ADMIN_FULL_PERMISSIONS: Omit<UserPermissions, 'user_id'> = {
@@ -30,6 +34,8 @@ export const ADMIN_FULL_PERMISSIONS: Omit<UserPermissions, 'user_id'> = {
   can_delete_leads: true,
   can_change_stage: true,
   can_manage_contacts: true,
+  can_access_auditoria: true,
+  can_manage_auditoria: true,
 };
 
 interface PermissionsContextType {
@@ -42,6 +48,8 @@ interface PermissionsContextType {
   canDeleteLeads: boolean;
   canChangeStage: boolean;
   canManageContacts: boolean;
+  canAccessAuditoria: boolean;
+  canManageAuditoria: boolean;
   /** Função exclusiva de Administrador conforme decisão de produto */
   canManageUsers: boolean;
   reloadPermissions: () => Promise<void>;
@@ -70,11 +78,12 @@ export function PermissionsProvider({
     };
   });
 
-  const [loading, setLoading] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(() => !currentProfile || currentProfile.role === null || currentProfile.role === undefined);
 
   const fetchPermissions = useCallback(async () => {
     if (!currentProfile?.id) {
       setPermissions(null);
+      setLoading(false);
       return;
     }
 
@@ -83,6 +92,7 @@ export function PermissionsProvider({
         user_id: currentProfile.id,
         ...ADMIN_FULL_PERMISSIONS,
       });
+      setLoading(false);
       return;
     }
 
@@ -109,6 +119,8 @@ export function PermissionsProvider({
           can_delete_leads: Boolean(data.can_delete_leads),
           can_change_stage: Boolean(data.can_change_stage),
           can_manage_contacts: Boolean(data.can_manage_contacts),
+          can_access_auditoria: Boolean(data.can_access_auditoria),
+          can_manage_auditoria: Boolean(data.can_manage_auditoria),
           created_at: data.created_at,
           updated_at: data.updated_at,
         });
@@ -146,6 +158,8 @@ export function PermissionsProvider({
       canDeleteLeads: isAdmin || Boolean(p.can_delete_leads),
       canChangeStage: isAdmin || Boolean(p.can_change_stage),
       canManageContacts: isAdmin || Boolean(p.can_manage_contacts),
+      canAccessAuditoria: isAdmin || Boolean(p.can_access_auditoria),
+      canManageAuditoria: isAdmin || Boolean(p.can_manage_auditoria),
       canManageUsers: isAdmin,
       reloadPermissions: fetchPermissions,
     };
@@ -172,6 +186,8 @@ export function useUserPermissions(): PermissionsContextType {
       canDeleteLeads: false,
       canChangeStage: true,
       canManageContacts: true,
+      canAccessAuditoria: false,
+      canManageAuditoria: false,
       canManageUsers: false,
       reloadPermissions: async () => {},
     };

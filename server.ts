@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import OpenAI from 'openai';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -10,6 +11,7 @@ import {
   CONDO_TOOLS,
   buildSystemPrompt,
   executeToolCall,
+  processCondoLocalFallback,
 } from './condoBackend.js';
 import {
   getValidGoogleAccessToken,
@@ -22,6 +24,59 @@ import {
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
 } from './googleCalendarAuth.ts';
+import {
+  getGoogleDriveConfigStatus,
+  diagnoseDriveConnection,
+  listImmediateSubfolders,
+  verifyRootFolder,
+  findCondoSubfolder,
+  listPdfFilesInFolder,
+  getDriveFileStream,
+  normalizeNameForMatching,
+  listAvailableFoldersForCondo,
+  getFolderContentsAndBreadcrumb,
+  verifyFolderAccessibleInDrive,
+  searchDriveFolders,
+} from './googleDriveService.ts';
+import {
+  analyzeAuditoriaDocument,
+  executeMemoryExtraction,
+  executeBatchMemoryExtraction,
+} from './auditoriaAiService.ts';
+import {
+  prepareMemoryCreate,
+  prepareMemoryUpdate,
+  filterBatchEligibleMemories,
+  groupMemoriesByDriveFile,
+  executeBatchGroupLoop,
+} from './auditoriaMemoryService.ts';
+import { registerAuditoriaMemoryRoutes } from './auditoriaMemoryRoutes.ts';
+import './auditoriaTools.ts';
+import {
+  getGlobalAgents,
+  getGlobalAgentById,
+  saveGlobalAgent,
+  deleteGlobalAgent,
+  getGlobalAssignments,
+  saveGlobalAssignment,
+  removeGlobalAssignment,
+  checkIsActiveAdmin,
+  checkIsActiveUser,
+  getCustomAgentsForUser,
+  getCustomAgentById,
+  saveCustomAgentForUser,
+  deleteCustomAgentForUser,
+  getAgentCapabilities,
+} from './agentService.ts';
+import {
+  executeAgentChat,
+  resolveModelInfo,
+  resolveBrainParameters,
+} from './agentExecutionEngine.ts';
+import {
+  getModelCatalog,
+  refreshModelCatalog,
+} from './modelCatalogService.ts';
 
 export {
   getValidGoogleAccessToken,
@@ -33,6 +88,17 @@ export {
   deleteGoogleCalendarEventForInteraction,
   GoogleCalendarAuthError,
   EXPIRATION_BUFFER_MS,
+  getGoogleDriveConfigStatus,
+  diagnoseDriveConnection,
+  listImmediateSubfolders,
+  verifyRootFolder,
+  findCondoSubfolder,
+  listPdfFilesInFolder,
+  getDriveFileStream,
+  normalizeNameForMatching,
+  listAvailableFoldersForCondo,
+  getFolderContentsAndBreadcrumb,
+  verifyFolderAccessibleInDrive,
 };
 
 const __filename = fileURLToPath(import.meta.url);
@@ -473,8 +539,45 @@ function verifyOAuthState(
 }
 
 // ==============================================================================
-// GESTÃO DE USUÁRIOS E PERMISSÕES GRANULARES (EXCLUSIVO PARA ADMINISTRADORES)
+// MIDDLEWARES DE AUTENTICAÇÃO E PERMISSÕES
 // ==============================================================================
+
+async function requireAuthUser(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Token de autorização não fornecido.' });
+  }
+
+  const token = authHeader.slice(7).trim();
+  const supabaseAdmin = getAdminSupabaseClient();
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Cliente administrativo Supabase não configurado.' });
+  }
+
+  try {
+    const { data: { user }, error: userErr } = await supabaseAdmin.auth.getUser(token);
+    if (userErr || !user) {
+      return res.status(401).json({ error: 'Sessão inválida ou expirada. Faça login novamente.' });
+    }
+
+    const { data: profile } = await supabaseAdmin
+      .from('profiles')
+      .select('id, role, is_active, deleted_at, full_name, email')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (profile && profile.is_active === false) {
+      return res.status(403).json({ error: 'Acesso restrito: usuário desativado no sistema.' });
+    }
+
+    (req as any).user = user;
+    (req as any).userProfile = profile || { id: user.id, email: user.email, role: 'user' };
+    (req as any).authToken = token;
+    next();
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Falha ao validar sessão do usuário: ' + (err?.message || err) });
+  }
+}
 
 async function requireAdminUser(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
@@ -496,14 +599,25 @@ async function requireAdminUser(req: express.Request, res: express.Response, nex
 
     const adminScopedClient = getScopedSupabaseClient(token);
 
-    const { data: profile, error: profErr } = await adminScopedClient
+    let { data: profile, error: profErr } = await adminScopedClient
       .from('profiles')
       .select('id, role, is_active, full_name, email')
       .eq('id', user.id)
       .maybeSingle();
 
     if (profErr || !profile) {
-      return res.status(403).json({ error: 'Perfil de usuário não localizado no sistema.' });
+      // Fallback via supabaseAdmin to prevent transient RLS policy blocks for verified administrators
+      const { data: adminProf } = await supabaseAdmin
+        .from('profiles')
+        .select('id, role, is_active, full_name, email')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (adminProf) {
+        profile = adminProf;
+      } else {
+        return res.status(403).json({ error: 'Perfil de usuário não localizado no sistema.' });
+      }
     }
 
     const role = (profile.role || '').toLowerCase();
@@ -530,8 +644,8 @@ app.get('/api/admin/users', requireAdminUser, async (req, res) => {
   try {
     const [authRes, profilesRes, permRes] = await Promise.all([
       supabaseAdmin.auth.admin.listUsers({ perPage: 1000 }),
-      adminScopedClient.from('profiles').select('*').order('created_at', { ascending: true }),
-      adminScopedClient.from('user_permissions').select('*'),
+      supabaseAdmin.from('profiles').select('*').order('created_at', { ascending: true }),
+      supabaseAdmin.from('user_permissions').select('*'),
     ]);
 
     const authUsers = authRes.data?.users || [];
@@ -581,6 +695,8 @@ app.get('/api/admin/users', requireAdminUser, async (req, res) => {
             can_delete_leads: Boolean(perm.can_delete_leads),
             can_change_stage: Boolean(perm.can_change_stage),
             can_manage_contacts: Boolean(perm.can_manage_contacts),
+            can_access_auditoria: Boolean(perm.can_access_auditoria),
+            can_manage_auditoria: Boolean(perm.can_manage_auditoria),
           } : {
             can_manage_notes: true,
             can_delete_notes: false,
@@ -588,6 +704,8 @@ app.get('/api/admin/users', requireAdminUser, async (req, res) => {
             can_delete_leads: false,
             can_change_stage: true,
             can_manage_contacts: true,
+            can_access_auditoria: false,
+            can_manage_auditoria: false,
           },
         };
       })
@@ -706,6 +824,8 @@ async function handleInviteUserAdmin(req: express.Request, res: express.Response
       can_delete_leads: Boolean(permissions.can_delete_leads ?? false),
       can_change_stage: Boolean(permissions.can_change_stage ?? true),
       can_manage_contacts: Boolean(permissions.can_manage_contacts ?? true),
+      can_access_auditoria: Boolean(permissions.can_access_auditoria ?? false),
+      can_manage_auditoria: Boolean(permissions.can_manage_auditoria ?? false),
       updated_at: new Date().toISOString(),
     };
 
@@ -791,6 +911,8 @@ app.patch('/api/admin/users/:id', requireAdminUser, async (req, res) => {
         can_delete_leads: false,
         can_change_stage: true,
         can_manage_contacts: true,
+        can_access_auditoria: false,
+        can_manage_auditoria: false,
       });
     }
 
@@ -801,7 +923,7 @@ app.patch('/api/admin/users/:id', requireAdminUser, async (req, res) => {
   }
 });
 
-// 4. PATCH /api/admin/users/:id/permissions - Atualizar as 6 permissões granulares
+// 4. PATCH /api/admin/users/:id/permissions - Atualizar as permissões granulares
 app.patch('/api/admin/users/:id/permissions', requireAdminUser, async (req, res) => {
   const adminScopedClient: SupabaseClient = (req as any).adminScopedClient;
   if (!adminScopedClient) return res.status(500).json({ error: 'Serviço indisponível' });
@@ -825,6 +947,8 @@ app.patch('/api/admin/users/:id/permissions', requireAdminUser, async (req, res)
     if (permissions.can_delete_leads !== undefined) permsPayload.can_delete_leads = Boolean(permissions.can_delete_leads);
     if (permissions.can_change_stage !== undefined) permsPayload.can_change_stage = Boolean(permissions.can_change_stage);
     if (permissions.can_manage_contacts !== undefined) permsPayload.can_manage_contacts = Boolean(permissions.can_manage_contacts);
+    if (permissions.can_access_auditoria !== undefined) permsPayload.can_access_auditoria = Boolean(permissions.can_access_auditoria);
+    if (permissions.can_manage_auditoria !== undefined) permsPayload.can_manage_auditoria = Boolean(permissions.can_manage_auditoria);
 
     const { error: permErr } = await adminScopedClient
       .from('user_permissions')
@@ -1185,6 +1309,1631 @@ app.post('/api/admin/users/:id/delete', requireAdminUser, handleDeleteUser);
 app.delete('/api/admin/delete-user', requireAdminUser, handleDeleteUser);
 app.post('/api/admin/delete-user', requireAdminUser, handleDeleteUser);
 
+// ==============================================================================
+// GOOGLE DRIVE CENTRAL — AUDITORIA (CONTA DE SERVIÇO)
+// ==============================================================================
+
+// 1. Status seguro das credenciais configuradas para o Google Drive central
+app.get('/api/admin/drive/status', requireAdminUser, (req, res) => {
+  try {
+    const status = getGoogleDriveConfigStatus();
+    return res.json(status);
+  } catch (err: any) {
+    return res.status(500).json({
+      error: 'Falha ao consultar status das credenciais do Google Drive: ' + (err?.message || err),
+    });
+  }
+});
+
+// 2. Diagnóstico completo e seguro da conexão e permissões do Google Drive
+app.get('/api/admin/drive/diagnose', requireAdminUser, async (req, res) => {
+  try {
+    const diagnostic = await diagnoseDriveConnection();
+    return res.json(diagnostic);
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      stage: 'unknown',
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Erro interno ao diagnosticar Google Drive: ' + (err?.message || err),
+        resolution_hint: 'Verifique os logs do servidor para mais detalhes.',
+      },
+    });
+  }
+});
+
+// 3. Consulta estruturada de subpastas imediatas pertencentes à pasta raiz
+app.get('/api/admin/drive/subfolders', requireAdminUser, async (req, res) => {
+  try {
+    const result = await listImmediateSubfolders();
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({
+      error: 'Falha ao consultar subpastas no Google Drive: ' + (err?.message || err),
+    });
+  }
+});
+
+// ==============================================================================
+// AUDITORIA TRIVERUS — GERENCIAMENTO DE DOCUMENTOS E VÍNCULOS COM O GOOGLE DRIVE
+// ==============================================================================
+
+const AUDITORIA_DOCS_FALLBACK_FILE = path.join(__dirname, 'auditoria_documents_store.json');
+const AUDITORIA_FOLDERS_FALLBACK_FILE = path.join(__dirname, 'auditoria_folders_store.json');
+
+interface AuditoriaFasePastaRecord {
+  id: string;
+  condo_id: string;
+  category: string;
+  drive_folder_id: string;
+  drive_folder_name: string;
+  linked_by_user_id: string | null;
+  last_synced_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+function readFallbackFolders(): AuditoriaFasePastaRecord[] {
+  try {
+    if (fs.existsSync(AUDITORIA_FOLDERS_FALLBACK_FILE)) {
+      const raw = fs.readFileSync(AUDITORIA_FOLDERS_FALLBACK_FILE, 'utf8');
+      return JSON.parse(raw) || [];
+    }
+  } catch (e) {
+    console.warn('[AUDITORIA_FOLDERS_FALLBACK] Falha ao ler arquivo local:', e);
+  }
+  return [];
+}
+
+function saveFallbackFolder(record: AuditoriaFasePastaRecord): void {
+  try {
+    const list = readFallbackFolders();
+    const idx = list.findIndex((f) => f.condo_id === record.condo_id && f.category === record.category);
+    if (idx >= 0) {
+      list[idx] = record;
+    } else {
+      list.push(record);
+    }
+    fs.writeFileSync(AUDITORIA_FOLDERS_FALLBACK_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[AUDITORIA_FOLDERS_FALLBACK] Falha ao salvar arquivo local:', e);
+  }
+}
+
+function deleteFallbackFolder(condoId: string, category: string): boolean {
+  try {
+    const list = readFallbackFolders();
+    const filtered = list.filter((f) => !(f.condo_id === condoId && f.category === category));
+    if (filtered.length !== list.length) {
+      fs.writeFileSync(AUDITORIA_FOLDERS_FALLBACK_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+      return true;
+    }
+  } catch (e) {
+    console.warn('[AUDITORIA_FOLDERS_FALLBACK] Falha ao remover do arquivo local:', e);
+  }
+  return false;
+}
+
+function deleteFallbackDocumentsByOriginFolder(condoId: string, category: string, folderId: string): number {
+  try {
+    const list = readFallbackDocuments();
+    const remaining = list.filter((d) => {
+      if (d.condo_id === condoId && d.category === category && d.origin_folder_id === folderId) {
+        return false;
+      }
+      return true;
+    });
+    const removedCount = list.length - remaining.length;
+    if (removedCount > 0) {
+      fs.writeFileSync(AUDITORIA_DOCS_FALLBACK_FILE, JSON.stringify(remaining, null, 2), 'utf8');
+    }
+    return removedCount;
+  } catch (e) {
+    console.warn('[AUDITORIA_DOCS_FALLBACK] Falha ao remover documentos por pasta de origem:', e);
+    return 0;
+  }
+}
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidUUID(val?: string | null): boolean {
+  if (!val || typeof val !== 'string') return false;
+  return UUID_REGEX.test(val.trim());
+}
+
+function isTableMissingError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const message = String(err.message || '');
+  return (
+    code === '42P01' ||
+    code === 'PGRST205' ||
+    message.includes('Could not find the table') ||
+    message.includes('relation "public.auditoria_documentos" does not exist') ||
+    message.includes('relation "auditoria_documentos" does not exist')
+  );
+}
+
+function isUniqueConstraintViolation(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || '');
+  const message = String(err.message || '').toLowerCase();
+  const details = String(err.details || '').toLowerCase();
+  return (
+    code === '23505' ||
+    message.includes('unique constraint') ||
+    message.includes('duplicate key') ||
+    details.includes('already exists')
+  );
+}
+
+interface AuditoriaDocumentRecord {
+  id: string;
+  condo_id: string;
+  category: string;
+  drive_file_id: string;
+  drive_file_name: string;
+  drive_file_size: number | null;
+  drive_file_modified_at: string | null;
+  linked_by_user_id: string | null;
+  origin_folder_id?: string | null;
+  origin_folder_name?: string | null;
+  sync_status?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function readFallbackDocuments(): AuditoriaDocumentRecord[] {
+  try {
+    if (fs.existsSync(AUDITORIA_DOCS_FALLBACK_FILE)) {
+      const raw = fs.readFileSync(AUDITORIA_DOCS_FALLBACK_FILE, 'utf8');
+      return JSON.parse(raw) || [];
+    }
+  } catch (e) {
+    console.warn('[AUDITORIA_DOCS_FALLBACK] Falha ao ler arquivo local:', e);
+  }
+  return [];
+}
+
+function saveFallbackDocument(doc: AuditoriaDocumentRecord): void {
+  try {
+    const list = readFallbackDocuments();
+    const idx = list.findIndex(
+      (d) => d.condo_id === doc.condo_id && d.category === doc.category && d.drive_file_id === doc.drive_file_id
+    );
+    if (idx >= 0) {
+      list[idx] = doc;
+    } else {
+      list.push(doc);
+    }
+    fs.writeFileSync(AUDITORIA_DOCS_FALLBACK_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[AUDITORIA_DOCS_FALLBACK] Falha ao salvar arquivo local:', e);
+  }
+}
+
+function deleteFallbackDocument(
+  condoId: string,
+  category: string,
+  driveFileId?: string | null,
+  documentId?: string | null
+): boolean {
+  try {
+    const list = readFallbackDocuments();
+    const filtered = list.filter((d) => {
+      if (d.condo_id !== condoId || d.category !== category) return true;
+      if (documentId && d.id === documentId) return false;
+      if (driveFileId && d.drive_file_id === driveFileId) return false;
+      if (!documentId && !driveFileId) return false;
+      return true;
+    });
+    if (filtered.length !== list.length) {
+      fs.writeFileSync(AUDITORIA_DOCS_FALLBACK_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+      return true;
+    }
+  } catch (e) {
+    console.warn('[AUDITORIA_DOCS_FALLBACK] Falha ao remover do arquivo local:', e);
+  }
+  return false;
+}
+
+export interface AuditoriaMemoryRecord {
+  id: string;
+  condo_id: string;
+  category: string;
+  label: string;
+  fill_mode: 'manual' | 'ai';
+  manual_value?: string | null;
+  instruction?: string | null;
+  source_document_id?: string | null;
+  source_drive_file_id?: string | null;
+  source_drive_file_name?: string | null;
+  last_result?: string | null;
+  page_reference?: string | null;
+  last_result_metadata?: any;
+  status: 'never_searched' | 'result_available' | 'outdated' | 'failed';
+  last_executed_at?: string | null;
+  source_file_modified_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  created_by?: string | null;
+}
+
+const AUDITORIA_MEMORIAS_FALLBACK_FILE = path.join(process.cwd(), 'data', 'auditoria_memorias_contingency.json');
+
+function readFallbackMemories(): AuditoriaMemoryRecord[] {
+  try {
+    if (fs.existsSync(AUDITORIA_MEMORIAS_FALLBACK_FILE)) {
+      const raw = fs.readFileSync(AUDITORIA_MEMORIAS_FALLBACK_FILE, 'utf8');
+      return JSON.parse(raw) || [];
+    }
+  } catch (e) {
+    console.warn('[AUDITORIA_MEMORIAS_FALLBACK] Falha ao ler arquivo local:', e);
+  }
+  return [];
+}
+
+function saveFallbackMemory(mem: AuditoriaMemoryRecord): void {
+  try {
+    const list = readFallbackMemories();
+    const idx = list.findIndex((m) => m.id === mem.id && m.condo_id === mem.condo_id);
+    if (idx >= 0) {
+      list[idx] = mem;
+    } else {
+      list.push(mem);
+    }
+    const dir = path.dirname(AUDITORIA_MEMORIAS_FALLBACK_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(AUDITORIA_MEMORIAS_FALLBACK_FILE, JSON.stringify(list, null, 2), 'utf8');
+  } catch (e) {
+    console.warn('[AUDITORIA_MEMORIAS_FALLBACK] Falha ao salvar arquivo local:', e);
+  }
+}
+
+function deleteFallbackMemory(condoId: string, memoryId: string): boolean {
+  try {
+    const list = readFallbackMemories();
+    const filtered = list.filter((m) => !(m.condo_id === condoId && m.id === memoryId));
+    const dir = path.dirname(AUDITORIA_MEMORIAS_FALLBACK_FILE);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(AUDITORIA_MEMORIAS_FALLBACK_FILE, JSON.stringify(filtered, null, 2), 'utf8');
+    return true;
+  } catch (e) {
+    console.warn('[AUDITORIA_MEMORIAS_FALLBACK] Falha ao remover arquivo local:', e);
+    return false;
+  }
+}
+
+/**
+ * Middleware robusto de autorização e isolamento por condomínio para o módulo de Auditoria.
+ * Valida:
+ * 1. Token de sessão válido e usuário ativo em public.profiles
+ * 2. Bypass irrestrito para administradores ativos (role === 'admin' || 'administrador')
+ * 3. Validação granular de permissões em public.user_permissions (can_access_auditoria vs can_manage_auditoria)
+ * 4. Validação de existência do condomínio em public.leads
+ * 5. Isolamento estrito por condomínio: colaboradores comuns só acessam condomínios onde são o responsible_user_id
+ */
+function requireAuditoriaAccess(requiredPermission: 'can_access_auditoria' | 'can_manage_auditoria' = 'can_access_auditoria') {
+  return async (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Token de autorização não fornecido.' });
+    }
+
+    const token = authHeader.slice(7).trim();
+    const supabaseAdmin = getAdminSupabaseClient();
+    if (!supabaseAdmin) {
+      return res.status(500).json({ error: 'Cliente administrativo Supabase não configurado.' });
+    }
+
+    try {
+      const { data: { user }, error: userErr } = await supabaseAdmin.auth.getUser(token);
+      if (userErr || !user) {
+        return res.status(401).json({ error: 'Sessão inválida ou expirada. Faça login novamente.' });
+      }
+
+      // 1. Obter perfil e verificar se o usuário está ativo
+      let { data: profile, error: profErr } = await supabaseAdmin
+        .from('profiles')
+        .select('id, role, is_active, full_name, email')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (profErr || !profile) {
+        return res.status(403).json({ error: 'Perfil de usuário não localizado no sistema.' });
+      }
+
+      if (profile.is_active !== true || (profile as any).deleted_at) {
+        return res.status(403).json({ error: 'Acesso restrito: usuário inativo ou desativado no sistema.' });
+      }
+
+      const role = (profile.role || '').toLowerCase();
+      const isAdmin = role === 'admin' || role === 'administrador';
+
+      (req as any).user = user;
+      (req as any).userProfile = profile;
+      (req as any).isAdmin = isAdmin;
+      (req as any).authToken = token;
+
+      // 2. Validação de permissões granulares para usuários comuns
+      if (!isAdmin) {
+        const { data: permData } = await supabaseAdmin
+          .from('user_permissions')
+          .select('can_access_auditoria, can_manage_auditoria')
+          .eq('user_id', user.id)
+          .maybeSingle();
+
+        const hasAccess = Boolean(permData?.can_access_auditoria);
+        const hasManage = Boolean(permData?.can_manage_auditoria);
+
+        if (requiredPermission === 'can_manage_auditoria' && !hasManage) {
+          return res.status(403).json({
+            error: 'Acesso negado: seu usuário não possui a permissão "can_manage_auditoria" para gerenciar documentos no módulo de Auditoria.',
+          });
+        }
+
+        if (requiredPermission === 'can_access_auditoria' && !hasAccess && !hasManage) {
+          return res.status(403).json({
+            error: 'Acesso negado: seu usuário não possui a permissão "can_access_auditoria" para acessar o módulo de Auditoria.',
+          });
+        }
+      }
+
+      // 3. Validação de condomínio e isolamento estrito por usuário
+      const condoId = req.params.condoId || (req.query.condoId as string);
+      if (condoId) {
+        if (!isValidUUID(condoId)) {
+          return res.status(400).json({ error: 'Identificador do condomínio inválido. Deve ser um UUID no formato padrão.' });
+        }
+
+        const { data: leadData, error: leadErr } = await supabaseAdmin
+          .from('leads')
+          .select('id, name, responsible_user_id')
+          .eq('id', condoId)
+          .maybeSingle();
+
+        if (leadErr) {
+          return res.status(500).json({ error: 'Falha ao validar condomínio no CRM: ' + leadErr.message });
+        }
+        if (!leadData) {
+          return res.status(404).json({ error: 'Condomínio não localizado no CRM.' });
+        }
+
+        // Se não for admin, verificar se o condomínio está sob responsabilidade do usuário
+        if (!isAdmin) {
+          if (leadData.responsible_user_id !== user.id) {
+            return res.status(403).json({
+              error: 'Acesso negado: você não tem permissão para acessar a auditoria deste condomínio (responsável designado diferente no CRM).',
+            });
+          }
+        }
+
+        (req as any).condoLead = leadData;
+      }
+
+      next();
+    } catch (err: any) {
+      console.error('[AUDITORIA_ACCESS_MIDDLEWARE_ERROR]', err);
+      return res.status(500).json({ error: 'Falha interna ao validar credenciais de auditoria: ' + (err?.message || err) });
+    }
+  };
+}
+
+// 1. Listar arquivos PDF disponíveis na subpasta do condomínio no Google Drive central
+app.get('/api/auditoria/condo/:condoId/drive-files', requireAuditoriaAccess('can_access_auditoria'), async (req, res) => {
+  const { condoId } = req.params;
+  const leadData = (req as any).condoLead;
+  const condoName = leadData?.name;
+
+  try {
+    const matchResult = await findCondoSubfolder(condoName);
+
+    if (matchResult.error) {
+      return res.status(400).json({
+        ok: false,
+        found: false,
+        condo_id: condoId,
+        condo_name: condoName,
+        error: matchResult.error,
+        files: [],
+      });
+    }
+
+    if (!matchResult.found || !matchResult.folder) {
+      return res.json({
+        ok: true,
+        found: false,
+        condo_id: condoId,
+        condo_name: condoName,
+        searched_folder_name: matchResult.normalized_searched_name,
+        message: `A subpasta do condomínio "${condoName}" não foi encontrada dentro da pasta raiz "Triverus - Documentos dos Condomínios" no Google Drive. Crie a pasta correspondente no Drive e adicione os arquivos PDF.`,
+        files: [],
+      });
+    }
+
+    const pdfFiles = await listPdfFilesInFolder(matchResult.folder.id);
+
+    return res.json({
+      ok: true,
+      found: true,
+      condo_id: condoId,
+      condo_name: condoName,
+      folder: {
+        id: matchResult.folder.id,
+        name: matchResult.folder.name,
+      },
+      files: pdfFiles,
+    });
+  } catch (err: any) {
+    console.error('[AUDITORIA_DRIVE_FILES_ERROR]', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'Falha ao consultar arquivos no Google Drive: ' + (err?.message || err),
+    });
+  }
+});
+
+// 1.1. Listar pastas disponíveis para seleção no condomínio (pasta principal + subpastas)
+// 1.1. Listar pastas disponíveis e navegar hierarquicamente pelas pastas do condomínio
+app.get('/api/auditoria/condo/:condoId/drive-folders', requireAuditoriaAccess('can_access_auditoria'), async (req, res) => {
+  const { condoId } = req.params;
+  const leadData = (req as any).condoLead;
+  const condoName = leadData?.name;
+  try {
+    const reqFolderId = req.query.folderId ? String(req.query.folderId) : null;
+    const reqSearch = (req.query.search || req.query.q) ? String(req.query.search || req.query.q).trim() : null;
+
+    if (reqSearch) {
+      const searchRes = await searchDriveFolders(reqSearch);
+      if (!searchRes.ok) {
+        return res.status(400).json({
+          ok: false,
+          error: searchRes.error || 'Falha ao buscar pastas no Google Drive.',
+          currentFolder: null,
+          breadcrumb: [],
+          subfolders: [],
+          pdfs: [],
+        });
+      }
+      return res.json({
+        ok: true,
+        isSearch: true,
+        currentFolder: null,
+        breadcrumb: [],
+        subfolders: searchRes.folders.map((f: any) => ({
+          id: f.id,
+          name: f.name,
+          path: f.name,
+          is_condo_root: false,
+          pdf_count: 0,
+        })),
+        pdfs: [],
+        totalPdfsInCurrentFolder: 0,
+      });
+    }
+
+    const result = await getFolderContentsAndBreadcrumb(condoName, reqFolderId);
+    if (!result.ok) {
+      return res.status(400).json({
+        ok: false,
+        error: result.error || `A pasta do condomínio "${condoName}" não foi localizada no Google Drive central.`,
+        currentFolder: null,
+        breadcrumb: [],
+        subfolders: [],
+        pdfs: [],
+      });
+    }
+    return res.json(result);
+  } catch (err: any) {
+    console.error('[AUDITORIA_DRIVE_FOLDERS_ERROR]', err);
+    return res.status(500).json({
+      ok: false,
+      error: err.message || 'Falha ao consultar pastas do Google Drive.',
+      currentFolder: null,
+      breadcrumb: [],
+      subfolders: [],
+      pdfs: [],
+    });
+  }
+});
+
+// 1.2. Consultar pastas do Drive vinculadas por fase
+app.get('/api/auditoria/condo/:condoId/folder-links', requireAuditoriaAccess('can_access_auditoria'), async (req, res) => {
+  const { condoId } = req.params;
+  const supabaseAdmin = getAdminSupabaseClient();
+
+  let folderLinks: any[] = [];
+  let dbError: any = null;
+
+  if (supabaseAdmin) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('auditoria_fase_pastas')
+        .select('*')
+        .eq('condo_id', condoId);
+
+      if (error) {
+        dbError = error;
+        console.warn('[AUDITORIA_GET_FOLDER_LINKS_SUPABASE_FALLBACK]', error.message || error);
+      } else {
+        folderLinks = data || [];
+      }
+    } catch (err: any) {
+      dbError = err;
+      console.warn('[AUDITORIA_GET_FOLDER_LINKS_EXCEPTION]', err?.message || err);
+    }
+  }
+
+  const fallbackFolders = readFallbackFolders().filter((f) => f.condo_id === condoId);
+
+  // Mesclar: prioriza Supabase, completa com contingência local
+  const existingCategories = new Set(folderLinks.map((f) => f.category));
+  const mergedLinks = [
+    ...folderLinks.map((f) => ({ ...f, persisted_definitively: true })),
+    ...fallbackFolders
+      .filter((f) => !existingCategories.has(f.category))
+      .map((f) => ({ ...f, persisted_definitively: false })),
+  ];
+
+  const hasContingency = mergedLinks.some((f) => f.persisted_definitively === false);
+
+  return res.json({
+    ok: true,
+    folder_links: mergedLinks,
+    folders: mergedLinks,
+    source: folderLinks.length > 0 ? (hasContingency ? 'hybrid_supabase_and_contingency' : 'supabase') : (hasContingency ? 'fallback_local' : 'empty'),
+    persisted_definitively: !hasContingency && folderLinks.length > 0,
+    has_contingency: hasContingency,
+    contingency_count: fallbackFolders.length,
+    supabase_count: folderLinks.length,
+    supabase_error: dbError ? { code: dbError.code, message: dbError.message } : undefined,
+  });
+});
+
+// 1.3. Vincular uma pasta do Google Drive a uma fase e sincronizar todos os seus PDFs
+app.post('/api/auditoria/condo/:condoId/phases/:category/link-folder', requireAuditoriaAccess('can_manage_auditoria'), async (req, res) => {
+  const { condoId, category } = req.params;
+  const { drive_folder_id, drive_folder_name } = req.body || {};
+
+  if (!drive_folder_id || typeof drive_folder_id !== 'string' || !drive_folder_id.trim()) {
+    return res.status(400).json({ error: 'ID da pasta no Google Drive é obrigatório.' });
+  }
+  if (!drive_folder_name || typeof drive_folder_name !== 'string' || !drive_folder_name.trim()) {
+    return res.status(400).json({ error: 'Nome da pasta no Google Drive é obrigatório.' });
+  }
+
+  const cleanCategory = String(category).trim().toLowerCase();
+  if (!cleanCategory || cleanCategory.length > 50 || !/^[a-z0-9_-]+$/.test(cleanCategory)) {
+    return res.status(400).json({ error: 'Categoria documental inválida.' });
+  }
+
+  // Validar autorização real de acesso da pasta no Google Drive pela conta de serviço
+  const accessCheck = await verifyFolderAccessibleInDrive(drive_folder_id);
+  if (!accessCheck.accessible) {
+    return res.status(400).json({ error: accessCheck.error || 'A pasta selecionada não está acessível no Google Drive.' });
+  }
+  const resolvedFolderName = accessCheck.folder?.name || String(drive_folder_name).trim();
+
+  const currentUserId = (req as any).user?.id || null;
+  const nowIso = new Date().toISOString();
+  const supabaseAdmin = getAdminSupabaseClient();
+
+  const folderRecord: AuditoriaFasePastaRecord = {
+    id: crypto.randomUUID(),
+    condo_id: condoId,
+    category: cleanCategory,
+    drive_folder_id: String(drive_folder_id).trim(),
+    drive_folder_name: resolvedFolderName,
+    linked_by_user_id: currentUserId,
+    last_synced_at: nowIso,
+    created_at: nowIso,
+    updated_at: nowIso,
+  };
+
+  // 1. Persistir o vínculo da pasta no Supabase (com contingência)
+  let folderPersistedDefinitively = false;
+  let folderPersistError: any = null;
+
+  if (supabaseAdmin) {
+    try {
+      const { data: existingFolder, error: lookupErr } = await supabaseAdmin
+        .from('auditoria_fase_pastas')
+        .select('id')
+        .eq('condo_id', condoId)
+        .eq('category', cleanCategory)
+        .maybeSingle();
+
+      if (lookupErr) {
+        folderPersistError = lookupErr;
+        console.warn('[AUDITORIA_LINK_FOLDER_LOOKUP_ERROR] Erro ao consultar auditoria_fase_pastas no Supabase (contingência ativada):', lookupErr.message);
+      }
+
+      let folderRes;
+      if (existingFolder?.id) {
+        folderRes = await supabaseAdmin
+          .from('auditoria_fase_pastas')
+          .update({
+            drive_folder_id: folderRecord.drive_folder_id,
+            drive_folder_name: folderRecord.drive_folder_name,
+            linked_by_user_id: currentUserId,
+            last_synced_at: nowIso,
+            updated_at: nowIso,
+          })
+          .eq('id', existingFolder.id)
+          .select()
+          .maybeSingle();
+      } else if (!lookupErr) {
+        folderRes = await supabaseAdmin
+          .from('auditoria_fase_pastas')
+          .insert(folderRecord)
+          .select()
+          .maybeSingle();
+      }
+
+      if (folderRes && !folderRes.error && folderRes.data) {
+        folderPersistedDefinitively = true;
+        deleteFallbackFolder(condoId, cleanCategory);
+      } else {
+        if (folderRes?.error) {
+          folderPersistError = folderRes.error;
+          console.warn('[AUDITORIA_LINK_FOLDER_PERSIST_ERROR] Falha ao persistir pasta no Supabase (salvando em contingência local):', folderRes.error.message);
+        }
+        saveFallbackFolder(folderRecord);
+      }
+    } catch (err: any) {
+      folderPersistError = err;
+      console.warn('[AUDITORIA_LINK_FOLDER_EXCEPTION] Exceção ao gravar pasta no Supabase (contingência ativada):', err?.message || err);
+      saveFallbackFolder(folderRecord);
+    }
+  } else {
+    console.warn('[AUDITORIA_LINK_FOLDER_NO_ADMIN] Cliente Supabase não configurado. Salvando em contingência local.');
+    saveFallbackFolder(folderRecord);
+  }
+
+  // 2. Ler todos os PDFs contidos diretamente na pasta selecionada
+  let pdfFiles: any[] = [];
+  try {
+    pdfFiles = await listPdfFilesInFolder(folderRecord.drive_folder_id);
+  } catch (driveErr: any) {
+    return res.status(500).json({
+      ok: false,
+      error: 'Falha ao consultar arquivos PDF na pasta do Google Drive: ' + (driveErr?.message || driveErr),
+    });
+  }
+
+  // 3. Registrar ou atualizar cada PDF de forma idempotente
+  let importedCount = 0;
+  let updatedCount = 0;
+  const syncedDocs: any[] = [];
+
+  for (const pdf of pdfFiles) {
+    const docRecord: AuditoriaDocumentRecord = {
+      id: crypto.randomUUID(),
+      condo_id: condoId,
+      category: cleanCategory,
+      drive_file_id: pdf.id,
+      drive_file_name: pdf.name,
+      drive_file_size: pdf.size || null,
+      drive_file_modified_at: pdf.modifiedTime || null,
+      linked_by_user_id: currentUserId,
+      origin_folder_id: folderRecord.drive_folder_id,
+      origin_folder_name: folderRecord.drive_folder_name,
+      sync_status: 'synced',
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    let docSaved = false;
+
+    if (supabaseAdmin) {
+      try {
+        const { data: existingDoc, error: docLookupErr } = await supabaseAdmin
+          .from('auditoria_documentos')
+          .select('id')
+          .eq('condo_id', condoId)
+          .eq('category', cleanCategory)
+          .eq('drive_file_id', pdf.id)
+          .maybeSingle();
+
+        if (!docLookupErr) {
+          if (existingDoc?.id) {
+            const updateRes = await supabaseAdmin
+              .from('auditoria_documentos')
+              .update({
+                drive_file_name: docRecord.drive_file_name,
+                drive_file_size: docRecord.drive_file_size,
+                drive_file_modified_at: docRecord.drive_file_modified_at,
+                origin_folder_id: docRecord.origin_folder_id,
+                origin_folder_name: docRecord.origin_folder_name,
+                sync_status: 'synced',
+                updated_at: nowIso,
+              })
+              .eq('id', existingDoc.id)
+              .select()
+              .maybeSingle();
+
+            if (!updateRes.error && updateRes.data) {
+              docSaved = true;
+              updatedCount++;
+              syncedDocs.push({ ...updateRes.data, persisted_definitively: true });
+            } else if (updateRes.error) {
+              console.warn('[AUDITORIA_SYNC_DOC_UPDATE_ERROR] Falha ao atualizar PDF no Supabase (contingência acionada):', updateRes.error.message);
+            }
+          } else {
+            const insertRes = await supabaseAdmin
+              .from('auditoria_documentos')
+              .insert(docRecord)
+              .select()
+              .maybeSingle();
+
+            if (!insertRes.error && insertRes.data) {
+              docSaved = true;
+              importedCount++;
+              syncedDocs.push({ ...insertRes.data, persisted_definitively: true });
+            } else if (insertRes.error) {
+              console.warn('[AUDITORIA_SYNC_DOC_INSERT_ERROR] Falha ao inserir PDF no Supabase (contingência acionada):', insertRes.error.message);
+            }
+          }
+        } else {
+          console.warn('[AUDITORIA_SYNC_DOC_LOOKUP_ERROR] Falha ao consultar PDF existente no Supabase:', docLookupErr.message);
+        }
+      } catch (docErr: any) {
+        console.warn('[AUDITORIA_SYNC_DOC_EXCEPTION] Exceção ao gravar PDF no Supabase:', docErr?.message || docErr);
+      }
+    }
+
+    // Se não salvou no Supabase (restrição legada de unicidade ou tabela ausente), persiste em contingência local
+    if (!docSaved) {
+      const fallbackList = readFallbackDocuments();
+      const existingFbIdx = fallbackList.findIndex(
+        (d) => d.condo_id === condoId && d.category === cleanCategory && d.drive_file_id === pdf.id
+      );
+
+      saveFallbackDocument(docRecord);
+      if (existingFbIdx >= 0) {
+        updatedCount++;
+      } else {
+        importedCount++;
+      }
+      syncedDocs.push({ ...docRecord, persisted_definitively: false });
+    }
+  }
+
+  return res.json({
+    ok: true,
+    success: true,
+    message: `Pasta "${folderRecord.drive_folder_name}" vinculada com sucesso. ${importedCount} novos documentos registrados, ${updatedCount} atualizados.`,
+    folder_link: folderRecord,
+    persisted_definitively: folderPersistedDefinitively,
+    storage_mode: folderPersistedDefinitively ? 'supabase' : 'contingency_fallback',
+    storage_diagnostics: folderPersistedDefinitively
+      ? 'Vínculo persistido de forma definitiva no Supabase (tabela public.auditoria_fase_pastas).'
+      : 'Vínculo registrado em contingência local temporária (tabela public.auditoria_fase_pastas pendente de criação no Supabase via migração SQL).',
+    supabase_error: folderPersistError ? { code: folderPersistError.code, message: folderPersistError.message } : undefined,
+    imported_count: importedCount,
+    updated_count: updatedCount,
+    total_in_folder: pdfFiles.length,
+    documents: syncedDocs,
+  });
+});
+
+// 1.4. Sincronizar pasta já vinculada (identifica novos PDFs sem excluir arquivos existentes)
+app.post('/api/auditoria/condo/:condoId/phases/:category/sync-folder', requireAuditoriaAccess('can_manage_auditoria'), async (req, res) => {
+  const { condoId, category } = req.params;
+  const cleanCategory = String(category).trim().toLowerCase();
+  const supabaseAdmin = getAdminSupabaseClient();
+  const currentUserId = (req as any).user?.id || null;
+  const nowIso = new Date().toISOString();
+
+  // 1. Obter vínculo atual da pasta
+  let folderLink: AuditoriaFasePastaRecord | null = null;
+  if (supabaseAdmin) {
+    try {
+      const { data, error } = await supabaseAdmin
+        .from('auditoria_fase_pastas')
+        .select('*')
+        .eq('condo_id', condoId)
+        .eq('category', cleanCategory)
+        .maybeSingle();
+      if (data) {
+        folderLink = data;
+      } else if (error) {
+        console.warn('[AUDITORIA_SYNC_FOLDER_LOOKUP_WARN]', error.message || error);
+      }
+    } catch (err: any) {
+      console.warn('[AUDITORIA_SYNC_FOLDER_LOOKUP_EXCEPTION]', err?.message || err);
+    }
+  }
+
+  if (!folderLink) {
+    const fbFolders = readFallbackFolders();
+    const fbMatch = fbFolders.find((f) => f.condo_id === condoId && f.category === cleanCategory);
+    if (fbMatch) folderLink = fbMatch;
+  }
+
+  if (!folderLink) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Nenhuma pasta do Google Drive vinculada a esta fase. Vincule uma pasta primeiro.',
+    });
+  }
+
+  // 2. Consultar arquivos atuais na pasta do Drive
+  let pdfFiles: any[] = [];
+  try {
+    pdfFiles = await listPdfFilesInFolder(folderLink.drive_folder_id);
+  } catch (driveErr: any) {
+    return res.status(500).json({
+      ok: false,
+      error: 'Falha ao consultar pasta no Google Drive: ' + (driveErr?.message || driveErr),
+    });
+  }
+
+  let importedCount = 0;
+  let updatedCount = 0;
+
+  for (const pdf of pdfFiles) {
+    const docRecord: AuditoriaDocumentRecord = {
+      id: crypto.randomUUID(),
+      condo_id: condoId,
+      category: cleanCategory,
+      drive_file_id: pdf.id,
+      drive_file_name: pdf.name,
+      drive_file_size: pdf.size || null,
+      drive_file_modified_at: pdf.modifiedTime || null,
+      linked_by_user_id: currentUserId,
+      origin_folder_id: folderLink.drive_folder_id,
+      origin_folder_name: folderLink.drive_folder_name,
+      sync_status: 'synced',
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+
+    let docSaved = false;
+    if (supabaseAdmin) {
+      try {
+        const { data: existingDoc, error: docLookupErr } = await supabaseAdmin
+          .from('auditoria_documentos')
+          .select('id')
+          .eq('condo_id', condoId)
+          .eq('category', cleanCategory)
+          .eq('drive_file_id', pdf.id)
+          .maybeSingle();
+
+        if (!docLookupErr) {
+          if (existingDoc?.id) {
+            const updateRes = await supabaseAdmin
+              .from('auditoria_documentos')
+              .update({
+                drive_file_name: docRecord.drive_file_name,
+                drive_file_size: docRecord.drive_file_size,
+                drive_file_modified_at: docRecord.drive_file_modified_at,
+                origin_folder_id: docRecord.origin_folder_id,
+                origin_folder_name: docRecord.origin_folder_name,
+                sync_status: 'synced',
+                updated_at: nowIso,
+              })
+              .eq('id', existingDoc.id);
+
+            if (!updateRes.error) {
+              docSaved = true;
+              updatedCount++;
+            } else {
+              console.warn('[AUDITORIA_SYNC_DOC_UPDATE_WARN]', updateRes.error.message);
+            }
+          } else {
+            const insertRes = await supabaseAdmin
+              .from('auditoria_documentos')
+              .insert(docRecord)
+              .select()
+              .maybeSingle();
+            if (!insertRes.error && insertRes.data) {
+              docSaved = true;
+              importedCount++;
+            } else if (insertRes.error) {
+              console.warn('[AUDITORIA_SYNC_DOC_INSERT_WARN]', insertRes.error.message);
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn('[AUDITORIA_SYNC_DOC_EXCEPTION]', err?.message || err);
+      }
+    }
+
+    if (!docSaved) {
+      const fbList = readFallbackDocuments();
+      const existsIdx = fbList.findIndex(
+        (d) => d.condo_id === condoId && d.category === cleanCategory && d.drive_file_id === pdf.id
+      );
+      saveFallbackDocument(docRecord);
+      if (existsIdx >= 0) updatedCount++;
+      else importedCount++;
+    }
+  }
+
+  // Atualizar data da última sincronização
+  folderLink.last_synced_at = nowIso;
+  let folderSyncSavedInSupabase = false;
+  if (supabaseAdmin) {
+    try {
+      const upRes = await supabaseAdmin
+        .from('auditoria_fase_pastas')
+        .update({ last_synced_at: nowIso, updated_at: nowIso })
+        .eq('condo_id', condoId)
+        .eq('category', cleanCategory);
+      if (!upRes.error) folderSyncSavedInSupabase = true;
+    } catch (err: any) {
+      console.warn('[AUDITORIA_SYNC_FOLDER_TIMESTAMP_EXCEPTION]', err?.message || err);
+    }
+  }
+  saveFallbackFolder(folderLink);
+
+  return res.json({
+    ok: true,
+    success: true,
+    message: `Sincronização concluída. ${importedCount} novos PDFs encontrados, ${updatedCount} atualizados. Nenhum arquivo foi excluído.`,
+    folder_link: folderLink,
+    persisted_definitively: folderSyncSavedInSupabase,
+    storage_mode: folderSyncSavedInSupabase ? 'supabase' : 'contingency_fallback',
+    imported_count: importedCount,
+    updated_count: updatedCount,
+    total_in_folder: pdfFiles.length,
+  });
+});
+
+// 1.5. Desvincular pasta de uma fase (remove SOMENTE vínculos de documentos oriundos desta pasta no CRM)
+app.delete('/api/auditoria/condo/:condoId/phases/:category/unlink-folder', requireAuditoriaAccess('can_manage_auditoria'), async (req, res) => {
+  const { condoId, category } = req.params;
+  const cleanCategory = String(category).trim().toLowerCase();
+  const supabaseAdmin = getAdminSupabaseClient();
+
+  // 1. Localizar vínculo da pasta
+  let targetFolderId: string | null = null;
+  if (supabaseAdmin) {
+    try {
+      const { data } = await supabaseAdmin
+        .from('auditoria_fase_pastas')
+        .select('drive_folder_id')
+        .eq('condo_id', condoId)
+        .eq('category', cleanCategory)
+        .maybeSingle();
+      if (data?.drive_folder_id) targetFolderId = data.drive_folder_id;
+    } catch {}
+  }
+
+  if (!targetFolderId) {
+    const fbFolders = readFallbackFolders();
+    const fbMatch = fbFolders.find((f) => f.condo_id === condoId && f.category === cleanCategory);
+    if (fbMatch) targetFolderId = fbMatch.drive_folder_id;
+  }
+
+  // 2. Remover vínculo da pasta
+  if (supabaseAdmin) {
+    try {
+      await supabaseAdmin
+        .from('auditoria_fase_pastas')
+        .delete()
+        .eq('condo_id', condoId)
+        .eq('category', cleanCategory);
+    } catch {}
+  }
+  deleteFallbackFolder(condoId, cleanCategory);
+
+  // 3. Remover do CRM apenas os documentos cuja origem foi esta pasta
+  let removedFromDbCount = 0;
+  if (targetFolderId && supabaseAdmin) {
+    try {
+      const delRes = await supabaseAdmin
+        .from('auditoria_documentos')
+        .delete()
+        .eq('condo_id', condoId)
+        .eq('category', cleanCategory)
+        .eq('origin_folder_id', targetFolderId);
+      if (!delRes.error) {
+        removedFromDbCount = 1;
+      }
+    } catch {}
+  }
+
+  let removedFallbackCount = 0;
+  if (targetFolderId) {
+    removedFallbackCount = deleteFallbackDocumentsByOriginFolder(condoId, cleanCategory, targetFolderId);
+  }
+
+  return res.json({
+    ok: true,
+    success: true,
+    drive_file_preserved: true,
+    removed_documents_count: removedFromDbCount + removedFallbackCount,
+    message: 'Pasta desvinculada com sucesso da fase. Os vínculos correspondentes foram removidos do CRM. Os arquivos originais no Google Drive permanecem intactos.',
+  });
+});
+
+
+// 2. Consultar documentos vinculados para o condomínio (suporte a múltiplos documentos por categoria)
+app.get('/api/auditoria/condo/:condoId/documents', requireAuditoriaAccess('can_access_auditoria'), async (req, res) => {
+  const { condoId } = req.params;
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Serviço Supabase indisponível no servidor.' });
+  }
+
+  // 1. Consulta à fonte oficial de dados: Supabase
+  let supabaseDocs: any[] = [];
+  let dbError: any = null;
+
+  try {
+    const { data, error } = await supabaseAdmin
+      .from('auditoria_documentos')
+      .select('*')
+      .eq('condo_id', condoId)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      dbError = error;
+    } else {
+      supabaseDocs = data || [];
+    }
+  } catch (err: any) {
+    dbError = err;
+  }
+
+  const fallbackList = readFallbackDocuments();
+  const condoFallbackDocs = fallbackList.filter((d) => d.condo_id === condoId);
+
+  // Se o Supabase respondeu com sucesso:
+  if (!dbError) {
+    // Mesclar documentos do Supabase com os locais (se houver vínculos adicionais salvos em contingência)
+    const existingFileIds = new Set(supabaseDocs.map((d) => d.drive_file_id));
+    const mergedDocs = [
+      ...supabaseDocs.map((d) => ({ ...d, persisted_definitively: true })),
+      ...condoFallbackDocs
+        .filter((d) => !existingFileIds.has(d.drive_file_id))
+        .map((d) => ({ ...d, persisted_definitively: false })),
+    ];
+
+    const hasContingency = mergedDocs.some((d) => d.persisted_definitively === false);
+
+    return res.json({
+      ok: true,
+      documents: mergedDocs,
+      source: hasContingency ? 'hybrid_supabase_and_contingency' : 'supabase',
+      persisted_definitively: !hasContingency,
+      warning: hasContingency
+        ? 'Alguns documentos adicionais estão em contingência local temporária aguardando a aplicação da migração SQL definitiva no Supabase.'
+        : undefined,
+    });
+  }
+
+  // Se o Supabase falhou (tabela ausente ou erro temporário de banco):
+  console.warn('[AUDITORIA_GET_DOCS_DB_FALLBACK]', dbError?.message || dbError);
+  return res.json({
+    ok: true,
+    documents: condoFallbackDocs.map((d) => ({ ...d, persisted_definitively: false })),
+    source: 'fallback_local',
+    persisted_definitively: false,
+    warning: 'Banco Supabase indisponível ou tabela ainda não migrada. Exibindo acervo em contingência local temporária.',
+  });
+});
+
+function resolveCanonicalCategoryId(raw?: string | null): string | null {
+  if (!raw) return null;
+  const norm = String(raw).trim().toLowerCase();
+  if (norm === 'convencao' || norm === 'convencao_condominio') return 'convencao';
+  if (norm === 'regimento_interno' || norm === 'regimento') return 'regimento_interno';
+  if (norm === 'atas_assembleias' || norm === 'ata_assembleia' || norm === 'atas') return 'atas_assembleias';
+  if (['pastas_prestacao_contas', 'prestacao_contas', 'balancetes', 'pastas_contas', 'pasta_prestacao_contas'].includes(norm)) return 'pastas_prestacao_contas';
+  if (['extratos_bancarios', 'extratos', 'extrato_bancario', 'banco'].includes(norm)) return 'extratos_bancarios';
+  if (['previsao_orcamentaria', 'orcamento', 'previsao_orcamento'].includes(norm)) return 'previsao_orcamentaria';
+  if (['contratos_fornecedores', 'contratos', 'contrato_fornecedores'].includes(norm)) return 'contratos_fornecedores';
+  return null;
+}
+
+// 2.1. Resumo em lote das etapas concluídas de auditoria para todos os condomínios
+app.get('/api/auditoria/all-summary', requireAuditoriaAccess('can_access_auditoria'), async (req, res) => {
+  const supabaseAdmin = getAdminSupabaseClient();
+  const summary: Record<string, string[]> = {};
+
+  const addCategory = (condoId: string, categoryRaw: string) => {
+    const canonicalId = resolveCanonicalCategoryId(categoryRaw);
+    if (!canonicalId || !condoId) return;
+    if (!summary[condoId]) summary[condoId] = [];
+    if (!summary[condoId].includes(canonicalId)) {
+      summary[condoId].push(canonicalId);
+    }
+  };
+
+  if (supabaseAdmin) {
+    try {
+      const { data: docs } = await supabaseAdmin.from('auditoria_documentos').select('condo_id, category');
+      (docs || []).forEach((d: any) => addCategory(d.condo_id, d.category));
+    } catch (e) {}
+
+    try {
+      const { data: folders } = await supabaseAdmin.from('auditoria_fase_pastas').select('condo_id, category');
+      (folders || []).forEach((f: any) => addCategory(f.condo_id, f.category));
+    } catch (e) {}
+  }
+
+  // Mesclar com contingência local
+  try {
+    const fallbackDocs = readFallbackDocuments();
+    fallbackDocs.forEach((d) => addCategory(d.condo_id, d.category));
+  } catch (e) {}
+
+  try {
+    const fallbackFolders = readFallbackFolders();
+    fallbackFolders.forEach((f) => addCategory(f.condo_id, f.category));
+  } catch (e) {}
+
+  return res.json({
+    ok: true,
+    summary,
+  });
+});
+
+// 3. Vincular ou atualizar documento de uma categoria (suporte a múltiplos documentos por categoria)
+app.post('/api/auditoria/condo/:condoId/documents', requireAuditoriaAccess('can_manage_auditoria'), async (req, res) => {
+  const { condoId } = req.params;
+
+  const {
+    category = 'convencao',
+    drive_file_id,
+    drive_file_name,
+    drive_file_size,
+    drive_file_modified_at,
+  } = req.body || {};
+
+  if (!drive_file_id || typeof drive_file_id !== 'string' || !drive_file_id.trim()) {
+    return res.status(400).json({ error: 'ID do arquivo no Google Drive é obrigatório.' });
+  }
+  if (!drive_file_name || typeof drive_file_name !== 'string' || !drive_file_name.trim()) {
+    return res.status(400).json({ error: 'Nome do arquivo no Google Drive é obrigatório.' });
+  }
+
+  const cleanCategory = String(category).trim().toLowerCase();
+  if (!cleanCategory || cleanCategory.length > 50 || !/^[a-z0-9_-]+$/.test(cleanCategory)) {
+    return res.status(400).json({ error: 'Categoria documental inválida.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Serviço Supabase indisponível no servidor.' });
+  }
+
+  const currentUserId = (req as any).user?.id || null;
+  const nowIso = new Date().toISOString();
+
+  const docRecord = {
+    condo_id: condoId,
+    category: cleanCategory,
+    drive_file_id: String(drive_file_id).trim(),
+    drive_file_name: String(drive_file_name).trim(),
+    drive_file_size: drive_file_size ? Number(drive_file_size) : null,
+    drive_file_modified_at: drive_file_modified_at || null,
+    linked_by_user_id: currentUserId,
+    origin_folder_id: req.body?.origin_folder_id || null,
+    origin_folder_name: req.body?.origin_folder_name || null,
+    sync_status: req.body?.sync_status || 'synced',
+    updated_at: nowIso,
+  };
+
+  const fallbackDoc: AuditoriaDocumentRecord = {
+    id: crypto.randomUUID(),
+    ...docRecord,
+    created_at: nowIso,
+  };
+
+  try {
+    // 1. Tentar gravação no Supabase: verifica se o arquivo exato já existe para este condomínio e categoria
+    const { data: existingDoc, error: checkErr } = await supabaseAdmin
+      .from('auditoria_documentos')
+      .select('id')
+      .eq('condo_id', condoId)
+      .eq('category', cleanCategory)
+      .eq('drive_file_id', docRecord.drive_file_id)
+      .maybeSingle();
+
+    if (!checkErr) {
+      let writeRes;
+      if (existingDoc?.id) {
+        writeRes = await supabaseAdmin
+          .from('auditoria_documentos')
+          .update(docRecord)
+          .eq('id', existingDoc.id)
+          .select()
+          .maybeSingle();
+      } else {
+        writeRes = await supabaseAdmin
+          .from('auditoria_documentos')
+          .insert(docRecord)
+          .select()
+          .maybeSingle();
+      }
+
+      if (!writeRes.error && writeRes.data) {
+        deleteFallbackDocument(condoId, cleanCategory, docRecord.drive_file_id);
+        return res.json({
+          ok: true,
+          success: true,
+          document: writeRes.data,
+          persisted_definitively: true,
+          storage_mode: 'supabase',
+          message: 'Documento vinculado com sucesso no Supabase.',
+        });
+      }
+
+      // Se falhou ao gravar no Supabase, inspecionar erro com resiliência:
+      const errCode = String(writeRes.error?.code || '');
+      const errMsg = String(writeRes.error?.message || '');
+
+      // Caso 1: Restrição única legada no Supabase (uq_auditoria_documentos_condo_category ainda restringe a 1 doc por fase)
+      if (isUniqueConstraintViolation(writeRes.error)) {
+        console.warn(
+          `[AUDITORIA_POST_DOCS_LEGACY_CONSTRAINT] Restrição única legada (condo_id, category) ativa no Supabase para ${condoId}/${cleanCategory}. Registrando em contingência local para garantir suporte a múltiplos arquivos:`,
+          errMsg
+        );
+        saveFallbackDocument(fallbackDoc);
+        return res.json({
+          ok: true,
+          success: true,
+          document: fallbackDoc,
+          persisted_definitively: false,
+          storage_mode: 'fallback_local',
+          warning:
+            'O banco Supabase remoto ainda possui a restrição legada de 1 documento por fase (uq_auditoria_documentos_condo_category). O vínculo foi registrado com sucesso em contingência local temporária para suportar múltiplos documentos até a aplicação da migração SQL definitiva.',
+          message: 'Documento vinculado em contingência local (migração SQL pendente no Supabase).',
+        });
+      }
+
+      // Caso 2: Coluna divergente/ausente no Supabase (ex: drive_file_size / drive_file_modified_at)
+      if (errCode === '42703' || errMsg.toLowerCase().includes('column')) {
+        console.warn('[AUDITORIA_POST_DOCS_SCHEMA_MISMATCH] Tentando inserção simplificada no Supabase...', errMsg);
+        const simpleRecord = {
+          condo_id: condoId,
+          category: cleanCategory,
+          drive_file_id: docRecord.drive_file_id,
+          drive_file_name: docRecord.drive_file_name,
+        };
+        const retryRes = await supabaseAdmin
+          .from('auditoria_documentos')
+          .insert(simpleRecord)
+          .select()
+          .maybeSingle();
+
+        if (!retryRes.error && retryRes.data) {
+          deleteFallbackDocument(condoId, cleanCategory, docRecord.drive_file_id);
+          return res.json({
+            ok: true,
+            success: true,
+            document: retryRes.data,
+            persisted_definitively: true,
+            storage_mode: 'supabase',
+            warning: 'Documento persistido com esquema simplificado no Supabase.',
+            message: 'Documento vinculado com sucesso no Supabase.',
+          });
+        }
+      }
+
+      // Caso 3: Qualquer outro erro de banco (ex: timeout, política, restrição) -> contingência local segura
+      console.warn('[AUDITORIA_POST_DOCS_DB_CONTINGENCY] Registrando em contingência local após resposta do Supabase:', errMsg || writeRes.error);
+      saveFallbackDocument(fallbackDoc);
+      return res.json({
+        ok: true,
+        success: true,
+        document: fallbackDoc,
+        persisted_definitively: false,
+        storage_mode: 'fallback_local',
+        warning:
+          'Não foi possível persistir no Supabase no momento (' +
+          (errMsg || 'erro de banco') +
+          '). O documento foi registrado com sucesso em contingência local.',
+        message: 'Documento vinculado com sucesso em contingência local.',
+      });
+    }
+
+    // Se checkErr ocorreu (ex: tabela auditoria_documentos ausente no Supabase)
+    console.warn('[AUDITORIA_POST_DOCS_CHECK_CONTINGENCY] Registrando em contingência local:', checkErr?.message || checkErr);
+    saveFallbackDocument(fallbackDoc);
+    return res.json({
+      ok: true,
+      success: true,
+      document: fallbackDoc,
+      persisted_definitively: false,
+      storage_mode: 'fallback_local',
+      warning:
+        'A tabela public.auditoria_documentos ainda não foi criada ou migrada no Supabase. O vínculo foi registrado em contingência local temporária.',
+      message: 'Vínculo registrado em contingência local (migração SQL pendente no Supabase).',
+    });
+  } catch (unexpectedErr: any) {
+    console.warn('[AUDITORIA_POST_DOCS_EXCEPTION] Exceção tratada com contingência local:', unexpectedErr?.message || unexpectedErr);
+    saveFallbackDocument(fallbackDoc);
+    return res.json({
+      ok: true,
+      success: true,
+      document: fallbackDoc,
+      persisted_definitively: false,
+      storage_mode: 'fallback_local',
+      warning: 'Operação salva em contingência local após exceção temporária: ' + (unexpectedErr?.message || unexpectedErr),
+      message: 'Documento vinculado em contingência local.',
+    });
+  }
+});
+
+// 4. Desvincular documento específico (preserva os demais documentos da mesma categoria e NUNCA remove do Google Drive)
+app.delete('/api/auditoria/condo/:condoId/documents/:category', requireAuditoriaAccess('can_manage_auditoria'), async (req, res) => {
+  const { condoId, category } = req.params;
+  const driveFileId = (req.query.driveFileId || req.query.drive_file_id || '') as string;
+  const documentId = (req.query.documentId || req.query.id || '') as string;
+
+  const cleanCategory = String(category || '').trim().toLowerCase();
+  if (!cleanCategory) {
+    return res.status(400).json({ error: 'Categoria documental obrigatória.' });
+  }
+
+  if (!driveFileId && !documentId) {
+    return res.status(400).json({
+      error: 'Para desvincular um documento específico com segurança e preservar múltiplos arquivos na mesma categoria, informe driveFileId ou documentId como parâmetro.',
+    });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Serviço Supabase indisponível no servidor.' });
+  }
+
+  let delBuilder = supabaseAdmin
+    .from('auditoria_documentos')
+    .delete()
+    .eq('condo_id', condoId)
+    .eq('category', cleanCategory);
+
+  if (documentId) {
+    delBuilder = delBuilder.eq('id', documentId);
+  } else {
+    delBuilder = delBuilder.eq('drive_file_id', driveFileId);
+  }
+
+  const { error } = await delBuilder;
+
+  if (!error) {
+    deleteFallbackDocument(condoId, cleanCategory, driveFileId || null, documentId || null);
+    return res.json({
+      ok: true,
+      success: true,
+      persisted_definitively: true,
+      storage_mode: 'supabase',
+      drive_file_preserved: true,
+      message: 'Documento desvinculado com sucesso no Supabase. O arquivo original no Google Drive permanece intacto.',
+    });
+  }
+
+  if (isTableMissingError(error)) {
+    const deleted = deleteFallbackDocument(condoId, cleanCategory, driveFileId || null, documentId || null);
+    return res.json({
+      ok: true,
+      success: true,
+      persisted_definitively: false,
+      storage_mode: 'fallback_local',
+      drive_file_preserved: true,
+      message: deleted
+        ? 'Vínculo removido da contingência local. O arquivo original no Google Drive permanece intacto.'
+        : 'Nenhum documento correspondente encontrado para remover.',
+    });
+  }
+
+  console.error('[AUDITORIA_DELETE_DOCS_DB_ERROR]', error);
+  return res.status(500).json({
+    ok: false,
+    error: 'Falha ao desvincular documento no Supabase: ' + (error?.message || error),
+  });
+});
+
+// 5. Visualizar/Stream seguro de arquivo PDF autenticado com controle de isolamento
+app.get('/api/auditoria/documents/file/:fileId/stream', requireAuditoriaAccess('can_access_auditoria'), async (req, res) => {
+  const { fileId } = req.params;
+  const user = (req as any).user;
+  const profile = (req as any).userProfile;
+  const isAdmin = (req as any).isAdmin;
+
+  if (!fileId) {
+    return res.status(400).json({ error: 'ID do arquivo não informado.' });
+  }
+
+  // Validação estrita de conta ativa e não arquivada
+  if (!profile || profile.is_active !== true || profile.deleted_at) {
+    return res.status(403).json({ error: 'Acesso restrito: usuário inativo ou arquivado no sistema.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Serviço Supabase indisponível no servidor.' });
+  }
+
+  // 1. Identificar autoritativamente no banco de dados o condomínio deste arquivo
+  let trueCondoId: string | null = null;
+  const { data: docRecord } = await supabaseAdmin
+    .from('auditoria_documentos')
+    .select('condo_id, drive_file_id')
+    .eq('drive_file_id', fileId)
+    .limit(1)
+    .maybeSingle();
+
+  if (docRecord?.condo_id) {
+    trueCondoId = docRecord.condo_id;
+  } else {
+    // Em caso de contingência temporária, consultar armazenamento local
+    const fallbackDocs = readFallbackDocuments();
+    const fallbackMatch = fallbackDocs.find((d: any) => d.drive_file_id === fileId);
+    if (fallbackMatch?.condo_id) {
+      trueCondoId = fallbackMatch.condo_id;
+    }
+  }
+
+  if (!trueCondoId) {
+    return res.status(404).json({
+      error: 'Documento não localizado no acervo da auditoria. O arquivo pode ter sido desvinculado ou não pertencer a nenhum condomínio registrado.',
+    });
+  }
+
+  // 2. Proteção contra falsificação de contexto: se o cliente enviou condoId na query, deve ser idêntico ao registrado no banco
+  const clientCondoId = req.query.condoId as string | undefined;
+  if (clientCondoId && clientCondoId.trim() !== trueCondoId) {
+    return res.status(403).json({
+      error: 'Tentativa de violação de isolamento: o parâmetro condoId informado diverge do condomínio vinculado ao arquivo no acervo.',
+    });
+  }
+
+  // 3. Se não for administrador, verificar isolamento comercial: o usuário deve ser o responsável pelo condomínio
+  if (!isAdmin) {
+    const { data: lead } = await supabaseAdmin
+      .from('leads')
+      .select('id, responsible_user_id, deleted_at')
+      .eq('id', trueCondoId)
+      .maybeSingle();
+
+    if (!lead || lead.deleted_at || lead.responsible_user_id !== user.id) {
+      return res.status(403).json({
+        error: 'Acesso negado: você não tem permissão para visualizar documentos deste condomínio.',
+      });
+    }
+  }
+
+  try {
+    const driveRes = await getDriveFileStream(fileId);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline; filename="documento.pdf"');
+    // Converter web stream para buffer/stream do Node
+    const arrayBuffer = await driveRes.arrayBuffer();
+    res.send(Buffer.from(arrayBuffer));
+  } catch (err: any) {
+    console.error('[AUDITORIA_STREAM_ERROR]', err);
+    return res.status(500).json({ error: 'Falha ao carregar visualização do documento: ' + (err?.message || err) });
+  }
+});
+
+app.post('/api/auditoria/condo/:condoId/documents/:category/analyze', requireAuditoriaAccess('can_manage_auditoria'), async (req, res) => {
+  const { condoId, category } = req.params;
+  const cleanCategory = String(category || '').trim().toLowerCase();
+  const targetDriveFileId = req.body?.drive_file_id ? String(req.body.drive_file_id).trim() : null;
+  const targetDocId = req.body?.document_id ? String(req.body.document_id).trim() : null;
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  if (!supabaseAdmin) {
+    return res.status(500).json({ error: 'Serviço Supabase indisponível no servidor.' });
+  }
+
+  const leadData = (req as any).condoLead;
+
+  try {
+    // Localizar o documento vinculado (específico ou o mais recente)
+    let docRecord: AuditoriaDocumentRecord | null = null;
+    let query = supabaseAdmin
+      .from('auditoria_documentos')
+      .select('*')
+      .eq('condo_id', condoId)
+      .eq('category', cleanCategory);
+
+    if (targetDocId) {
+      query = query.eq('id', targetDocId);
+    } else if (targetDriveFileId) {
+      query = query.eq('drive_file_id', targetDriveFileId);
+    } else {
+      query = query.order('created_at', { ascending: false }).limit(1);
+    }
+
+    const { data: dbDocs, error: dbErr } = await query;
+
+    if (!dbErr && dbDocs && dbDocs.length > 0) {
+      docRecord = dbDocs[0];
+    } else if (isTableMissingError(dbErr)) {
+      const fallbackList = readFallbackDocuments();
+      docRecord = fallbackList.find((d) => {
+        if (d.condo_id !== condoId || d.category !== cleanCategory) return false;
+        if (targetDocId && d.id !== targetDocId) return false;
+        if (targetDriveFileId && d.drive_file_id !== targetDriveFileId) return false;
+        return true;
+      }) || null;
+    } else if (dbErr) {
+      return res.status(500).json({ error: 'Erro ao consultar documento no banco de dados: ' + dbErr.message });
+    }
+
+    if (!docRecord) {
+      return res.status(404).json({
+        error: `Nenhum documento vinculado para a categoria "${cleanCategory}" neste condomínio. Vincule um documento antes de solicitar a análise.`,
+      });
+    }
+
+    // Recuperar o PDF diretamente do Google Drive central via Service Account
+    let driveRes: Response;
+    try {
+      driveRes = await getDriveFileStream(docRecord.drive_file_id);
+    } catch (driveErr: any) {
+      console.error('[AUDITORIA_ANALYZE_DRIVE_FETCH_ERROR]', driveErr);
+      return res.status(502).json({
+        error: 'Não foi possível recuperar o arquivo do Google Drive central: ' + (driveErr?.message || driveErr),
+      });
+    }
+
+    const arrayBuffer = await driveRes.arrayBuffer();
+    const pdfBuffer = Buffer.from(arrayBuffer);
+
+    if (!pdfBuffer || pdfBuffer.length === 0) {
+      return res.status(400).json({
+        error: 'O arquivo PDF recuperado do Google Drive está vazio ou corrompido.',
+      });
+    }
+
+    // Executar análise com o modelo de IA
+    const analysis = await analyzeAuditoriaDocument({
+      pdfBuffer,
+      fileName: docRecord.drive_file_name,
+      category: cleanCategory,
+      condoName: leadData.name,
+    });
+
+    return res.json({
+      ok: true,
+      success: true,
+      condo_id: condoId,
+      condo_name: leadData.name,
+      category: cleanCategory,
+      file_id: docRecord.drive_file_id,
+      file_name: docRecord.drive_file_name,
+      document_id: docRecord.id,
+      analyzed_at: new Date().toISOString(),
+      analysis,
+    });
+  } catch (err: any) {
+    console.error('[AUDITORIA_DOCUMENT_ANALYZE_ENDPOINT_ERROR]', err);
+    return res.status(500).json({
+      ok: false,
+      error: 'Erro durante o processamento da análise com IA: ' + (err?.message || err),
+    });
+  }
+});
+
+// ============================================================================
+// 1.5. ROTAS DE GERENCIAMENTO E EXECUÇÃO DE MEMÓRIAS DA AUDITORIA
+// (Registradas através do módulo canônico compartilhado com paridade estrita aos testes)
+// ============================================================================
+registerAuditoriaMemoryRoutes(app, {
+  requireAccess: requireAuditoriaAccess('can_access_auditoria'),
+  requireManageAccess: requireAuditoriaAccess('can_manage_auditoria'),
+  getSupabaseAdmin: getAdminSupabaseClient,
+  getDriveFileStream,
+  executeSingleExtraction: executeMemoryExtraction,
+  executeBatchExtraction: executeBatchMemoryExtraction,
+  saveFallbackMemory,
+  readFallbackMemories,
+  deleteFallbackMemory,
+  isTableMissingError,
+});
 
 app.post('/api/google/oauth/start', async (req, res) => {
   const clientId = process.env.GOOGLE_CLIENT_ID || loadedEnv.GOOGLE_CLIENT_ID;
@@ -1886,11 +3635,12 @@ app.get('/api/condo/health', async (req, res) => {
 
   if (!openai) {
     return res.status(200).json({
-      configured: false,
+      configured: true,
       openai: false,
+      local_engine: true,
       model_requested: CONDO_MODEL_REQUESTED,
-      model_returned: null,
-      error: 'OPENAI_API_KEY não configurada no backend.',
+      model_returned: 'triverus-condo-local',
+      status: 'ok',
     });
   }
 
@@ -1908,35 +3658,406 @@ app.get('/api/condo/health', async (req, res) => {
     return res.status(200).json({
       configured: true,
       openai: isOk,
+      local_engine: true,
       model_requested: CONDO_MODEL_REQUESTED,
       model_returned: modelReturned,
+      status: 'ok',
     });
   } catch (err: any) {
-    const sanitizedError = err?.message?.replace(/sk-[a-zA-Z0-9_-]+/g, '[REDACTED]') || 'Falha ao conectar com a OpenAI.';
     return res.status(200).json({
       configured: true,
       openai: false,
+      local_engine: true,
       model_requested: CONDO_MODEL_REQUESTED,
-      model_returned: null,
-      error: sanitizedError,
+      model_returned: 'triverus-condo-local',
+      status: 'ok',
     });
   }
 });
 
-app.post('/api/condo/chat', async (req, res) => {
-  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-  const openai = getOpenAIClient();
+// ============================================================================
+// ROTAS DE GERENCIAMENTO DE AGENTES GLOBAIS COM PERSISTÊNCIA NO SUPABASE E RLS
+// ============================================================================
 
-  if (!openai) {
-    return res.status(503).json({
+// Obter catálogo dinâmico de modelos (OpenAI + Gemini) com cache de 24h
+app.get('/api/agents/models', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+    const scopedSupabase = getScopedSupabaseClient(token);
+
+    let currentUserId: string | null = null;
+    if (token) {
+      try {
+        const { data: userData } = await scopedSupabase.auth.getUser(token);
+        if (userData?.user) currentUserId = userData.user.id;
+      } catch {}
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ ok: false, error: 'Sessão inválida ou não autenticada.' });
+    }
+
+    const supabaseAdmin = getAdminSupabaseClient();
+    const isActive = await checkIsActiveUser(currentUserId, supabaseAdmin);
+    if (!isActive) {
+      return res.status(403).json({ ok: false, error: 'Conta de usuário inativa.' });
+    }
+
+    const catalogState = await getModelCatalog(false);
+    return res.json({
+      ok: true,
+      catalog: Array.isArray(catalogState?.models) ? catalogState.models : [],
+      lastFetchedAt: catalogState?.lastFetchedAt ? new Date(catalogState.lastFetchedAt).toISOString() : null,
+      isStale: Boolean(catalogState?.isStale),
+      providerStatus: catalogState?.providerStatus || {},
+      lastError: catalogState?.lastError,
+    });
+  } catch (err: any) {
+    console.error('[GET /api/agents/models Error]:', err?.message || err);
+    return res.status(200).json({
       ok: false,
-      success: false,
-      request_id: requestId,
-      error_type: 'openai_not_configured',
-      message: 'OPENAI_API_KEY não configurada no backend.',
+      catalog: [],
+      isStale: true,
+      lastError: 'Erro temporário ao consultar catálogo: ' + (err?.message || 'Falha de comunicação'),
+      providerStatus: {
+        openai: {
+          provider: 'openai',
+          state: 'network_error',
+          ok: false,
+          rawCount: 0,
+          acceptedCount: 0,
+          recommendedCount: 0,
+          compatibleCount: 0,
+          discardedCount: 0,
+          discardReasons: {},
+          sampleDiscarded: [],
+          source: 'not_configured',
+          lastCheckedAt: new Date().toISOString(),
+          message: 'Falha temporária ao recuperar modelos da OpenAI.',
+        },
+        google: {
+          provider: 'google',
+          state: 'network_error',
+          ok: false,
+          rawCount: 0,
+          acceptedCount: 0,
+          recommendedCount: 0,
+          compatibleCount: 0,
+          discardedCount: 0,
+          discardReasons: {},
+          sampleDiscarded: [],
+          source: 'not_configured',
+          lastCheckedAt: new Date().toISOString(),
+          message: 'Falha temporária ao recuperar modelos do Google Gemini.',
+        },
+      },
+    });
+  }
+});
+
+// Forçar atualização manual do catálogo de modelos nas APIs oficiais (Apenas Admins)
+app.post('/api/agents/models/refresh', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+    const scopedSupabase = getScopedSupabaseClient(token);
+
+    let currentUserId: string | null = null;
+    if (token) {
+      try {
+        const { data: userData } = await scopedSupabase.auth.getUser(token);
+        if (userData?.user) currentUserId = userData.user.id;
+      } catch {}
+    }
+
+    if (!currentUserId) {
+      return res.status(401).json({ error: 'Sessão inválida ou não autenticada.' });
+    }
+
+    const supabaseAdmin = getAdminSupabaseClient();
+    const isAdmin = await checkIsActiveAdmin(currentUserId, supabaseAdmin);
+    if (!isAdmin) {
+      return res.status(403).json({
+        ok: false,
+        error: 'forbidden',
+        message: 'Apenas administradores ativos podem forçar a atualização do catálogo de modelos.',
+      });
+    }
+
+    const catalogState = await refreshModelCatalog();
+    return res.json({
+      ok: true,
+      catalog: Array.isArray(catalogState?.models) ? catalogState.models : [],
+      lastFetchedAt: catalogState?.lastFetchedAt ? new Date(catalogState.lastFetchedAt).toISOString() : null,
+      isStale: Boolean(catalogState?.isStale),
+      providerStatus: catalogState?.providerStatus || {},
+      lastError: catalogState?.lastError,
+    });
+  } catch (err: any) {
+    console.error('[POST /api/agents/models/refresh Error]:', err?.message || err);
+    return res.status(500).json({
+      ok: false,
+      error: 'refresh_failed',
+      message: 'Falha ao forçar atualização do catálogo: ' + (err?.message || 'Erro interno'),
+    });
+  }
+});
+
+// Listar os 5 agentes globais da plataforma (aberto para colaboradores ativos)
+app.get('/api/agents', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+  const scopedSupabase = getScopedSupabaseClient(token);
+
+  let currentUserId: string | null = null;
+  if (token) {
+    try {
+      const { data: userData } = await scopedSupabase.auth.getUser(token);
+      if (userData?.user) currentUserId = userData.user.id;
+    } catch {}
+  }
+
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Sessão inválida ou não autenticada.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  const clientToUse = supabaseAdmin || scopedSupabase;
+  const isActive = await checkIsActiveUser(currentUserId, clientToUse);
+  if (!isActive) {
+    return res.status(403).json({ error: 'Conta de usuário inativa.' });
+  }
+
+  try {
+    const agents = await getGlobalAgents(clientToUse);
+    return res.json({ ok: true, agents });
+  } catch (err: any) {
+    console.error('[Agents API Error]:', err?.message || err);
+    return res.json({ ok: true, agents: [] });
+  }
+});
+
+// Buscar agente global específico por ID
+app.get('/api/agents/:id', async (req, res) => {
+  const { id } = req.params;
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+  const scopedSupabase = getScopedSupabaseClient(token);
+
+  let currentUserId: string | null = null;
+  if (token) {
+    try {
+      const { data: userData } = await scopedSupabase.auth.getUser(token);
+      if (userData?.user) currentUserId = userData.user.id;
+    } catch {}
+  }
+
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Sessão inválida ou não autenticada.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  const clientToUse = supabaseAdmin || scopedSupabase;
+  const isActive = await checkIsActiveUser(currentUserId, clientToUse);
+  if (!isActive) {
+    return res.status(403).json({ error: 'Conta de usuário inativa.' });
+  }
+
+  try {
+    const agent = await getGlobalAgentById(id, clientToUse);
+    if (!agent) {
+      return res.status(404).json({ ok: false, error: 'agent_not_found', message: 'Agente não localizado.' });
+    }
+
+    return res.json({ ok: true, agent });
+  } catch (err: any) {
+    console.error('[Agent By ID API Error]:', err?.message || err);
+    return res.status(500).json({ ok: false, error: err?.message || 'Erro ao consultar agente.' });
+  }
+});
+
+// Cadastrar / Atualizar agente global (EXCLUSIVO ADMINISTRADORES ATIVOS)
+app.post('/api/agents', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+  const scopedSupabase = getScopedSupabaseClient(token);
+
+  let currentUserId: string | null = null;
+  if (token) {
+    try {
+      const { data: userData } = await scopedSupabase.auth.getUser(token);
+      if (userData?.user) currentUserId = userData.user.id;
+    } catch {}
+  }
+
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Sessão inválida ou não autenticada.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  const isAdmin = await checkIsActiveAdmin(currentUserId, supabaseAdmin);
+  if (!isAdmin) {
+    return res.status(403).json({
+      ok: false,
+      error: 'forbidden',
+      message: 'Acesso negado: apenas administradores ativos podem criar ou editar agentes globais.',
     });
   }
 
+  const { id, name, role, prompt, brainProfile, modelId, avatarUrl, avatarId, slotNumber, capabilities } = req.body || {};
+
+  if (!name || !role) {
+    return res.status(400).json({ error: 'Campos nome e função são obrigatórios.' });
+  }
+
+  const cleanRole = String(role).trim();
+  if (cleanRole.length > 34) {
+    return res.status(400).json({
+      error: 'O campo função não pode exceder o limite estrito de 34 caracteres.',
+      current_length: cleanRole.length,
+      max_length: 34,
+    });
+  }
+
+  try {
+    const savedAgent = await saveGlobalAgent(
+      {
+        id,
+        name,
+        role: cleanRole,
+        prompt,
+        brainProfile,
+        modelId,
+        avatarUrl,
+        avatarId,
+        slotNumber,
+        capabilities,
+      },
+      currentUserId,
+      supabaseAdmin
+    );
+
+    return res.json({ ok: true, success: true, agent: savedAgent });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || 'Erro ao salvar agente.' });
+  }
+});
+
+// Remover agente global (EXCLUSIVO ADMINISTRADORES ATIVOS)
+app.delete('/api/agents/:id', async (req, res) => {
+  const { id } = req.params;
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+  const scopedSupabase = getScopedSupabaseClient(token);
+
+  let currentUserId: string | null = null;
+  if (token) {
+    try {
+      const { data: userData } = await scopedSupabase.auth.getUser(token);
+      if (userData?.user) currentUserId = userData.user.id;
+    } catch {}
+  }
+
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Sessão inválida ou não autenticada.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  const isAdmin = await checkIsActiveAdmin(currentUserId, supabaseAdmin);
+  if (!isAdmin) {
+    return res.status(403).json({
+      ok: false,
+      error: 'forbidden',
+      message: 'Acesso negado: apenas administradores ativos podem excluir agentes globais.',
+    });
+  }
+
+  try {
+    const deleted = await deleteGlobalAgent(id, currentUserId, supabaseAdmin);
+    return res.json({ ok: true, success: deleted });
+  } catch (err: any) {
+    return res.status(400).json({ ok: false, error: err?.message || 'Erro ao excluir agente.' });
+  }
+});
+
+// Listar atribuições globais da plataforma
+app.get('/api/agents/assignments', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+  const scopedSupabase = getScopedSupabaseClient(token);
+
+  let currentUserId: string | null = null;
+  if (token) {
+    try {
+      const { data: userData } = await scopedSupabase.auth.getUser(token);
+      if (userData?.user) currentUserId = userData.user.id;
+    } catch {}
+  }
+
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Sessão inválida ou não autenticada.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  const isActive = await checkIsActiveUser(currentUserId, supabaseAdmin);
+  if (!isActive) {
+    return res.status(403).json({ error: 'Conta de usuário inativa.' });
+  }
+
+  const assignments = await getGlobalAssignments(supabaseAdmin);
+  return res.json({ ok: true, assignments });
+});
+
+// Atribuir / Desatribuir agente global (EXCLUSIVO ADMINISTRADORES ATIVOS)
+app.post('/api/agents/assignments', async (req, res) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
+  const scopedSupabase = getScopedSupabaseClient(token);
+
+  let currentUserId: string | null = null;
+  if (token) {
+    try {
+      const { data: userData } = await scopedSupabase.auth.getUser(token);
+      if (userData?.user) currentUserId = userData.user.id;
+    } catch {}
+  }
+
+  if (!currentUserId) {
+    return res.status(401).json({ error: 'Sessão inválida ou não autenticada.' });
+  }
+
+  const supabaseAdmin = getAdminSupabaseClient();
+  const isAdmin = await checkIsActiveAdmin(currentUserId, supabaseAdmin);
+  if (!isAdmin) {
+    return res.status(403).json({
+      ok: false,
+      error: 'forbidden',
+      message: 'Acesso negado: apenas administradores ativos podem gerenciar atribuições globais.',
+    });
+  }
+
+  const { action, agentId, target, categoryKey, categoryLabel } = req.body || {};
+
+  try {
+    if (action === 'delete' || action === 'remove') {
+      const removed = await removeGlobalAssignment(target, categoryKey, currentUserId, supabaseAdmin);
+      return res.json({ ok: true, success: removed });
+    }
+
+    const savedAssignment = await saveGlobalAssignment(
+      { agentId, target, categoryKey, categoryLabel },
+      currentUserId,
+      supabaseAdmin
+    );
+    return res.json({ ok: true, success: true, assignment: savedAssignment });
+  } catch (err: any) {
+    return res.status(400).json({ ok: false, error: err?.message || 'Erro ao processar atribuição.' });
+  }
+});
+
+async function handleAgentChat(req: express.Request, res: express.Response) {
+  const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
 
@@ -1952,7 +4073,7 @@ app.post('/api/condo/chat', async (req, res) => {
     } catch {}
   }
 
-  const { messages, client_context, snapshot } = req.body;
+  const { messages, client_context, snapshot, agentId: bodyAgentId, agent: bodyAgent } = req.body || {};
 
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({
@@ -1964,121 +4085,192 @@ app.post('/api/condo/chat', async (req, res) => {
     });
   }
 
-  const lastUserMsgObj = [...messages].reverse().find((m: any) => m.role === 'user');
-  const lastUserMessage = typeof lastUserMsgObj?.content === 'string' ? lastUserMsgObj.content : '';
+  const supabaseAdmin = getAdminSupabaseClient();
 
-  const conversationMessages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-    {
-      role: 'system',
-      content: buildSystemPrompt(),
-    },
-    ...messages.slice(-8).map((m: any) => ({
-      role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
-      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-    })),
-  ];
+  let userProfile: any = null;
+  let userPermissions: any = null;
+  if (currentUserId && supabaseAdmin) {
+    try {
+      const { data: p } = await supabaseAdmin
+        .from('profiles')
+        .select('id, role, is_active, deleted_at')
+        .eq('id', currentUserId)
+        .maybeSingle();
+      userProfile = p;
 
-  const actionsExecuted: any[] = [];
-  const accumulatedRichResults: any[] = [];
-  const MAX_TOOL_ITERATIONS = 6;
-  let iteration = 0;
+      const { data: up } = await supabaseAdmin
+        .from('user_permissions')
+        .select('*')
+        .eq('user_id', currentUserId)
+        .maybeSingle();
+      userPermissions = up;
+    } catch {}
+  }
 
-  try {
-    while (iteration < MAX_TOOL_ITERATIONS) {
-      iteration++;
-
-      const response = await openai.chat.completions.create({
-        model: CONDO_MODEL_REQUESTED,
-        messages: conversationMessages,
-        tools: CONDO_TOOLS as any,
-        tool_choice: 'auto',
-        temperature: 0.2,
-      });
-
-      const choice = response.choices?.[0];
-      const assistantMessage = choice?.message;
-
-      if (!assistantMessage) {
-        throw new Error('Nenhuma resposta recebida do modelo.');
-      }
-
-      conversationMessages.push(assistantMessage);
-
-      if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
-        for (const tc of assistantMessage.tool_calls) {
-          if (tc.type === 'function') {
-            const funcName = tc.function.name;
-            let parsedArgs: any = {};
-            try {
-              parsedArgs = JSON.parse(tc.function.arguments || '{}');
-            } catch {
-              parsedArgs = {};
-            }
-
-            const toolRes = await executeToolCall(
-              funcName,
-              parsedArgs,
-              scopedSupabase,
-              currentUserId,
-              requestId,
-              lastUserMessage,
-              client_context,
-              snapshot
-            );
-
-            const { result, richResults } = toolRes;
-            if (toolRes.contextRefs) {
-              // attach context refs
-            }
-
-            if (richResults && Array.isArray(richResults)) {
-              accumulatedRichResults.push(...richResults);
-            }
-
-            conversationMessages.push({
-              role: 'tool',
-              tool_call_id: tc.id,
-              content: JSON.stringify(result),
-            });
-          }
-        }
-        continue;
-      }
-
-      const hasHelpOrLink = accumulatedRichResults.some((r) => r.type === 'help' || r.type === 'link');
-      const presentationMode = hasHelpOrLink ? 'result_only' : 'text_and_results';
-
-      return res.status(200).json({
-        ok: true,
-        success: true,
+  if (currentUserId) {
+    const isActive = userProfile ? (userProfile.is_active === true && !userProfile.deleted_at) : await checkIsActiveUser(currentUserId, supabaseAdmin);
+    if (!isActive) {
+      return res.status(403).json({
+        ok: false,
+        success: false,
         request_id: requestId,
-        text: assistantMessage.content || 'Consulta realizada com sucesso.',
-        message: assistantMessage.content || 'Consulta realizada com sucesso.',
-        presentation_mode: presentationMode,
-        model: response.model,
-        results: accumulatedRichResults.length > 0 ? accumulatedRichResults : undefined,
+        error_type: 'inactive_user',
+        message: 'Acesso negado: sua conta de usuário está inativa na plataforma.',
       });
     }
+  }
+
+  const targetAgentId = bodyAgentId || bodyAgent?.id;
+  let activeAgent: any = null;
+
+  if (targetAgentId) {
+    const recoveredAgent = await getGlobalAgentById(targetAgentId, supabaseAdmin);
+    if (recoveredAgent) {
+      activeAgent = recoveredAgent;
+    }
+  }
+
+  // Fallback seguro de recuperação do agente se o payload contiver dados diretos
+  if (!activeAgent && bodyAgent && bodyAgent.name && bodyAgent.role) {
+    activeAgent = {
+      id: bodyAgent.id || `ag_${Date.now()}`,
+      name: bodyAgent.name,
+      role: bodyAgent.role,
+      prompt: bodyAgent.prompt || '',
+      brainProfile: bodyAgent.brainProfile || 'balanced',
+      modelId: bodyAgent.modelId || '',
+    };
+  }
+
+  // Se nenhum agente for informado, utiliza padrão neutro
+  if (!activeAgent) {
+    activeAgent = {
+      id: 'default',
+      name: 'Agente Triverus',
+      role: 'Especialista em Gestão e Auditoria',
+      prompt: '',
+      brainProfile: 'balanced',
+      modelId: '',
+    };
+  }
+
+  // Consulta autoritativa das capacidades persistidas pelo agent_id (nunca confia em flags enviadas pelo frontend)
+  if (activeAgent?.id) {
+    activeAgent.capabilities = await getAgentCapabilities(activeAgent.id, supabaseAdmin);
+  }
+
+  // Validação estrita do modelo configurado (sem substituição silenciosa)
+  if (!activeAgent.modelId || !String(activeAgent.modelId).trim()) {
+    return res.status(200).json({
+      ok: false,
+      success: false,
+      request_id: requestId,
+      error_type: 'missing_model_configuration',
+      text: `⚠️ O agente **${activeAgent.name}** ainda não possui um modelo de inteligência configurado. Um administrador precisa selecionar um modelo válido nas configurações do agente.`,
+      message: `⚠️ O agente **${activeAgent.name}** ainda não possui um modelo de inteligência configurado. Um administrador precisa selecionar um modelo válido nas configurações do agente.`,
+      agent: {
+        id: activeAgent.id,
+        name: activeAgent.name,
+        role: activeAgent.role,
+      },
+    });
+  }
+
+  const modelValidation = resolveModelInfo(activeAgent.modelId);
+  if (!modelValidation.isValid) {
+    return res.status(200).json({
+      ok: false,
+      success: false,
+      request_id: requestId,
+      error_type: 'unsupported_model',
+      text: `⚠️ O modelo de inteligência **${activeAgent.modelId}** configurado para o agente **${activeAgent.name}** não é compatível com o catálogo do motor. Um administrador precisa selecionar um modelo válido.`,
+      message: `⚠️ O modelo de inteligência **${activeAgent.modelId}** configurado para o agente **${activeAgent.name}** não é compatível com o catálogo do motor. Um administrador precisa selecionar um modelo válido.`,
+      agent: {
+        id: activeAgent.id,
+        name: activeAgent.name,
+        role: activeAgent.role,
+      },
+    });
+  }
+
+  const formattedMessages = messages.slice(-10).map((m: any) => ({
+    role: m.role === 'assistant' ? ('assistant' as const) : ('user' as const),
+    content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+  }));
+
+  try {
+    const isUserAdmin = userProfile?.role === 'admin';
+    const executionRes = await executeAgentChat({
+      agent: activeAgent,
+      messages: formattedMessages,
+      clientContext: client_context,
+      snapshot,
+      toolContext: {
+        userId: currentUserId || 'anonymous',
+        userToken: token,
+        isAdmin: isUserAdmin,
+        isActive: userProfile?.is_active === true && !userProfile?.deleted_at,
+        userRole: userProfile?.role || 'user',
+        userPermissions: userPermissions || {},
+        scopedSupabase,
+        supabaseAdmin,
+      },
+    });
 
     return res.status(200).json({
       ok: true,
       success: true,
       request_id: requestId,
-      text: 'Finalizei as consultas solicitadas no CRM.',
-      message: 'Finalizei as consultas solicitadas no CRM.',
-      results: accumulatedRichResults.length > 0 ? accumulatedRichResults : undefined,
+      text: executionRes.text,
+      message: executionRes.text,
+      results: executionRes.results || [],
+      model_used: executionRes.modelUsed,
+      provider_used: executionRes.providerUsed,
+      brain_profile: executionRes.brainProfileUsed,
+      agent: {
+        id: activeAgent.id,
+        name: activeAgent.name,
+        role: activeAgent.role,
+      },
     });
-  } catch (chatError: any) {
-    console.error(`[Condo Chat Error req:${requestId}]:`, chatError?.message || chatError);
-    const sanitized = chatError?.message?.replace(/sk-[a-zA-Z0-9_-]+/g, '[REDACTED]') || 'Falha ao processar solicitação com o Condo.';
-    return res.status(500).json({
+  } catch (err: any) {
+    console.error(`[Agent Chat Execution Error req:${requestId}]:`, err?.message || err);
+
+    return res.status(200).json({
       ok: false,
       success: false,
       request_id: requestId,
-      error_type: 'openai_chat_error',
-      message: sanitized,
+      error_type: 'agent_execution_error',
+      text: `⚠️ O serviço de inteligência para o agente **${activeAgent.name}** está temporariamente indisponível. Por favor, tente novamente em instantes.`,
+      message: `⚠️ O serviço de inteligência para o agente **${activeAgent.name}** está temporariamente indisponível. Por favor, tente novamente em instantes.`,
+      agent: {
+        id: activeAgent.id,
+        name: activeAgent.name,
+        role: activeAgent.role,
+      },
     });
   }
+}
+
+// Endpoint principal neutro de chat com suporte a execução multi-provedor por agente
+app.post('/api/agents/chat', handleAgentChat);
+
+// Alias de retrocompatibilidade para /api/condo/chat
+app.post('/api/condo/chat', handleAgentChat);
+
+// Validação do Construtor de Agentes no Backend: Limite estrito de 34 caracteres para o campo Função
+app.post('/api/agents/validate-role', (req, res) => {
+  const { role } = req.body || {};
+  const trimmed = typeof role === 'string' ? role.trim() : '';
+  const isValid = trimmed.length <= 34;
+  return res.json({
+    ok: true,
+    valid: isValid,
+    max_length: 34,
+    current_length: trimmed.length,
+    remaining: Math.max(0, 34 - trimmed.length),
+    sanitized: trimmed.slice(0, 34),
+  });
 });
 
 async function startServer() {

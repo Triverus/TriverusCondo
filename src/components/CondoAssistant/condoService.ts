@@ -23,7 +23,15 @@ export async function sendCondoMessage(
   ctx: ActionContext,
   uiContext?: any,
   currentFocus?: any,
-  recentlyDisplayedResultKeys?: string[]
+  recentlyDisplayedResultKeys?: string[],
+  agentOverride?: {
+    id?: string;
+    name?: string;
+    role?: string;
+    prompt?: string;
+    modelId?: string;
+    brainProfile?: string;
+  }
 ): Promise<{ text: string; actions?: CondoActionExecuted[]; results?: CondoResultItem[] }> {
   // 1. Obtain current Supabase user session token for authenticated RLS
   let authToken: string | undefined;
@@ -72,6 +80,7 @@ export async function sendCondoMessage(
         ui_context: uiContext,
         current_focus: currentFocus,
         recently_displayed_result_keys: recentlyDisplayedResultKeys,
+        agent: agentOverride,
       }),
     });
 
@@ -119,8 +128,9 @@ export async function sendCondoMessage(
       ctx.refreshAll(true).catch(() => {});
     }
 
+    const finalResponseText = (data?.text || data?.message || '').trim();
     return {
-      text: data?.text || data?.message || 'Consulta realizada com sucesso.',
+      text: finalResponseText || '⚠️ O assistente concluiu a consulta, mas não retornou texto final. Por favor, tente novamente.',
       actions: data?.actionsExecuted,
       results: data?.results,
     };

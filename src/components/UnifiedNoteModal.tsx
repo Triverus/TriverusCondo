@@ -558,7 +558,7 @@ export default function UnifiedNoteModal({
         <div className="px-6 pt-5 pb-4 border-b border-slate-800/80 bg-slate-950/80">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-indigo-600/20 text-indigo-400 border border-indigo-500/30 font-bold shrink-0">
+              <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-orange-500/20 text-[#FF6600] border border-orange-500/30 font-bold shrink-0">
                 <NotesIcon className="w-4 h-4" />
               </div>
               <div className="min-w-0">
@@ -591,7 +591,7 @@ export default function UnifiedNoteModal({
             <div className="mt-4">
               <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1.5 font-medium">
                 <span>Pergunta {step} de {totalSteps}</span>
-                <span className="text-indigo-400 font-semibold">
+                <span className="text-[#FF6600] font-semibold">
                   {step === 1 && 'Tipo de Contato'}
                   {step === 2 && 'Anotações'}
                   {step === 3 && 'Data & Horário'}
@@ -601,7 +601,7 @@ export default function UnifiedNoteModal({
               </div>
               <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
                 <div
-                  className="bg-indigo-500 h-full transition-all duration-300 ease-out rounded-full"
+                  className="bg-[#FF6600] h-full transition-all duration-300 ease-out rounded-full"
                   style={{ width: `${(step / totalSteps) * 100}%` }}
                 />
               </div>
@@ -651,7 +651,7 @@ export default function UnifiedNoteModal({
           {step === 1 && (
             <div className="space-y-4 animate-in fade-in duration-200">
               <div>
-                <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-bold block mb-1">
+                <span className="text-[11px] uppercase tracking-wider text-[#FF6600] font-bold block mb-1">
                   Passo 1
                 </span>
                 <h3 className="text-lg sm:text-xl font-bold text-white leading-snug">
@@ -673,7 +673,7 @@ export default function UnifiedNoteModal({
                       }}
                       className={`p-3.5 rounded-2xl border text-center font-bold text-sm transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-indigo-600 text-white border-indigo-500 shadow-md ring-2 ring-indigo-500/30'
+                          ? 'bg-[#FF6600] text-white border-[#FF6600] shadow-md ring-2 ring-orange-500/30'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800/80 hover:border-slate-700'
                       }`}
                     >
@@ -689,7 +689,7 @@ export default function UnifiedNoteModal({
           {step === 2 && (
             <div className="space-y-4 animate-in fade-in duration-200">
               <div>
-                <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-bold block mb-1">
+                <span className="text-[11px] uppercase tracking-wider text-[#FF6600] font-bold block mb-1">
                   Passo 2
                 </span>
                 <h3 className="text-lg sm:text-xl font-bold text-white leading-snug">
@@ -707,7 +707,7 @@ export default function UnifiedNoteModal({
                   value={formNotes}
                   onChange={(e) => setFormNotes(e.target.value)}
                   placeholder="Digite os principais pontos da conversa, dúvidas ou decisões tomadas..."
-                  className="w-full px-4 py-3.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-2xl text-white placeholder-slate-500 text-xs focus:outline-none leading-relaxed"
+                  className="w-full px-4 py-3.5 bg-slate-950 border border-slate-800 focus:border-[#FF6600] rounded-2xl text-white placeholder-slate-500 text-xs focus:outline-none leading-relaxed"
                 />
               </div>
             </div>
@@ -717,7 +717,7 @@ export default function UnifiedNoteModal({
           {step === 3 && (
             <div className="space-y-4 animate-in fade-in duration-200">
               <div>
-                <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-bold block mb-1">
+                <span className="text-[11px] uppercase tracking-wider text-[#FF6600] font-bold block mb-1">
                   Passo 3
                 </span>
                 <div className="flex items-center gap-2">
@@ -745,7 +745,7 @@ export default function UnifiedNoteModal({
                   }}
                   className={`px-3 py-1.5 rounded-xl border text-xs font-semibold cursor-pointer transition-all ${
                     formDate === todayStr
-                      ? 'bg-indigo-600 border-indigo-500 text-white'
+                      ? 'bg-[#FF6600] border-[#FF6600] text-white'
                       : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
                   }`}
                 >
@@ -812,9 +812,9 @@ export default function UnifiedNoteModal({
                         onClick={() => setFormDate(thisDateStr)}
                         className={`h-7 rounded-lg text-xs font-semibold transition-all cursor-pointer flex items-center justify-center relative ${
                           isSelected
-                            ? 'bg-indigo-600 text-white font-bold shadow-xs'
+                            ? 'bg-[#FF6600] text-white font-bold shadow-xs'
                             : isToday
-                            ? 'border border-indigo-500/60 text-indigo-300 bg-indigo-500/10'
+                            ? 'border border-orange-500/60 text-orange-300 bg-orange-500/10'
                             : 'text-slate-300 hover:bg-slate-850 hover:text-white'
                         }`}
                       >
@@ -835,7 +835,7 @@ export default function UnifiedNoteModal({
                     type="time"
                     value={formTime}
                     onChange={(e) => setFormTime(e.target.value)}
-                    className="px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                    className="px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-[#FF6600] rounded-xl text-white text-xs focus:outline-none"
                   />
                   <button
                     type="button"
@@ -856,7 +856,7 @@ export default function UnifiedNoteModal({
           {step === 4 && (
             <div className="space-y-4 animate-in fade-in duration-200">
               <div>
-                <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-bold block mb-1">
+                <span className="text-[11px] uppercase tracking-wider text-[#FF6600] font-bold block mb-1">
                   Passo 4
                 </span>
                 <h3 className="text-lg sm:text-xl font-bold text-white leading-snug">
@@ -882,12 +882,12 @@ export default function UnifiedNoteModal({
                       }}
                       className={`w-full p-3.5 rounded-2xl border text-left flex items-center justify-between transition-all cursor-pointer ${
                         isSelected
-                          ? 'bg-indigo-600/20 border-indigo-500 text-white ring-2 ring-indigo-500/20'
+                          ? 'bg-orange-500/15 border-[#FF6600] text-white ring-2 ring-orange-500/20'
                           : 'bg-slate-950/80 border-slate-800 text-slate-300 hover:bg-slate-800/60 hover:text-white'
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs text-indigo-300 border border-slate-700">
+                        <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center font-bold text-xs text-orange-300 border border-slate-700">
                           {(profile.full_name || 'U').slice(0, 2).toUpperCase()}
                         </div>
                         <div>
@@ -901,7 +901,7 @@ export default function UnifiedNoteModal({
                       </div>
 
                       {isSelected && (
-                        <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs">
+                        <div className="w-5 h-5 rounded-full bg-[#FF6600] text-white flex items-center justify-center text-xs">
                           ✓
                         </div>
                       )}
@@ -916,7 +916,7 @@ export default function UnifiedNoteModal({
           {step === 5 && (
             <div className="space-y-4 animate-in fade-in duration-200">
               <div>
-                <span className="text-[11px] uppercase tracking-wider text-indigo-400 font-bold block mb-1">
+                <span className="text-[11px] uppercase tracking-wider text-[#FF6600] font-bold block mb-1">
                   Passo 5
                 </span>
                 <div className="flex items-center gap-2">
@@ -947,21 +947,21 @@ export default function UnifiedNoteModal({
                     <button
                       type="button"
                       onClick={() => handleSelectQuickNextDate(0)}
-                      className="py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500 text-xs font-semibold text-white transition-all cursor-pointer text-center shadow-xs"
+                      className="py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-[#FF6600] text-xs font-semibold text-white transition-all cursor-pointer text-center shadow-xs"
                     >
                       ⚡ Hoje
                     </button>
                     <button
                       type="button"
                       onClick={() => handleSelectQuickNextDate(1)}
-                      className="py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500 text-xs font-semibold text-white transition-all cursor-pointer text-center shadow-xs"
+                      className="py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-[#FF6600] text-xs font-semibold text-white transition-all cursor-pointer text-center shadow-xs"
                     >
                       📅 Amanhã
                     </button>
                     <button
                       type="button"
                       onClick={() => handleSelectQuickNextDate(3)}
-                      className="py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-indigo-500 text-xs font-semibold text-white transition-all cursor-pointer text-center shadow-xs"
+                      className="py-2.5 px-3 rounded-xl bg-slate-950 border border-slate-800 hover:border-[#FF6600] text-xs font-semibold text-white transition-all cursor-pointer text-center shadow-xs"
                     >
                       🗓️ Em 3 dias
                     </button>
@@ -977,7 +977,7 @@ export default function UnifiedNoteModal({
                     <select
                       value={formNextChannel}
                       onChange={(e) => setFormNextChannel(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none appearance-none cursor-pointer pr-10 shadow-xs"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-[#FF6600] rounded-xl text-white text-xs focus:outline-none appearance-none cursor-pointer pr-10 shadow-xs"
                     >
                       {CONTACT_TYPES.map((ch) => (
                         <option key={ch} value={ch} className="bg-slate-900 text-white">
@@ -1006,7 +1006,7 @@ export default function UnifiedNoteModal({
                         setWantNextFollowUp(true);
                         setFormNextFollowUpDate(e.target.value);
                       }}
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none shadow-xs"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-[#FF6600] rounded-xl text-white text-xs focus:outline-none shadow-xs"
                     />
                   </div>
                   <div>
@@ -1017,7 +1017,7 @@ export default function UnifiedNoteModal({
                       type="time"
                       value={formNextFollowUpTime}
                       onChange={(e) => setFormNextFollowUpTime(e.target.value)}
-                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none shadow-xs"
+                      className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 focus:border-[#FF6600] rounded-xl text-white text-xs focus:outline-none shadow-xs"
                     />
                   </div>
                 </div>
@@ -1079,7 +1079,7 @@ export default function UnifiedNoteModal({
                 <button
                   type="button"
                   onClick={() => setStep((p) => p + 1)}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                  className="px-5 py-2.5 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] text-white rounded-xl text-xs font-bold transition-all cursor-pointer shadow-md shadow-orange-500/10"
                 >
                   Avançar →
                 </button>

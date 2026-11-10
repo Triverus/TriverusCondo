@@ -12,13 +12,15 @@
     "build:client": "vite build",
     "start": "node server.js",
     "preview": "vite preview",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "node --test"
   },
   "dependencies": {
     "@google/genai": "^2.27.0",
     "@supabase/supabase-js": "^2.117.2",
     "@tailwindcss/vite": "^4.3.3",
     "@types/canvas-confetti": "^1.9.0",
+    "@types/pdf-parse": "^1.1.5",
     "@vitejs/plugin-react": "^6.1.1",
     "canvas-confetti": "^1.9.4",
     "driver.js": "^1.9.0",
@@ -26,8 +28,11 @@
     "lucide-react": "^1.52.0",
     "motion": "^14.2.0",
     "openai": "^7.28.0",
+    "pdf-parse": "^2.4.5",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "vite": "^8.3.0"
   },
   "devDependencies": {

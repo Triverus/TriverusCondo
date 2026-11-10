@@ -1,0 +1,157 @@
+-- ============================================================================
+-- TRIVERUS — MIGRAÇÃO DOCUMENTAL E BUSCA INTELIGENTE DE AUDITORIA (ETAPA 3.1)
+-- Arquivo: sql/20261110_auditoria_documentos_index.sql
+-- 
+-- ATENÇÃO DE SEGURANÇA E AMBIENTE:
+-- ESTE SCRIPT FOI PREPARADO EXCLUSIVAMENTE PARA REVISÃO E APROVAÇÃO TÉCNICA.
+-- NÃO EXECUTAR MIGRATIONS AUTOMÁTICAS E NÃO FAZER DEPLOY EM PRODUÇÃO.
+-- ============================================================================
+
+-- 1. Garantia de Unicidade Composta na Tabela Pai (auditoria_documentos)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'uq_auditoria_documentos_id_condo'
+  ) THEN
+    ALTER TABLE public.auditoria_documentos
+      ADD CONSTRAINT uq_auditoria_documentos_id_condo UNIQUE (id, condo_id);
+  END IF;
+END $$;
+
+-- 2. Tabela de Controle de Estado, Fila e Publicação Atômica do Índice
+CREATE TABLE IF NOT EXISTS public.auditoria_documentos_status (
+  document_id UUID PRIMARY KEY REFERENCES public.auditoria_documentos(id) ON DELETE CASCADE,
+  condo_id UUID NOT NULL REFERENCES public.leads(id) ON DELETE CASCADE,
+  drive_file_id TEXT NOT NULL,
+  drive_file_name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  indexing_status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'indexing', 'indexed', 'sem_camada_texto', 'tamanho_excedido', 'erro_extracao'
+  indexing_version INTEGER NOT NULL DEFAULT 1,
+  active_version INTEGER NOT NULL DEFAULT 0,
+  total_pages INTEGER DEFAULT 0,
+  total_chunks INTEGER DEFAULT 0,
+  total_chars INTEGER DEFAULT 0,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  max_retries INTEGER NOT NULL DEFAULT 3,
+  last_error TEXT,
+  locked_at TIMESTAMPTZ,
+  locked_by TEXT,
+  last_indexed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- 3. Tabela Principal do Índice Documental Fragmentado (Chunks)
+CREATE TABLE IF NOT EXISTS public.auditoria_documentos_index (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  document_id UUID NOT NULL,
+  condo_id UUID NOT NULL,
+  drive_file_id TEXT NOT NULL,
+  drive_file_name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  page_number INTEGER NOT NULL CHECK (page_number > 0),
+  chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+  content TEXT NOT NULL,
+  content_clean TEXT NOT NULL,
+  char_count INTEGER NOT NULL DEFAULT 0,
+  word_count INTEGER NOT NULL DEFAULT 0,
+  indexing_status TEXT NOT NULL DEFAULT 'indexed',
+  indexing_version INTEGER NOT NULL DEFAULT 1,
+  file_hash TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  -- Restrição Relacional Composta: Impede divergência entre condomínio e documento pai
+  CONSTRAINT fk_auditoria_doc_index_parent
+    FOREIGN KEY (document_id, condo_id)
+    REFERENCES public.auditoria_documentos(id, condo_id)
+    ON DELETE CASCADE,
+
+  -- Unicidade estrita por documento, versão, página e trecho
+  CONSTRAINT uq_auditoria_doc_index_chunk
+    UNIQUE (document_id, indexing_version, page_number, chunk_index)
+);
+
+-- 4. Índices de Desempenho e Busca Textual
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_index_condo ON public.auditoria_documentos_index (condo_id);
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_index_doc ON public.auditoria_documentos_index (document_id);
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_index_category ON public.auditoria_documentos_index (category);
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_index_doc_ver ON public.auditoria_documentos_index (document_id, indexing_version);
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_index_page ON public.auditoria_documentos_index (document_id, page_number);
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_index_status ON public.auditoria_documentos_index (indexing_status);
+
+-- Índice de Busca Textual (Full-Text Search em Português)
+CREATE INDEX IF NOT EXISTS idx_auditoria_doc_index_fts ON public.auditoria_documentos_index
+  USING gin (to_tsvector('portuguese', content));
+
+-- 5. Trigger para Sinalizar Atualização do Campo updated_at
+CREATE OR REPLACE FUNCTION public.trg_auditoria_doc_index_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_auditoria_doc_index_updated_at ON public.auditoria_documentos_index;
+CREATE TRIGGER trg_auditoria_doc_index_updated_at
+  BEFORE UPDATE ON public.auditoria_documentos_index
+  FOR EACH ROW EXECUTE FUNCTION public.trg_auditoria_doc_index_updated_at();
+
+-- 6. Habilitar RLS (Row Level Security)
+ALTER TABLE public.auditoria_documentos_index ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.auditoria_documentos_status ENABLE ROW LEVEL SECURITY;
+
+-- 7. Políticas RLS Alinhadas à Função Oficial public.can_user_access_condo(condo_id)
+DROP POLICY IF EXISTS p_auditoria_doc_index_select ON public.auditoria_documentos_index;
+CREATE POLICY p_auditoria_doc_index_select ON public.auditoria_documentos_index
+  FOR SELECT
+  TO authenticated
+  USING (public.can_user_access_condo(condo_id));
+
+DROP POLICY IF EXISTS p_auditoria_doc_status_select ON public.auditoria_documentos_status;
+CREATE POLICY p_auditoria_doc_status_select ON public.auditoria_documentos_status
+  FOR SELECT
+  TO authenticated
+  USING (public.can_user_access_condo(condo_id));
+
+-- Nenhuma escrita é concedida a usuários comuns.
+-- Inserção, edição e remoção gerenciadas estritamente por service_role (backend) ou Administradores Ativos.
+DROP POLICY IF EXISTS p_auditoria_doc_index_admin_all ON public.auditoria_documentos_index;
+CREATE POLICY p_auditoria_doc_index_admin_all ON public.auditoria_documentos_index
+  FOR ALL
+  TO authenticated
+  USING (public.is_current_user_active_admin());
+
+DROP POLICY IF EXISTS p_auditoria_doc_status_admin_all ON public.auditoria_documentos_status;
+CREATE POLICY p_auditoria_doc_status_admin_all ON public.auditoria_documentos_status
+  FOR ALL
+  TO authenticated
+  USING (public.is_current_user_active_admin());
+
+-- 8. Povoamento Inicial Seguro para Documentos Já Vinculados
+INSERT INTO public.auditoria_documentos_status (
+  document_id,
+  condo_id,
+  drive_file_id,
+  drive_file_name,
+  category,
+  indexing_status,
+  indexing_version,
+  active_version,
+  created_at,
+  updated_at
+)
+SELECT
+  id,
+  condo_id,
+  drive_file_id,
+  drive_file_name,
+  category,
+  'pending',
+  1,
+  0,
+  now(),
+  now()
+FROM public.auditoria_documentos
+ON CONFLICT (document_id) DO NOTHING;

@@ -1,0 +1,27 @@
+[
+  {
+    "id": "assign_chat_1",
+    "agentId": "global_ag_tributario",
+    "target": "chat",
+    "categoryLabel": "Chat Triverus",
+    "assignedBy": "user_admin_super",
+    "assignedAt": "2026-11-10T11:14:06.935Z"
+  },
+  {
+    "id": "assign_auditoria_balancete_1794309247024",
+    "agentId": "global_ag_tributario",
+    "target": "auditoria",
+    "categoryKey": "balancete",
+    "categoryLabel": "Balancete Mensal",
+    "assignedBy": "user_admin_super",
+    "assignedAt": "2026-11-10T11:14:07.024Z"
+  },
+  {
+    "id": "assign_chat_global_ag_sem_modelo_1794309247057",
+    "agentId": "global_ag_sem_modelo",
+    "target": "chat",
+    "categoryLabel": "Consultor Geral no Chat",
+    "assignedBy": "user_admin_super",
+    "assignedAt": "2026-11-10T11:14:07.057Z"
+  }
+]

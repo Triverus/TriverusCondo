@@ -46,6 +46,7 @@ import { renderFormattedTextWithLinks } from '../lib/linkUtils.tsx';
 import UnifiedNoteModal from './UnifiedNoteModal.tsx';
 import NotesTimelineModal, { formatDateTimeBR } from './NotesTimelineModal.tsx';
 import FunnelVisualizer from './FunnelVisualizer.tsx';
+import { SkeletonFollowUpGrid } from './ui/Skeleton.tsx';
 
 export interface FollowUpsModuleProps {
   currentProfile: UserProfile;
@@ -100,6 +101,7 @@ export default function FollowUpsModule({
     upsertContactLocally,
     deleteContactLocally,
     refreshAll,
+    isInitialLoading,
   } = useCRM();
 
   const {
@@ -1183,7 +1185,9 @@ export default function FollowUpsModule({
       </div>
 
       {/* Main Content Area */}
-      {filteredItems.length === 0 ? (
+      {isInitialLoading && followUpItems.length === 0 ? (
+        <SkeletonFollowUpGrid theme={isLight ? 'light' : 'dark'} />
+      ) : filteredItems.length === 0 ? (
         <div className={`mt-8 text-center py-16 rounded-3xl p-6 border ${
           isLight ? 'bg-white border-slate-200 shadow-md' : 'bg-slate-900/40 border-slate-800/80'
         }`}>
@@ -1336,7 +1340,7 @@ export default function FollowUpsModule({
                                 }
                                 if (e.key === 'Escape') setQuickEdit(null);
                               }}
-                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
+                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-[#FF6600] rounded text-[11px] text-slate-100 focus:outline-none"
                             />
                             <button
                               type="button"
@@ -1347,7 +1351,7 @@ export default function FollowUpsModule({
                                   setQuickEdit(null);
                                 }
                               }}
-                              className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
+                              className="px-1.5 py-0.5 rounded bg-[#FF6600] hover:bg-[#e65c00] text-white font-bold text-[10px] cursor-pointer shrink-0"
                               title="Confirmar data"
                             >
                               ✓
@@ -1406,7 +1410,7 @@ export default function FollowUpsModule({
                                 }
                                 if (e.key === 'Escape') setQuickEdit(null);
                               }}
-                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-indigo-500 rounded text-[11px] text-slate-100 focus:outline-none"
+                              className="w-full px-1.5 py-0.5 bg-slate-900 border border-[#FF6600] rounded text-[11px] text-slate-100 focus:outline-none"
                             />
                             <button
                               type="button"
@@ -1417,7 +1421,7 @@ export default function FollowUpsModule({
                                   setQuickEdit(null);
                                 }
                               }}
-                              className="px-1.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-[10px] cursor-pointer shrink-0"
+                              className="px-1.5 py-0.5 rounded bg-[#FF6600] hover:bg-[#e65c00] text-white font-bold text-[10px] cursor-pointer shrink-0"
                               title="Confirmar horário"
                             >
                               ✓
@@ -1432,7 +1436,7 @@ export default function FollowUpsModule({
                             </button>
                           </div>
                         ) : (
-                          <span className={`font-bold text-xs truncate ${isLight ? 'text-indigo-700' : 'text-indigo-300'}`}>
+                          <span className={`font-bold text-xs truncate ${isLight ? 'text-orange-600' : 'text-orange-400'}`}>
                             {displayTime}
                           </span>
                         )}
@@ -1473,7 +1477,7 @@ export default function FollowUpsModule({
                               setQuickEdit((prev) => (prev ? { ...prev, value: e.target.value } : null))
                             }
                             placeholder="Digite a observação..."
-                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-indigo-500 rounded-lg text-[11px] text-slate-100 focus:outline-none resize-none"
+                            className="w-full px-2.5 py-1.5 bg-slate-900 border border-[#FF6600] rounded-lg text-[11px] text-slate-100 focus:outline-none resize-none"
                           />
                           <div className="flex items-center justify-end gap-1.5">
                             <button
@@ -1487,7 +1491,7 @@ export default function FollowUpsModule({
                               type="button"
                               disabled={quickEdit?.saving}
                               onClick={() => handleSaveQuickField(item)}
-                              className="px-2.5 py-0.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-semibold cursor-pointer"
+                              className="px-2.5 py-0.5 rounded bg-[#FF6600] hover:bg-[#e65c00] text-white text-[10px] font-semibold cursor-pointer"
                             >
                               {quickEdit?.saving ? 'Salvando...' : 'Salvar'}
                             </button>
@@ -1733,7 +1737,7 @@ export default function FollowUpsModule({
                             }}
                             title="Adicionar nota ou registrar follow-up"
                             aria-label="Registrar interação"
-                            className="w-7 h-7 rounded-full bg-indigo-600 hover:bg-indigo-500 active:scale-90 text-white inline-flex items-center justify-center shadow-md shadow-indigo-950/80 hover:shadow-indigo-500/40 ring-2 ring-indigo-500/25 transition-all cursor-pointer shrink-0"
+                            className="w-7 h-7 rounded-full bg-[#FF6600] hover:bg-[#e65c00] active:scale-90 text-white inline-flex items-center justify-center shadow-md shadow-orange-950/40 hover:shadow-orange-500/30 ring-2 ring-orange-500/25 transition-all cursor-pointer shrink-0"
                           >
                             <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round">
                               <path d="M12 5v14M5 12h14" />
@@ -2353,7 +2357,7 @@ export default function FollowUpsModule({
             <div className="px-6 py-4 border-b border-slate-800/90 bg-slate-950/90 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-lg bg-indigo-600/20 text-indigo-400 flex items-center justify-center text-xs font-bold">
+                  <span className="w-6 h-6 rounded-lg bg-orange-500/20 text-[#FF6600] flex items-center justify-center text-xs font-bold">
                     +
                   </span>
                   <span>Novo Follow-up</span>
@@ -2382,7 +2386,7 @@ export default function FollowUpsModule({
                   value={pickerSearch}
                   onChange={(e) => setPickerSearch(e.target.value)}
                   placeholder="Pesquisar condomínio por nome, cidade ou administradora..."
-                  className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none"
+                  className="w-full pl-9 pr-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-[#FF6600] rounded-xl text-white placeholder-slate-500 text-xs focus:outline-none"
                 />
                 <svg className="w-4 h-4 text-slate-500 absolute left-3 top-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -2423,11 +2427,11 @@ export default function FollowUpsModule({
                         setActiveNoteModalInteractionId(null);
                         setActiveNoteModalLead(lead);
                       }}
-                      className="w-full text-left p-3 rounded-2xl bg-slate-950/80 hover:bg-slate-800/80 border border-slate-800/80 hover:border-indigo-500/50 transition-all cursor-pointer flex items-center justify-between group"
+                      className="w-full text-left p-3 rounded-2xl bg-slate-950/80 hover:bg-slate-800/80 border border-slate-800/80 hover:border-[#FF6600]/50 transition-all cursor-pointer flex items-center justify-between group"
                     >
                       <div className="min-w-0 pr-3">
                         <div className="flex items-center gap-2 mb-0.5">
-                          <span className="font-bold text-xs text-white group-hover:text-indigo-300 transition-colors truncate">
+                          <span className="font-bold text-xs text-white group-hover:text-orange-400 transition-colors truncate">
                             {lead.name}
                           </span>
                           <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-300 shrink-0">
@@ -2442,7 +2446,7 @@ export default function FollowUpsModule({
                       </div>
 
                       <div className="shrink-0 flex items-center gap-2">
-                        <span className="w-7 h-7 rounded-xl bg-indigo-600/20 text-indigo-400 group-hover:bg-indigo-600 group-hover:text-white flex items-center justify-center text-xs font-bold transition-all shadow-xs">
+                        <span className="w-7 h-7 rounded-xl bg-orange-500/20 text-[#FF6600] group-hover:bg-[#FF6600] group-hover:text-white flex items-center justify-center text-xs font-bold transition-all shadow-xs">
                           +
                         </span>
                       </div>

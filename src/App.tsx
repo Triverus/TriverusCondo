@@ -3,17 +3,89 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from './lib/supabase.ts';
 import { clearCRMCache } from './lib/crmCache.ts';
 import { CRMProvider } from './lib/crmStore.tsx';
-import { ThemeProvider } from './lib/themeContext.tsx';
+import { ThemeProvider, useTheme } from './lib/themeContext.tsx';
 import { CondoUIContextProvider } from './lib/condoUIContext.tsx';
 import { PermissionsProvider, DEFAULT_USER_PERMISSIONS } from './lib/permissionsContext.tsx';
 import LeadsModule from './components/LeadsModule.tsx';
 import FollowUpsModule from './components/FollowUpsModule.tsx';
 import UsersManagementModule from './components/UsersManagementModule.tsx';
+import AuditoriaModule from './components/AuditoriaModule.tsx';
+import { MainSidebarNavigation } from './components/MainSidebarNavigation.tsx';
+import { AgentBuilder } from './components/AgentBuilder/AgentBuilder.tsx';
 import { CondoFloatingButton } from './components/CondoAssistant/CondoFloatingButton.tsx';
 import { CondoDrawer } from './components/CondoAssistant/CondoDrawer.tsx';
 import { formatProperName } from './lib/contactAdapter.ts';
+import { Bot, Users } from 'lucide-react';
 
 const TRIVERUS_LOGO_URL = 'https://adm.triveruscondo.com/wp-content/uploads/2026/10/7.png';
+
+function ThemeToggleHeaderButton({ isAuditoriaActive }: { isAuditoriaActive: boolean }) {
+  const { theme, toggleTheme } = useTheme();
+
+  if (isAuditoriaActive) return null;
+
+  const isLight = theme === 'light';
+
+  return (
+    <button
+      type="button"
+      onClick={toggleTheme}
+      title={isLight ? 'Alternar para Modo Escuro' : 'Alternar para Modo Claro'}
+      aria-label="Alternar tema"
+      className={`h-9 w-9 rounded-xl border flex items-center justify-center transition-all cursor-pointer shadow-2xs ${
+        isLight
+          ? 'bg-white hover:bg-slate-50 border-slate-200 hover:border-slate-300 text-slate-700'
+          : 'border-[#3f3f46] hover:border-slate-500 bg-[#303034] hover:bg-[#38383e] text-slate-300 hover:text-white'
+      }`}
+    >
+      {theme === 'dark' ? (
+        <svg className="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+        </svg>
+      ) : (
+        <svg className="w-4 h-4 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+function UserHubThemeToggle({ isAuditoriaActive }: { isAuditoriaActive: boolean }) {
+  const { theme, toggleTheme } = useTheme();
+
+  if (isAuditoriaActive) return null;
+
+  const isLight = theme === 'light';
+
+  return (
+    <button
+      type="button"
+      onClick={toggleTheme}
+      className={`w-full px-2.5 py-2 text-left text-xs font-medium rounded-xl flex items-center justify-between transition-colors cursor-pointer ${
+        isLight
+          ? 'text-slate-700 hover:bg-slate-100 hover:text-slate-900'
+          : 'text-slate-200 hover:bg-slate-800 hover:text-white'
+      }`}
+    >
+      <div className="flex items-center gap-2.5">
+        {theme === 'dark' ? (
+          <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+        ) : (
+          <svg className="w-4 h-4 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+          </svg>
+        )}
+        <span>{theme === 'dark' ? 'Modo Claro' : 'Modo Escuro'}</span>
+      </div>
+      <span className={`text-[10px] ${isLight ? 'text-slate-500' : 'text-slate-400'} font-mono uppercase`}>
+        {theme === 'dark' ? 'Escuro' : 'Claro'}
+      </span>
+    </button>
+  );
+}
 
 export interface UserProfile {
   id: string;
@@ -52,7 +124,7 @@ export default function App() {
 
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState<boolean>(!hasCachedSession);
-  const [path, setPath] = useState<string>(() => window.location.pathname);
+  const [path, setPath] = useState<string>(() => window.location.pathname + window.location.search);
 
   // Central state for profile - hydrated synchronously from cache
   const [profile, setProfile] = useState<UserProfile | null>(() => initialProfile.current);
@@ -81,6 +153,15 @@ export default function App() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userHubOpen, setUserHubOpen] = useState(false);
 
+  // Collapsible main sidebar state (Clientes / Agentes)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('triverus:sidebar-collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
   // First-access / password setup modal for invited or recovery users
   const [passwordSetupOpen, setPasswordSetupOpen] = useState<boolean>(() => {
     const hash = window.location.hash || '';
@@ -100,7 +181,8 @@ export default function App() {
 
   // Synchronize route navigation
   const navigate = (newPath: string) => {
-    if (window.location.pathname !== newPath) {
+    const currentFull = window.location.pathname + window.location.search;
+    if (currentFull !== newPath) {
       window.history.pushState({}, '', newPath);
     }
     setPath(newPath);
@@ -110,7 +192,7 @@ export default function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      setPath(window.location.pathname);
+      setPath(window.location.pathname + window.location.search);
     };
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
@@ -402,7 +484,7 @@ export default function App() {
   if (loading && !profile) {
     return (
       <div className="min-h-screen bg-slate-900 text-white flex flex-col items-center justify-center p-6">
-        <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <div className="w-10 h-10 border-4 border-[#FF6600] border-t-transparent rounded-full animate-spin mb-4" />
         <p className="text-slate-400 text-sm">
           Carregando pipeline...
         </p>
@@ -413,10 +495,10 @@ export default function App() {
   // Área de Login (/login) - Clean, premium, minimalist authentication
   if (!session && !profile) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 selection:bg-indigo-500 selection:text-white">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 selection:bg-[#FF6600] selection:text-white">
         <div className="w-full max-w-sm bg-slate-900/90 border border-slate-800 rounded-2xl p-7 shadow-2xl backdrop-blur-xl">
           {/* Subtle Key/Shield Icon */}
-          <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700/70 flex items-center justify-center mx-auto mb-6 text-indigo-400 shadow-inner">
+          <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700/70 flex items-center justify-center mx-auto mb-6 text-[#FF6600] shadow-inner">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
@@ -447,7 +529,7 @@ export default function App() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="seu.email@empresa.com"
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-sm"
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6600] focus:ring-1 focus:ring-[#FF6600] transition-all text-sm"
               />
             </div>
 
@@ -462,14 +544,14 @@ export default function App() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-sm"
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6600] focus:ring-1 focus:ring-[#FF6600] transition-all text-sm"
               />
             </div>
 
             <button
               type="submit"
               disabled={loginLoading}
-              className="w-full mt-2 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:bg-indigo-900/60 disabled:text-indigo-400 text-white font-medium rounded-xl transition-colors text-sm shadow-md cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full mt-2 py-2.5 px-4 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] disabled:opacity-50 text-white font-bold rounded-xl transition-all text-sm shadow-lg shadow-orange-500/10 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loginLoading ? (
                 <>
@@ -498,9 +580,9 @@ export default function App() {
   // Se não houver profile nem sessão ativa, exibir tela de Login
   if (!activeProfile) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 selection:bg-indigo-500 selection:text-white">
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-center p-4 sm:p-6 selection:bg-[#FF6600] selection:text-white">
         <div className="w-full max-w-sm bg-slate-900/90 border border-slate-800 rounded-2xl p-7 shadow-2xl backdrop-blur-xl">
-          <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700/70 flex items-center justify-center mx-auto mb-6 text-indigo-400 shadow-inner">
+          <div className="w-10 h-10 rounded-xl bg-slate-800 border border-slate-700/70 flex items-center justify-center mx-auto mb-6 text-[#FF6600] shadow-inner">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
             </svg>
@@ -528,7 +610,7 @@ export default function App() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="seu.email@empresa.com"
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-sm"
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6600] focus:ring-1 focus:ring-[#FF6600] transition-all text-sm"
               />
             </div>
 
@@ -543,14 +625,14 @@ export default function App() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-sm"
+                className="w-full px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-[#FF6600] focus:ring-1 focus:ring-[#FF6600] transition-all text-sm"
               />
             </div>
 
             <button
               type="submit"
               disabled={loginLoading}
-              className="w-full mt-2 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 disabled:bg-indigo-900/60 disabled:text-indigo-400 text-white font-medium rounded-xl transition-colors text-sm shadow-md cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              className="w-full mt-2 py-2.5 px-4 bg-[#FF6600] hover:bg-[#e65c00] active:bg-[#cc5200] disabled:opacity-50 text-white font-bold rounded-xl transition-all text-sm shadow-lg shadow-orange-500/10 cursor-pointer disabled:cursor-not-allowed flex items-center justify-center gap-2"
             >
               {loginLoading ? (
                 <>
@@ -597,65 +679,217 @@ export default function App() {
   const isAdminUser = normalizedRole === 'admin' || normalizedRole === 'administrador';
 
   // Determine active route
+  const isAuditoriaAgentes = path.startsWith('/app/auditoria/agentes') || path.startsWith('/app/agentes');
+  const isAuditoriaActive = path.startsWith('/app/auditoria') || isAuditoriaAgentes;
   const isFollowUpsActive = path.startsWith('/app/followups');
-  const isUsersSettingsActive = isAdminUser && (path.startsWith('/app/settings/users') || path.startsWith('/app/users'));
+  const isUsersSettingsActive = path.startsWith('/app/settings/users') || path.startsWith('/app/users');
 
   return (
-    <ThemeProvider>
+    <ThemeProvider forcedTheme={isAuditoriaActive ? 'dark' : null}>
       <CondoUIContextProvider>
         <PermissionsProvider currentProfile={activeProfile}>
           <CRMProvider currentProfile={activeProfile}>
-            <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased selection:bg-indigo-500 selection:text-white transition-colors duration-150">
-              {/* Top Global Navigation Bar - Full Width & Harmonious */}
-              <header className="sticky top-0 z-40 w-full bg-slate-900/95 border-b border-slate-800 backdrop-blur-md px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between gap-4 shadow-2xs">
-                {/* Module Selector */}
+            <AppLayoutContent
+              activeProfile={activeProfile}
+              isAdminUser={isAdminUser}
+              session={session}
+              path={path}
+              navigate={navigate}
+              handleLogout={handleLogout}
+              userHubOpen={userHubOpen}
+              setUserHubOpen={setUserHubOpen}
+              sidebarCollapsed={sidebarCollapsed}
+              setSidebarCollapsed={setSidebarCollapsed}
+              passwordSetupOpen={passwordSetupOpen}
+              setPasswordSetupOpen={setPasswordSetupOpen}
+              passwordSetupError={passwordSetupError}
+              setPasswordSetupError={setPasswordSetupError}
+              passwordSetupSuccess={passwordSetupSuccess}
+              setPasswordSetupSuccess={setPasswordSetupSuccess}
+              newUserPassword={newUserPassword}
+              setNewUserPassword={setNewUserPassword}
+              confirmUserPassword={confirmUserPassword}
+              setConfirmUserPassword={setConfirmUserPassword}
+              passwordSetupSaving={passwordSetupSaving}
+              handleSaveUserPassword={handleSaveUserPassword}
+              targetLeadIdForView={targetLeadIdForView}
+              setTargetLeadIdForView={setTargetLeadIdForView}
+              condoOpen={condoOpen}
+              setCondoOpen={setCondoOpen}
+            />
+          </CRMProvider>
+        </PermissionsProvider>
+      </CondoUIContextProvider>
+    </ThemeProvider>
+  );
+}
+
+interface AppLayoutContentProps {
+  activeProfile: UserProfile;
+  isAdminUser: boolean;
+  session: Session | null;
+  path: string;
+  navigate: (newPath: string) => void;
+  handleLogout: () => void;
+  userHubOpen: boolean;
+  setUserHubOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  sidebarCollapsed: boolean;
+  setSidebarCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
+  passwordSetupOpen: boolean;
+  setPasswordSetupOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  passwordSetupError: string | null;
+  setPasswordSetupError: React.Dispatch<React.SetStateAction<string | null>>;
+  passwordSetupSuccess: string | null;
+  setPasswordSetupSuccess: React.Dispatch<React.SetStateAction<string | null>>;
+  newUserPassword: string;
+  setNewUserPassword: React.Dispatch<React.SetStateAction<string>>;
+  confirmUserPassword: string;
+  setConfirmUserPassword: React.Dispatch<React.SetStateAction<string>>;
+  passwordSetupSaving: boolean;
+  handleSaveUserPassword: (e: React.FormEvent) => void;
+  targetLeadIdForView: string | null;
+  setTargetLeadIdForView: React.Dispatch<React.SetStateAction<string | null>>;
+  condoOpen: boolean;
+  setCondoOpen: React.Dispatch<React.SetStateAction<boolean>>;
+}
+
+function AppLayoutContent({
+  activeProfile,
+  isAdminUser,
+  session,
+  path,
+  navigate,
+  handleLogout,
+  userHubOpen,
+  setUserHubOpen,
+  sidebarCollapsed,
+  setSidebarCollapsed,
+  passwordSetupOpen,
+  setPasswordSetupOpen,
+  passwordSetupError,
+  setPasswordSetupError,
+  passwordSetupSuccess,
+  setPasswordSetupSuccess,
+  newUserPassword,
+  setNewUserPassword,
+  confirmUserPassword,
+  setConfirmUserPassword,
+  passwordSetupSaving,
+  handleSaveUserPassword,
+  targetLeadIdForView,
+  setTargetLeadIdForView,
+  condoOpen,
+  setCondoOpen,
+}: AppLayoutContentProps) {
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
+
+  const isAuditoriaAgentes = path.startsWith('/app/auditoria/agentes') || path.startsWith('/app/agentes');
+  const isAuditoriaActive = path.startsWith('/app/auditoria') || isAuditoriaAgentes;
+  const isFollowUpsActive = path.startsWith('/app/followups');
+  const isUsersSettingsActive = path.startsWith('/app/settings/users') || path.startsWith('/app/users');
+
+  return (
+    <div
+      className={`min-h-screen ${
+        isAuditoriaActive
+          ? 'bg-[#141418] text-slate-100'
+          : isLight
+          ? 'bg-[#f4f6f9] text-slate-900'
+          : 'bg-[#141418] text-slate-100'
+      } flex flex-col antialiased selection:bg-orange-600 selection:text-white transition-colors duration-150`}
+    >
+      {/* Top Global Navigation Bar - Full Width & Harmonious */}
+      <header
+        className={`sticky top-0 z-40 w-full ${
+          isAuditoriaActive
+            ? 'bg-[#242428] border-b border-[#303034]'
+            : isLight
+            ? 'bg-white border-b border-slate-200'
+            : 'bg-[#242428] border-b border-[#303034]'
+        } backdrop-blur-md px-4 sm:px-6 lg:px-8 py-2.5 flex items-center justify-between gap-4 shadow-2xs`}
+      >
+        {/* Module Selector */}
                 <div className="flex items-center gap-3 sm:gap-5">
                   {/* Horizontal Module Selector Tab Group */}
-                  <div className="flex items-center bg-slate-800/70 border border-slate-700/60 rounded-xl p-1">
-                    <button
-                      type="button"
-                      data-help-id="pipeline-menu"
-                      onClick={() => navigate('/app/leads')}
-                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
-                        !isFollowUpsActive && !isUsersSettingsActive
-                          ? 'bg-[#FF6600] text-white shadow-xs'
-                          : 'text-slate-400 hover:text-slate-100 hover:bg-slate-700/40'
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
-                      </svg>
-                      <span>Pipeline</span>
-                    </button>
-                    <button
-                      type="button"
-                      data-help-id="followups-menu"
-                      onClick={() => navigate('/app/followups')}
-                      className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
-                        isFollowUpsActive
-                          ? 'bg-[#FF6600] text-white shadow-xs'
-                          : 'text-slate-400 hover:text-slate-100 hover:bg-slate-700/40'
-                      }`}
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                      </svg>
-                      <span>Follow-ups</span>
-                    </button>
-                  </div>
+                  {isAuditoriaActive ? (
+                    <div className="flex items-center gap-2.5">
+                      <div className="px-3.5 py-1.5 rounded-xl bg-[#FF6600]/15 border border-[#FF6600]/30 text-[#FF6600] text-xs font-bold flex items-center gap-2">
+                        <svg className="w-4 h-4 text-[#FF6600]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <span>Módulo de Auditoria</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => navigate('/app/leads')}
+                        className="px-3 py-1.5 rounded-xl text-xs font-semibold text-slate-300 hover:text-white bg-[#303034] hover:bg-[#38383e] border border-[#3f3f46] transition-all flex items-center gap-1.5 cursor-pointer shadow-2xs"
+                        title="Ir para o CRM Comercial"
+                      >
+                        <svg className="w-3.5 h-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                        </svg>
+                        <span>Voltar ao CRM</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className={`flex items-center rounded-xl p-1 border ${
+                      isLight
+                        ? 'bg-[#F1F3F5] border-[#D6DCE5]'
+                        : 'bg-[#1b1b1f] border-[#303034]'
+                    }`}>
+                      <button
+                        type="button"
+                        data-help-id="pipeline-menu"
+                        onClick={() => navigate('/app/leads')}
+                        className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
+                          !isFollowUpsActive && !isUsersSettingsActive && !isAuditoriaActive
+                            ? 'bg-[#FF6600] text-white shadow-xs'
+                            : isLight
+                            ? 'text-[#667085] hover:text-[#111827] hover:bg-white'
+                            : 'text-slate-400 hover:text-slate-100 hover:bg-[#303034]'
+                        }`}
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                        </svg>
+                        <span>Pipeline</span>
+                      </button>
+                      <button
+                        type="button"
+                        data-help-id="followups-menu"
+                        onClick={() => navigate('/app/followups')}
+                        className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-2 cursor-pointer ${
+                          isFollowUpsActive
+                            ? 'bg-[#FF6600] text-white shadow-xs'
+                            : isLight
+                            ? 'text-[#667085] hover:text-[#111827] hover:bg-white'
+                            : 'text-slate-400 hover:text-slate-100 hover:bg-[#303034]'
+                        }`}
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                        </svg>
+                        <span>Follow-ups</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
 
-                {/* Gatilho único do Hub no canto superior direito: Logo da Triverus */}
-                <div className="relative shrink-0">
+                {/* Gatilho único do Hub no canto superior direito: Logo da Triverus + Theme Switcher */}
+                <div className="relative shrink-0 flex items-center gap-2">
+                  <ThemeToggleHeaderButton isAuditoriaActive={isAuditoriaActive} />
                   <button
                     type="button"
                     onClick={() => setUserHubOpen((prev) => !prev)}
                     title="Menu da conta e administração"
                     aria-label="Abrir menu da conta"
                     className={`h-9 px-2.5 rounded-xl border transition-all cursor-pointer flex items-center gap-1.5 shadow-2xs ${
-                      userHubOpen || isUsersSettingsActive
-                        ? 'bg-slate-800 border-[#FF6600] ring-1 ring-[#FF6600]/30'
-                        : 'bg-slate-900/90 hover:bg-slate-800/80 border-slate-700/70 hover:border-slate-600'
+                      isLight
+                        ? 'bg-white hover:bg-[#F1F3F5] border-[#D6DCE5] text-[#111827]'
+                        : userHubOpen || isUsersSettingsActive || isAuditoriaActive
+                        ? 'bg-[#303034] border-[#FF6600] ring-1 ring-[#FF6600]/30 text-white'
+                        : 'bg-[#303034] hover:bg-[#38383e] border-[#3f3f46] hover:border-slate-500 text-white'
                     }`}
                   >
                     <img
@@ -664,7 +898,7 @@ export default function App() {
                       className="h-5 w-auto max-w-[85px] object-contain"
                     />
                     <svg
-                      className={`w-3 h-3 text-slate-400 transition-transform ${userHubOpen ? 'rotate-180 text-white' : ''}`}
+                      className={`w-3 h-3 transition-transform ${isLight ? 'text-[#667085]' : 'text-slate-400'} ${userHubOpen ? 'rotate-180' : ''}`}
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -679,30 +913,78 @@ export default function App() {
                         className="fixed inset-0 z-40"
                         onClick={() => setUserHubOpen(false)}
                       />
-                      <div className="absolute right-0 mt-2 w-64 bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl py-2 px-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                      <div className={`absolute right-0 top-full mt-2 w-64 rounded-2xl shadow-2xl py-2 px-2 z-50 animate-in fade-in zoom-in-95 duration-100 border ${
+                        isLight
+                          ? 'bg-white border-[#D6DCE5] text-[#111827]'
+                          : 'bg-[#242428] border-[#303034] text-white'
+                      }`}>
                         {/* Identidade do Usuário (Nome, E-mail, Badge da função - SEM avatar/foto) */}
-                        <div className="px-3 py-2.5 mb-2 bg-slate-950/70 rounded-xl border border-slate-800/80">
-                          <p className="text-xs font-bold text-white truncate">
+                        <div className={`px-3 py-2.5 mb-2 rounded-xl border ${
+                          isLight
+                            ? 'bg-[#F1F3F5] border-[#D6DCE5]'
+                            : 'bg-[#1b1b1f] border-[#303034]'
+                        }`}>
+                          <p className={`text-xs font-bold truncate ${isLight ? 'text-[#111827]' : 'text-white'}`}>
                             {activeProfile.full_name || 'Usuário'}
                           </p>
-                          <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                          <p className={`text-[11px] truncate mt-0.5 ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>
                             {session?.user?.email || activeProfile.email || ''}
                           </p>
                           <div className="mt-2">
                             <span className={`inline-block px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${
                               isAdminUser
-                                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                                : 'bg-slate-800 text-slate-400 border border-slate-700'
+                                ? isLight
+                                  ? 'bg-orange-100 text-[#FF6A00] border border-orange-200'
+                                  : 'bg-orange-500/20 text-[#FF6600] border border-orange-500/30'
+                                : isLight
+                                ? 'bg-slate-200 text-[#667085] border border-slate-300'
+                                : 'bg-[#303034] text-slate-400 border border-[#3f3f46]'
                             }`}>
                               {isAdminUser ? 'ADMIN' : 'USUÁRIO'}
                             </span>
                           </div>
                         </div>
 
+                        {/* Seção MÓDULOS (Disponível para todos os colaboradores autenticados) */}
+                        <div className="mb-2">
+                          <div className={`px-2 pt-1 pb-1 text-[10px] font-bold uppercase tracking-wider ${
+                            isLight ? 'text-[#94A3B8]' : 'text-slate-400'
+                          }`}>
+                            Módulos
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setUserHubOpen(false);
+                              navigate('/app/auditoria');
+                            }}
+                            className={`w-full px-2.5 py-2 text-left text-xs font-semibold rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer ${
+                              isAuditoriaActive
+                                ? 'bg-orange-500/15 text-[#FF6A00]'
+                                : isLight
+                                ? 'text-[#111827] hover:bg-[#F1F3F5]'
+                                : 'text-slate-200 hover:bg-slate-800 hover:text-white'
+                            }`}
+                          >
+                            <svg className="w-4 h-4 text-[#FF6600] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
+                            <div className="flex-1 min-w-0">
+                              <span className={`block text-xs font-semibold ${isLight ? 'text-[#111827]' : 'text-slate-100'}`}>Auditoria</span>
+                              <p className={`text-[10px] font-normal truncate ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>Condomínios clientes</p>
+                            </div>
+                          </button>
+
+                          <div className={`h-px my-1.5 ${isLight ? 'bg-[#E5E7EB]' : 'bg-slate-800'}`} />
+                        </div>
+
                         {/* Seção ADMINISTRAÇÃO (Apenas para Administrador - sem repetição de ADMIN) */}
                         {isAdminUser && (
                           <div className="mb-2">
-                            <div className="px-2 pt-1 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                            <div className={`px-2 pt-1 pb-1 text-[10px] font-bold uppercase tracking-wider ${
+                              isLight ? 'text-[#94A3B8]' : 'text-slate-400'
+                            }`}>
                               Administração
                             </div>
 
@@ -715,6 +997,8 @@ export default function App() {
                               className={`w-full px-2.5 py-2 text-left text-xs font-semibold rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer ${
                                 isUsersSettingsActive
                                   ? 'bg-orange-500/15 text-[#FF6600]'
+                                  : isLight
+                                  ? 'text-[#111827] hover:bg-[#F1F3F5]'
                                   : 'text-slate-200 hover:bg-slate-800 hover:text-white'
                               }`}
                             >
@@ -722,20 +1006,24 @@ export default function App() {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
                               </svg>
                               <div className="flex-1 min-w-0">
-                                <span className="block text-xs font-semibold text-slate-100">Usuários e acessos</span>
-                                <p className="text-[10px] font-normal text-slate-400 truncate">Equipe, status e permissões</p>
+                                <span className={`block text-xs font-semibold ${isLight ? 'text-[#111827]' : 'text-slate-100'}`}>Usuários e acessos</span>
+                                <p className={`text-[10px] font-normal truncate ${isLight ? 'text-[#667085]' : 'text-slate-400'}`}>Equipe, status e permissões</p>
                               </div>
                             </button>
 
-                            <div className="h-px bg-slate-800 my-1.5" />
+                            <div className={`h-px my-1.5 ${isLight ? 'bg-[#E5E7EB]' : 'bg-slate-800'}`} />
                           </div>
                         )}
 
                         {/* Seção MINHA CONTA */}
                         <div>
-                          <div className="px-2 pt-1 pb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                          <div className={`px-2 pt-1 pb-1 text-[10px] font-bold uppercase tracking-wider ${
+                            isLight ? 'text-[#94A3B8]' : 'text-slate-400'
+                          }`}>
                             Minha conta
                           </div>
+
+                          <UserHubThemeToggle isAuditoriaActive={isAuditoriaActive} />
 
                           <button
                             type="button"
@@ -747,9 +1035,11 @@ export default function App() {
                               setConfirmUserPassword('');
                               setPasswordSetupOpen(true);
                             }}
-                            className="w-full px-2.5 py-2 text-left text-xs font-medium text-slate-200 hover:bg-slate-800 hover:text-white rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer"
+                            className={`w-full px-2.5 py-2 text-left text-xs font-medium rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer ${
+                              isLight ? 'text-[#111827] hover:bg-[#F1F3F5]' : 'text-slate-200 hover:bg-slate-800 hover:text-white'
+                            }`}
                           >
-                            <svg className="w-4 h-4 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4 text-[#FF6600] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
                             </svg>
                             <span>Alterar senha</span>
@@ -761,9 +1051,9 @@ export default function App() {
                               setUserHubOpen(false);
                               handleLogout();
                             }}
-                            className="w-full px-2.5 py-2 text-left text-xs font-medium text-rose-400 hover:bg-rose-500/10 hover:text-rose-300 rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer"
+                            className="w-full px-2.5 py-2 text-left text-xs font-medium text-rose-500 hover:bg-rose-50 hover:text-rose-600 rounded-xl flex items-center gap-2.5 transition-colors cursor-pointer"
                           >
-                            <svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4 text-rose-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                             </svg>
                             <span>Sair</span>
@@ -860,29 +1150,69 @@ export default function App() {
                 </div>
               )}
 
-              {/* Main Content Area */}
-              <main className="flex-1 min-w-0 bg-slate-950 flex flex-col">
-                {isUsersSettingsActive ? (
-                  <UsersManagementModule
-                    currentProfile={activeProfile}
-                    onBackToPipeline={() => navigate('/app/leads')}
-                  />
-                ) : isFollowUpsActive ? (
-                  <FollowUpsModule
-                    currentProfile={activeProfile}
-                    onOpenLead={(leadId) => {
-                      setTargetLeadIdForView(leadId);
-                      navigate('/app/leads');
+              {/* App Body: Auditoria has its own left sidebar (Clientes / Agentes); CRM runs with clean standard navigation */}
+              {isAuditoriaActive ? (
+                <div className="flex-1 flex min-h-0 relative">
+                  <MainSidebarNavigation
+                    currentSection={isAuditoriaAgentes ? 'agentes' : 'clientes'}
+                    onSelectSection={(sec) => {
+                      if (sec === 'agentes') {
+                        navigate('/app/auditoria/agentes');
+                      } else {
+                        navigate('/app/auditoria');
+                      }
+                    }}
+                    isCollapsed={sidebarCollapsed}
+                    onToggleCollapse={() => {
+                      setSidebarCollapsed((prev) => {
+                        const next = !prev;
+                        try {
+                          localStorage.setItem('triverus:sidebar-collapsed', String(next));
+                        } catch {}
+                        return next;
+                      });
                     }}
                   />
-                ) : (
-                  <LeadsModule
-                    currentProfile={activeProfile}
-                    initialSelectedLeadId={targetLeadIdForView}
-                    onClearInitialLead={() => setTargetLeadIdForView(null)}
-                  />
-                )}
-              </main>
+
+                  <div className="flex-1 min-w-0 flex flex-col bg-[#141418] overflow-y-auto">
+                    {isAuditoriaAgentes ? (
+                      <AgentBuilder />
+                    ) : (
+                      <AuditoriaModule
+                        currentProfile={activeProfile}
+                        currentPath={path}
+                        onNavigate={navigate}
+                        onBackToPipeline={() => navigate('/app/leads')}
+                      />
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 min-w-0 flex flex-col bg-[#141418] overflow-y-auto">
+                  <main className="flex-1 min-w-0 bg-[#141418] flex flex-col">
+                    {isUsersSettingsActive ? (
+                      <UsersManagementModule
+                        currentProfile={activeProfile}
+                        onBackToPipeline={() => navigate('/app/leads')}
+                      />
+                    ) : isFollowUpsActive ? (
+                      <FollowUpsModule
+                        currentProfile={activeProfile}
+                        onOpenLead={(leadId) => {
+                          setTargetLeadIdForView(leadId);
+                          navigate('/app/leads');
+                        }}
+                      />
+                    ) : (
+                      <LeadsModule
+                        currentProfile={activeProfile}
+                        initialSelectedLeadId={targetLeadIdForView}
+                        onClearInitialLead={() => setTargetLeadIdForView(null)}
+                      />
+                    )}
+                  </main>
+                </div>
+              )}
 
               {/* Condo AI Assistant Floating Bubble & Drawer */}
               <CondoFloatingButton
@@ -904,10 +1234,6 @@ export default function App() {
                 currentPath={path}
                 navigate={navigate}
               />
-            </div>
-          </CRMProvider>
-        </PermissionsProvider>
-      </CondoUIContextProvider>
-    </ThemeProvider>
+    </div>
   );
 }

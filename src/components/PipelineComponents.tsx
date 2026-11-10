@@ -78,6 +78,19 @@ export function PinIcon({ className = "w-4 h-4" }: { className?: string }) {
   );
 }
 
+export function ContactIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="4.25" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4.75 19.5c0-3.175 3.246-5.75 7.25-5.75s7.25 2.575 7.25 5.75" />
+    </svg>
+  );
+}
+
+export function PersonaIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return <ContactIcon className={className} />;
+}
+
 export const PRESET_ROLES = [
   'Síndico',
   'Subsíndico',
@@ -326,22 +339,26 @@ export function PipelineToolbar({
 export interface CardQuickActionsProps {
   lead: Lead;
   notesCount?: number;
-  waCount: number;
-  emCount: number;
+  contactsCount?: number;
+  waCount?: number;
+  emCount?: number;
   hasFolderLink?: boolean;
   onOpenTimeline?: () => void;
-  onOpenWhatsApp: () => void;
-  onOpenEmail: () => void;
+  onOpenContacts?: () => void;
+  onOpenWhatsApp?: () => void;
+  onOpenEmail?: () => void;
   onOpenFolder: () => void;
   onOpenNotes: () => void;
 }
 
 export function CardQuickActions({
   notesCount = 0,
-  waCount,
-  emCount,
+  contactsCount,
+  waCount = 0,
+  emCount = 0,
   hasFolderLink,
   onOpenTimeline,
+  onOpenContacts,
   onOpenWhatsApp,
   onOpenEmail,
   onOpenFolder,
@@ -351,11 +368,14 @@ export function CardQuickActions({
   const { canManageNotes } = useUserPermissions();
   const isLight = theme === 'light';
 
+  const totalContacts = contactsCount !== undefined ? contactsCount : (waCount + emCount);
+  const handleOpenContacts = onOpenContacts || onOpenWhatsApp || onOpenEmail || (() => {});
+
   return (
     <div className={`mt-2.5 pt-2 border-t flex items-center justify-between gap-1.5 ${isLight ? 'border-black/10' : 'border-white/15'}`}>
       {/* Ícones de ação alinhados à esquerda com destaque quando possuem dados */}
       <div className="flex items-center gap-1.5">
-        {/* 1. Notas / Histórico de Interações (Primeiro ícone antes do WhatsApp) */}
+        {/* 1. Notas / Histórico de Interações */}
         <button
           type="button"
           onClick={onOpenTimeline || onOpenNotes}
@@ -379,52 +399,27 @@ export function CardQuickActions({
           )}
         </button>
 
-        {/* 2. WhatsApp */}
+        {/* 2. Contatos (Acesso Unificado: WhatsApp & E-mail) */}
         <button
           type="button"
-          data-help-id="lead-card-whatsapp"
-          onClick={onOpenWhatsApp}
-          title={waCount > 0 ? `WhatsApp (${waCount} contato${waCount === 1 ? '' : 's'})` : 'WhatsApp (sem contato)'}
-          aria-label="WhatsApp"
+          data-help-id="lead-card-contacts"
+          onClick={handleOpenContacts}
+          title={totalContacts > 0 ? `Contatos (${totalContacts} contato${totalContacts === 1 ? '' : 's'})` : 'Contatos (sem contatos cadastrados)'}
+          aria-label="Contatos"
           className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1 ${
-            waCount > 0
+            totalContacts > 0
               ? isLight
-                ? 'text-emerald-800 bg-white/95 border-2 border-emerald-600 shadow-xs ring-1 ring-emerald-300 font-bold'
-                : 'text-emerald-300 bg-emerald-950/80 border border-emerald-500/70 hover:bg-emerald-900/80 shadow-xs'
+                ? 'text-slate-900 bg-white/95 border-2 border-slate-700 shadow-xs ring-1 ring-slate-300 font-bold'
+                : 'text-slate-100 bg-slate-800/90 border border-slate-600 hover:bg-slate-700/90 shadow-xs font-semibold'
               : isLight
               ? 'text-slate-700/60 hover:text-slate-950 bg-white/40 hover:bg-white/90 border border-black/10'
               : 'text-slate-400/60 hover:text-white bg-transparent border-transparent hover:bg-black/30'
           }`}
         >
-          <WhatsAppIcon className="w-3.5 h-3.5" />
-          {waCount > 0 && (
-            <span className={`text-[10px] font-bold leading-none ${isLight ? 'text-emerald-900' : 'text-emerald-200'}`}>
-              {waCount}
-            </span>
-          )}
-        </button>
-
-        {/* 3. E-mail */}
-        <button
-          type="button"
-          data-help-id="lead-card-email"
-          onClick={onOpenEmail}
-          title={emCount > 0 ? `E-mail (${emCount} contato${emCount === 1 ? '' : 's'})` : 'E-mail (sem e-mail)'}
-          aria-label="E-mail"
-          className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1 ${
-            emCount > 0
-              ? isLight
-                ? 'text-sky-800 bg-white/95 border-2 border-sky-600 shadow-xs ring-1 ring-sky-300 font-bold'
-                : 'text-sky-300 bg-sky-950/80 border border-sky-500/70 hover:bg-sky-900/80 shadow-xs'
-              : isLight
-              ? 'text-slate-700/60 hover:text-slate-950 bg-white/40 hover:bg-white/90 border border-black/10'
-              : 'text-slate-400/60 hover:text-white bg-transparent border-transparent hover:bg-black/30'
-          }`}
-        >
-          <EmailIcon className="w-3.5 h-3.5" />
-          {emCount > 0 && (
-            <span className={`text-[10px] font-bold leading-none ${isLight ? 'text-sky-900' : 'text-sky-200'}`}>
-              {emCount}
+          <ContactIcon className="w-3.5 h-3.5" />
+          {totalContacts > 0 && (
+            <span className={`text-[10px] font-bold leading-none ${isLight ? 'text-slate-950' : 'text-slate-100'}`}>
+              {totalContacts}
             </span>
           )}
         </button>
@@ -505,8 +500,9 @@ export interface LeadCardProps {
     time?: string | null;
     displayFull?: string;
   };
-  waCount: number;
-  emCount: number;
+  contactsCount?: number;
+  waCount?: number;
+  emCount?: number;
   notesCount?: number;
   hasFolderLink?: boolean;
   isMenuOpen: boolean;
@@ -531,8 +527,9 @@ export interface LeadCardProps {
   onOpenNotes: () => void;
   onOpenFollowUp?: () => void;
   onOpenFolder: () => void;
-  onOpenWhatsApp: () => void;
-  onOpenEmail: () => void;
+  onOpenContacts?: () => void;
+  onOpenWhatsApp?: () => void;
+  onOpenEmail?: () => void;
   onRequestDelete: () => void;
 }
 
@@ -541,8 +538,9 @@ export function LeadCard({
   stageName,
   responsibleName,
   followUpInfo,
-  waCount,
-  emCount,
+  contactsCount,
+  waCount = 0,
+  emCount = 0,
   notesCount = 0,
   hasFolderLink,
   isMenuOpen,
@@ -563,6 +561,7 @@ export function LeadCard({
   onOpenNotes,
   onOpenFollowUp,
   onOpenFolder,
+  onOpenContacts,
   onOpenWhatsApp,
   onOpenEmail,
   onRequestDelete,
@@ -838,10 +837,12 @@ export function LeadCard({
         <CardQuickActions
           lead={lead}
           notesCount={notesCount}
+          contactsCount={contactsCount ?? (waCount + emCount)}
           waCount={waCount}
           emCount={emCount}
           hasFolderLink={hasFolderLink}
           onOpenTimeline={onOpenTimeline}
+          onOpenContacts={onOpenContacts}
           onOpenWhatsApp={onOpenWhatsApp}
           onOpenEmail={onOpenEmail}
           onOpenFolder={onOpenFolder}
@@ -906,7 +907,7 @@ export function PipelineColumn({
             ? 'bg-orange-50/90 ring-2 ring-[#FF6600] border-[#FF6600] shadow-lg shadow-[#FF6600]/15 scale-[1.008]'
             : 'bg-[#FF6600]/10 ring-2 ring-[#FF6600] border-[#FF6600] shadow-lg shadow-[#FF6600]/25 scale-[1.008]'
           : isLight
-          ? 'bg-slate-100/90 border border-slate-200/80'
+          ? 'bg-[#E1E4E8] border border-[#DCE1E7]'
           : 'bg-slate-900/40 border border-slate-800/60'
       }`}
     >

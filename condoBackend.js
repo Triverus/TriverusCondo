@@ -3,7 +3,7 @@ import * as CRMReader from './crmReadModel.js';
 
 export const CONDO_MODEL_REQUESTED = 'gpt-4o-mini';
 
-export function buildSystemPrompt() {
+export function buildSystemPrompt(agent = null) {
   const now = new Date();
   const yyyy = now.getFullYear();
   const mm = String(now.getMonth() + 1).padStart(2, '0');
@@ -11,7 +11,11 @@ export function buildSystemPrompt() {
   const todayBR = `${dd}/${mm}/${yyyy}`;
   const todayISO = `${yyyy}-${mm}-${dd}`;
 
-  return `Você é Condo, a inteligência operacional e especialista de consulta do CRM da Triverus.
+  const agentName = agent?.name?.trim() || 'o assistente';
+  const agentRole = agent?.role?.trim() || 'especialista operacional e assistente da Triverus';
+  const customInstructions = agent?.prompt?.trim() ? `\nDIRETRIZES E PROMPT DO AGENTE:\n${agent.prompt}\n` : '';
+
+  return `Você é ${agentName}, ${agentRole}.${customInstructions}
 Data atual do sistema: ${todayBR} (${todayISO}, ano vigente: ${yyyy}).
 
 REGRAS CRÍTICAS DE COMPOSIÇÃO DE MENSAGEM:
@@ -1082,3 +1086,266 @@ export async function executeToolCall(
     return { result: { error: err?.message || 'Erro ao consultar CRM.' } };
   }
 }
+
+/**
+ * Motor local inteligente de atendimento do Condo.
+ * Executa consultas determinísticas no CRM quando o provedor externo de IA está indisponível ou com chave inválida.
+ * @param {{
+ *   messages?: any[];
+ *   client_context?: any;
+ *   snapshot?: any;
+ *   scopedSupabase?: any;
+ *   currentUserId?: string | null;
+ *   requestId?: string;
+ *   lastUserMessage?: string;
+ * }} params
+ */
+export async function processCondoLocalFallback(params) {
+  const {
+    messages = [],
+    client_context = {},
+    snapshot = null,
+    scopedSupabase,
+    currentUserId,
+    requestId,
+    lastUserMessage = '',
+  } = params || {};
+  const cleanMsg = (lastUserMessage || '').trim();
+  const lowerMsg = cleanMsg.toLowerCase();
+  const accumulatedRichResults = [];
+  let responseText = '';
+
+  // 1. Google Drive / Pasta
+  const isDriveQuery = /(drive|pasta|link.*pasta|pasta.*link|documento|pdf)/i.test(lowerMsg);
+  if (isDriveQuery) {
+    let detectedLeadName = '';
+    if (snapshot?.leads && Array.isArray(snapshot.leads)) {
+      for (const lead of snapshot.leads) {
+        if (lead.name && lowerMsg.includes(lead.name.toLowerCase())) {
+          detectedLeadName = lead.name;
+          break;
+        }
+      }
+    }
+    if (!detectedLeadName) {
+      const match = cleanMsg.match(/condom[ií]nio\s+([A-Za-z0-9\s\-]+)/i);
+      if (match && match[1]) {
+        detectedLeadName = match[1].trim();
+      }
+    }
+
+    const toolRes = await executeToolCall(
+      'get_folder_link',
+      { lead_name: detectedLeadName || cleanMsg },
+      scopedSupabase,
+      currentUserId,
+      requestId,
+      lastUserMessage,
+      client_context,
+      snapshot
+    );
+
+    if (toolRes?.richResults && toolRes.richResults.length > 0) {
+      accumulatedRichResults.push(...toolRes.richResults);
+      responseText = `Encontrei o link da pasta do Google Drive:`;
+    } else {
+      responseText = toolRes?.result?.message || '📁 Não encontrei um link de pasta cadastrado para este condomínio.';
+    }
+
+    const presentationMode = accumulatedRichResults.length > 0 ? 'result_only' : 'text_and_results';
+    return {
+      text: responseText,
+      presentationMode,
+      results: accumulatedRichResults,
+    };
+  }
+
+  // 2. Ajuda da Plataforma / Como fazer
+  const isHelpQuery = /(como|onde|tutorial|passo|ajuda|guia|manual|instru[cç][aã]o|posso|alterar temperatura|excluir|cadastrar contato|nova nota|vincular pasta)/i.test(lowerMsg);
+  if (isHelpQuery) {
+    const toolRes = await executeToolCall(
+      'search_platform_help',
+      { query: cleanMsg },
+      scopedSupabase,
+      currentUserId,
+      requestId,
+      lastUserMessage,
+      client_context,
+      snapshot
+    );
+
+    if (toolRes?.richResults && toolRes.richResults.length > 0) {
+      accumulatedRichResults.push(...toolRes.richResults);
+      responseText = `Aqui está o tutorial passo a passo:`;
+      return {
+        text: responseText,
+        presentationMode: 'result_only',
+        results: accumulatedRichResults,
+      };
+    }
+  }
+
+  // 3. Follow-ups e Agendamentos
+  const isFollowUpQuery = /(follow|follow-?up|agendamento|compromisso|reuni[aã]o|retorno|ligar|tarefa|vencid|hoje|amanh[aã]|pr[oó]xim)/i.test(lowerMsg);
+  if (isFollowUpQuery) {
+    let filter = 'all';
+    if (/vencid/i.test(lowerMsg)) filter = 'overdue';
+    else if (/hoje/i.test(lowerMsg)) filter = 'today';
+    else if (/amanh[aã]/i.test(lowerMsg)) filter = 'tomorrow';
+    else if (/pr[oó]xim/i.test(lowerMsg)) filter = 'upcoming';
+
+    const toolRes = await executeToolCall(
+      'get_followups',
+      { filter },
+      scopedSupabase,
+      currentUserId,
+      requestId,
+      lastUserMessage,
+      client_context,
+      snapshot
+    );
+
+    if (toolRes?.richResults && toolRes.richResults.length > 0) {
+      accumulatedRichResults.push(...toolRes.richResults);
+      const filterLabel =
+        filter === 'overdue'
+          ? 'vencidos'
+          : filter === 'today'
+          ? 'de hoje'
+          : filter === 'tomorrow'
+          ? 'de amanhã'
+          : 'próximos';
+      responseText = `Encontrei os seguintes follow-ups ${filterLabel}:`;
+    } else {
+      responseText = '📅 Não encontrei agendamentos ou follow-ups para o período solicitado.';
+    }
+
+    return {
+      text: responseText,
+      presentationMode: 'text_and_results',
+      results: accumulatedRichResults,
+    };
+  }
+
+  // 4. Contatos / Telefones / WhatsApp / E-mails
+  const isContactQuery = /(contato|telefone|whatsapp|whats|celular|email|e-mail|s[ií]ndico|zelador)/i.test(lowerMsg);
+  if (isContactQuery) {
+    const cleaned = cleanMsg.replace(/(contato|telefone|whatsapp|whats|celular|email|e-mail|de|do|da|qual|o|a)/gi, '').trim();
+    const toolRes = await executeToolCall(
+      'search_crm',
+      { query: cleaned, entity: 'contacts' },
+      scopedSupabase,
+      currentUserId,
+      requestId,
+      lastUserMessage,
+      client_context,
+      snapshot
+    );
+
+    if (toolRes?.richResults && toolRes.richResults.length > 0) {
+      accumulatedRichResults.push(...toolRes.richResults);
+      responseText = `Encontrei as seguintes informações de contato:`;
+    } else {
+      responseText = '📞 Não encontrei contatos correspondentes no CRM.';
+    }
+
+    return {
+      text: responseText,
+      presentationMode: 'text_and_results',
+      results: accumulatedRichResults,
+    };
+  }
+
+  // 5. Resumo Operacional / Métricas
+  const isSummaryQuery = /(resumo|total|quantos|m[eé]trica|estat[ií]stica|funil|pipeline|dashboard)/i.test(lowerMsg);
+  if (isSummaryQuery) {
+    const toolRes = await executeToolCall(
+      'get_crm_summary',
+      {},
+      scopedSupabase,
+      currentUserId,
+      requestId,
+      lastUserMessage,
+      client_context,
+      snapshot
+    );
+
+    const res = toolRes?.result;
+    if (res && res.total_condominios !== undefined) {
+      const stagesStr = Object.entries(res.por_estagio || {})
+        .map(([k, v]) => `• **${k}**: ${v}`)
+        .join('\n');
+      responseText = `📊 **Resumo Operacional do CRM**:\n\n• **Total de Condomínios**: ${res.total_condominios}\n\n**Distribuição por Estágio**:\n${stagesStr}`;
+    } else {
+      responseText = '📊 Não foi possível consolidar as métricas no momento.';
+    }
+
+    return {
+      text: responseText,
+      presentationMode: 'text_and_results',
+      results: accumulatedRichResults,
+    };
+  }
+
+  // 6. Condomínios por Temperatura ou Nome
+  const isCondoQuery = /(quente|morno|frio|cliente|condom[ií]nio|lead)/i.test(lowerMsg);
+  if (isCondoQuery) {
+    const toolRes = await executeToolCall(
+      'search_crm',
+      { query: cleanMsg, entity: 'leads' },
+      scopedSupabase,
+      currentUserId,
+      requestId,
+      lastUserMessage,
+      client_context,
+      snapshot
+    );
+
+    if (toolRes?.richResults && toolRes.richResults.length > 0) {
+      accumulatedRichResults.push(...toolRes.richResults);
+      responseText = `Encontrei os seguintes condomínios no CRM:`;
+    } else {
+      responseText = '🏢 Não localizei condomínios correspondentes aos critérios.';
+    }
+
+    return {
+      text: responseText,
+      presentationMode: 'text_and_results',
+      results: accumulatedRichResults,
+    };
+  }
+
+  // 7. Busca geral no CRM
+  if (cleanMsg.length > 2 && !/^(ol[aá]|oi|bom dia|boa tarde|boa noite|tudo bem)/i.test(lowerMsg)) {
+    const toolRes = await executeToolCall(
+      'search_crm',
+      { query: cleanMsg, entity: 'all' },
+      scopedSupabase,
+      currentUserId,
+      requestId,
+      lastUserMessage,
+      client_context,
+      snapshot
+    );
+
+    if (toolRes?.richResults && toolRes.richResults.length > 0) {
+      accumulatedRichResults.push(...toolRes.richResults);
+      responseText = `Encontrei os seguintes resultados no CRM:`;
+      return {
+        text: responseText,
+        presentationMode: 'text_and_results',
+        results: accumulatedRichResults,
+      };
+    }
+  }
+
+  // 8. Mensagem de boas-vindas / Apresentação do Condo
+  responseText = `Olá! Sou o **Condo**, assistente operacional do Triverus CRM.\n\nPosso ajudar você a consultar informações em tempo real:\n• 📁 **Links e pastas do Google Drive** de cada condomínio\n• 👤 **Contatos**, telefones e e-mails de síndicos e administradoras\n• 📅 **Follow-ups e agendamentos** (vencidos, hoje ou próximos)\n• 🏢 **Condomínios e temperaturas** (quente, morno, frio)\n• ❓ **Ajuda e tutoriais** sobre qualquer função do CRM\n\nComo posso te ajudar agora?`;
+
+  return {
+    text: responseText,
+    presentationMode: 'text_and_results',
+    results: accumulatedRichResults,
+  };
+}
+
