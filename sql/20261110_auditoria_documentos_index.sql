@@ -187,3 +187,7 @@ BEGIN
     AND indexing_version < p_new_version;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 10. Restrições de Segurança e Permissões de Execução em Stored Procedures
+REVOKE EXECUTE ON FUNCTION public.publish_auditoria_document_index_version(UUID, UUID, INTEGER) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.publish_auditoria_document_index_version(UUID, UUID, INTEGER) TO service_role, postgres;
