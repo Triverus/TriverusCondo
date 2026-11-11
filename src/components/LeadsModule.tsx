@@ -222,6 +222,7 @@ interface LeadDraftData {
   formUnitCount: string;
   formAddress: string;
   formCity: string;
+  formLeadSource?: string;
   formCurrentStageId: string;
   formResponsibleUserId: string;
 }
@@ -537,10 +538,13 @@ export default function LeadsModule({
     }
   }, []);
 
-  // Progressive auto-scroll during drag near boundaries (80px zone)
+  // Progressive auto-scroll and dynamic column detection during drag across full height & scrolling
   const handleBoardDragOver = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
+      try {
+        e.dataTransfer.dropEffect = 'move';
+      } catch {}
       if (!boardScrollRef.current) return;
       if (!draggedLeadRef.current && !draggedLeadId) {
         stopAutoScroll();
@@ -551,6 +555,20 @@ export default function LeadsModule({
       const rect = container.getBoundingClientRect();
       const mouseX = e.clientX;
       const zoneWidth = 80;
+
+      // Dynamic column resolution for full-height drag detection across vertical scrolling
+      const colElements = Array.from(container.querySelectorAll<HTMLElement>('[data-stage-id]'));
+      let hoveredColId: string | null = null;
+      for (const colEl of colElements) {
+        const colRect = colEl.getBoundingClientRect();
+        if (mouseX >= colRect.left && mouseX <= colRect.right) {
+          hoveredColId = colEl.getAttribute('data-stage-id');
+          break;
+        }
+      }
+      if (hoveredColId && hoveredColId !== dragOverCol) {
+        setDragOverCol(hoveredColId);
+      }
 
       const distFromLeft = mouseX - rect.left;
       const distFromRight = rect.right - mouseX;
@@ -578,7 +596,7 @@ export default function LeadsModule({
         stopAutoScroll();
       }
     },
-    [draggedLeadId, stopAutoScroll]
+    [draggedLeadId, dragOverCol, stopAutoScroll]
   );
 
   // Auto-dismiss status feedback notification toast after 2.5s
@@ -824,6 +842,7 @@ export default function LeadsModule({
   const [formUnitCount, setFormUnitCount] = useState('');
   const [formAddress, setFormAddress] = useState('');
   const [formCity, setFormCity] = useState('');
+  const [formLeadSource, setFormLeadSource] = useState('');
   const [formCurrentStageId, setFormCurrentStageId] = useState('stg_inicio');
   const [formLossReason, setFormLossReason] = useState('');
   const [formResponsibleUserId, setFormResponsibleUserId] = useState('');
@@ -876,6 +895,7 @@ export default function LeadsModule({
       setFormUnitCount(createDraft.formUnitCount || '');
       setFormAddress(createDraft.formAddress || '');
       setFormCity(createDraft.formCity || '');
+      setFormLeadSource(createDraft.formLeadSource || '');
       setFormCurrentStageId(createDraft.formCurrentStageId || '');
       setFormResponsibleUserId(createDraft.formResponsibleUserId || currentProfile.id);
       setQuizStep(createDraft.quizStep || 1);
@@ -901,6 +921,7 @@ export default function LeadsModule({
         formUnitCount,
         formAddress,
         formCity,
+        formLeadSource,
         formCurrentStageId,
         formResponsibleUserId,
       };
@@ -911,7 +932,8 @@ export default function LeadsModule({
         formContactEmail.trim() ||
         formContactPhone.trim() ||
         formAdministrator.trim() ||
-        formUnitCount.trim()
+        formUnitCount.trim() ||
+        formLeadSource.trim()
       ) {
         saveDraft(DRAFT_LEAD_CREATE_KEY, data);
       }
@@ -930,6 +952,7 @@ export default function LeadsModule({
         formUnitCount,
         formAddress,
         formCity,
+        formLeadSource,
         formCurrentStageId,
         formResponsibleUserId,
       };
@@ -951,6 +974,7 @@ export default function LeadsModule({
     formUnitCount,
     formAddress,
     formCity,
+    formLeadSource,
     formCurrentStageId,
     formResponsibleUserId,
   ]);
@@ -1284,6 +1308,29 @@ export default function LeadsModule({
     }
   };
 
+  // Full-board drop handler: dynamically resolves target column from horizontal coordinates
+  const handleBoardDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      stopAutoScroll();
+      if (!boardScrollRef.current) return;
+      const mouseX = e.clientX;
+      const colElements = Array.from(boardScrollRef.current.querySelectorAll<HTMLElement>('[data-stage-id]'));
+      for (const colEl of colElements) {
+        const colRect = colEl.getBoundingClientRect();
+        if (mouseX >= colRect.left && mouseX <= colRect.right) {
+          const stageId = colEl.getAttribute('data-stage-id');
+          if (stageId) {
+            handleDrop(e, stageId);
+            return;
+          }
+        }
+      }
+      setDragOverCol(null);
+    },
+    [handleDrop, stopAutoScroll]
+  );
+
   // Inline quick update handler for LeadCard shortcuts
   const handleQuickUpdateLead = async (
     leadId: string,
@@ -1511,6 +1558,7 @@ export default function LeadsModule({
       setFormUnitCount('');
       setFormAddress('');
       setFormCity('');
+      setFormLeadSource('');
       setFormCurrentStageId(stages.length > 0 ? stages[0].id : '');
       setFormResponsibleUserId(currentProfile.id);
       setQuizStep(1);
@@ -1578,6 +1626,7 @@ export default function LeadsModule({
       setFormUnitCount(editDraft.formUnitCount || '');
       setFormAddress(editDraft.formAddress || '');
       setFormCity(editDraft.formCity || '');
+      setFormLeadSource(editDraft.formLeadSource || '');
       setFormCurrentStageId(editDraft.formCurrentStageId || '');
       setFormResponsibleUserId(editDraft.formResponsibleUserId ?? (lead.responsible_user_id || ''));
       setQuizStep(editDraft.quizStep || 1);
@@ -1609,6 +1658,8 @@ export default function LeadsModule({
       setFormUnitCount(lead.unit_count != null ? String(lead.unit_count) : '');
       setFormAddress(lead.address || '');
       setFormCity(lead.city || '');
+      const rawLeadSource = lead.lead_source || '';
+      setFormLeadSource(rawLeadSource.startsWith('custom_type:') ? '' : rawLeadSource);
       const stageId = lead.current_stage_id || (stages.length > 0 ? stages[0].id : '');
       setFormCurrentStageId(stageId);
       setFormLossReason(lead.loss_reason || '');
@@ -1639,6 +1690,7 @@ export default function LeadsModule({
     setFormCustomContactRole('');
     setFormContactEmail('');
     setFormContactPhone('');
+    setFormLeadSource('');
   };
 
   const handleDiscardLeadDraft = () => {
@@ -1769,6 +1821,7 @@ export default function LeadsModule({
     setFormSaving(true);
 
     try {
+      const cleanLeadSource = formLeadSource.trim() || null;
       const leadPayload: any = {
         name: formName.trim(),
         cnpj: formCnpj.trim() || null,
@@ -1777,6 +1830,7 @@ export default function LeadsModule({
         unit_count: unitCountNum ?? 0,
         address: formAddress.trim() || null,
         city: formCity.trim() || null,
+        lead_source: cleanLeadSource,
         current_stage_id: dbStageId,
         responsible_user_id: validResponsibleId,
       };
@@ -1881,23 +1935,15 @@ export default function LeadsModule({
         throw new Error('Erro inesperado ao salvar condomínio.');
       }
 
-      // Persistir override local e metadado em lead_source quando o tipo de condomínio for personalizado ("Outro")
+      // Persistir override local de tipo e garantir lead_source sem interferência de strings legadas
       saveLeadCondominiumTypeOverride(savedLead.id, finalCondominiumType);
-      if (isCustomCondoType) {
-        try {
-          await supabase
-            .from('leads')
-            .update({ lead_source: `custom_type:${finalCondominiumType}` })
-            .eq('id', savedLead.id);
-        } catch {}
-      } else if (savedLead.lead_source && savedLead.lead_source.startsWith('custom_type:')) {
-        try {
-          await supabase
-            .from('leads')
-            .update({ lead_source: null })
-            .eq('id', savedLead.id);
-        } catch {}
-      }
+      try {
+        await supabase
+          .from('leads')
+          .update({ lead_source: cleanLeadSource })
+          .eq('id', savedLead.id);
+        savedLead.lead_source = cleanLeadSource;
+      } catch {}
 
       let contactRelationFailed = false;
       let servicesRelationFailed = false;
@@ -2571,6 +2617,7 @@ export default function LeadsModule({
           scrollRef={boardScrollRef}
           onScroll={handleBoardScroll}
           onDragOver={handleBoardDragOver}
+          onDrop={handleBoardDrop}
         >
           {pipelineColumns.map((col) => {
             const isColHiddenOnMobile = mobileActiveCol !== col.id;
@@ -3200,6 +3247,20 @@ export default function LeadsModule({
                     />
                   </div>
 
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="block text-xs font-medium text-slate-300">Origem do Lead</label>
+                      <span className="text-[11px] text-slate-500">Opcional</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={formLeadSource}
+                      onChange={(e) => setFormLeadSource(e.target.value)}
+                      placeholder="Ex: Indicação (BNI), Prospecção ativa, Evento, Site..."
+                      className="w-full px-4 py-2.5 bg-slate-950 border border-slate-800 focus:border-indigo-500 rounded-xl text-white text-xs focus:outline-none"
+                    />
+                  </div>
+
                   {/* Nova Seção: SERVIÇOS (Seleção Múltipla) */}
                   <div className="pt-3 border-t border-slate-800/80 space-y-2.5">
                     <div className="flex items-center justify-between">
@@ -3359,6 +3420,12 @@ export default function LeadsModule({
                     {formUnitCount && <div className="flex justify-between"><span>Unidades:</span><strong className="text-white">{formUnitCount}</strong></div>}
                     <div className="flex justify-between"><span>Cidade:</span><strong className="text-white">{formCity || '-'}</strong></div>
                     {formAdministrator && <div className="flex justify-between"><span>Administradora:</span><strong className="text-white">{formAdministrator}</strong></div>}
+                    {formLeadSource.trim() && (
+                      <div className="flex justify-between">
+                        <span>Origem do Lead:</span>
+                        <strong className="text-white">{formLeadSource.trim()}</strong>
+                      </div>
+                    )}
                     {formSelectedServiceIds.length > 0 && (
                       <div className="flex justify-between gap-2">
                         <span>Serviços:</span>
@@ -3497,6 +3564,12 @@ export default function LeadsModule({
                   <span className="text-slate-400 block mb-0.5">Responsável</span>
                   <span className="font-semibold text-white truncate block">{profileMap.get(selectedLead.responsible_user_id || '') || 'Não atribuído'}</span>
                 </div>
+                {selectedLead.lead_source && !selectedLead.lead_source.startsWith('custom_type:') && (
+                  <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
+                    <span className="text-slate-400 block mb-0.5">Origem do Lead</span>
+                    <span className="font-semibold text-white truncate block" title={selectedLead.lead_source}>{selectedLead.lead_source}</span>
+                  </div>
+                )}
                 {selectedLead.loss_reason && (
                   <div className="p-3 bg-rose-950/40 rounded-xl border border-rose-800/60 col-span-2 sm:col-span-1">
                     <span className="text-rose-300 block mb-0.5">Motivo da Perda</span>

@@ -251,6 +251,50 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// Endpoint seguro para acionamento pontual via Cron externo (Hostinger / VPS)
+// Executa estritamente um lote controlado de tarefas e NÃO inicia loops permanentes em memória.
+app.post('/api/internal/auditoria-worker-tick', async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET || process.env.WORKER_SECRET_KEY || loadedEnv.CRON_SECRET || loadedEnv.WORKER_SECRET_KEY;
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+  if (!cronSecret || token !== cronSecret) {
+    return res.status(401).json({
+      ok: false,
+      error: 'unauthorized',
+      message: 'Acesso negado: segredo de agendamento ausente ou inválido.',
+    });
+  }
+
+  const adminClient = getAdminSupabaseClient();
+  if (!adminClient) {
+    return res.status(503).json({
+      ok: false,
+      error: 'supabase_not_configured',
+      message: 'Supabase Admin não configurado para processar fila de indexação.',
+    });
+  }
+
+  try {
+    const { auditoriaWorker } = await import('./auditoriaWorkerService.ts');
+    const batchSize = Math.min(Math.max(Number(req.query.batchSize || req.body?.batchSize || 5), 1), 20);
+    const processed = await auditoriaWorker.processPendingBatch(adminClient, batchSize);
+
+    return res.json({
+      ok: true,
+      processedCount: processed,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    console.error('[AuditoriaWorker Endpoint Error]:', err?.message);
+    return res.status(500).json({
+      ok: false,
+      error: 'worker_execution_error',
+      message: err?.message || 'Erro ao processar lote de indexação.',
+    });
+  }
+});
+
 // Endpoint seguro para teste de conectividade do Supabase Admin (sem expor segredos)
 app.get('/api/google/oauth/diag-supabase', async (req, res) => {
   const supabaseUrl = process.env.VITE_SUPABASE_URL || loadedEnv.VITE_SUPABASE_URL;
@@ -2431,6 +2475,7 @@ function resolveCanonicalCategoryId(raw?: string | null): string | null {
   if (['extratos_bancarios', 'extratos', 'extrato_bancario', 'banco'].includes(norm)) return 'extratos_bancarios';
   if (['previsao_orcamentaria', 'orcamento', 'previsao_orcamento'].includes(norm)) return 'previsao_orcamentaria';
   if (['contratos_fornecedores', 'contratos', 'contrato_fornecedores'].includes(norm)) return 'contratos_fornecedores';
+  if (['inadimplencia', 'inadimplentes', 'inadimplente', 'cobranca'].includes(norm)) return 'inadimplencia';
   return null;
 }
 
@@ -2453,22 +2498,12 @@ app.get('/api/auditoria/all-summary', requireAuditoriaAccess('can_access_auditor
       const { data: docs } = await supabaseAdmin.from('auditoria_documentos').select('condo_id, category');
       (docs || []).forEach((d: any) => addCategory(d.condo_id, d.category));
     } catch (e) {}
-
-    try {
-      const { data: folders } = await supabaseAdmin.from('auditoria_fase_pastas').select('condo_id, category');
-      (folders || []).forEach((f: any) => addCategory(f.condo_id, f.category));
-    } catch (e) {}
   }
 
-  // Mesclar com contingência local
+  // Mesclar com documentos em contingência local
   try {
     const fallbackDocs = readFallbackDocuments();
     fallbackDocs.forEach((d) => addCategory(d.condo_id, d.category));
-  } catch (e) {}
-
-  try {
-    const fallbackFolders = readFallbackFolders();
-    fallbackFolders.forEach((f) => addCategory(f.condo_id, f.category));
   } catch (e) {}
 
   return res.json({

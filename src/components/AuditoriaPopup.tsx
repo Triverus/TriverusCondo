@@ -169,15 +169,18 @@ export default function AuditoriaPopup({
 
   const plusMenuRef = useRef<HTMLDivElement>(null);
 
-  // Status visual da etapa (Pendente, Com documento, Não verificada)
-  const getStageStatus = (stageId: string): 'pendente' | 'com_documento' | 'nao_verificada' => {
+  // Status visual da etapa (Pendente, Com documento, Pasta vinculada vazia, Não verificada)
+  const getStageStatus = (stageId: string): 'pendente' | 'com_documento' | 'vinculada_vazia' | 'nao_verificada' => {
     if (isLoadingDocuments && (!linkedDocuments || Object.keys(linkedDocuments).length === 0)) {
       return 'nao_verificada';
     }
     const docs = linkedDocuments[stageId] || [];
     const folder = folderLinks[stageId];
-    if (docs.length > 0 || folder) {
+    if (docs.length > 0) {
       return 'com_documento';
+    }
+    if (folder) {
+      return 'vinculada_vazia';
     }
     return 'pendente';
   };
@@ -191,10 +194,10 @@ export default function AuditoriaPopup({
       }`}
     >
       {/* ===================================================================
-          COLUNA ESQUERDA: SETE ETAPAS (Aprox. 40% da largura no desktop)
+          COLUNA ESQUERDA: ETAPAS CANÔNICAS (Aprox. 40% da largura no desktop)
           =================================================================== */}
       <div className="w-full md:w-[380px] lg:w-[420px] shrink-0 border-b md:border-b-0 md:border-r border-[#303034] bg-[#242428] flex flex-col overflow-hidden">
-        {/* Lista das 7 Etapas com linha vertical conectora e numeração circular */}
+        {/* Lista das Etapas com linha vertical conectora e numeração circular */}
         <div className="p-3.5 md:p-4.5 overflow-y-auto flex-1 flex flex-col justify-between relative">
           {/* Linha vertical conectando os números do primeiro ao último */}
           <div className="absolute left-[30px] md:left-[34px] top-7 bottom-7 w-0.5 bg-[#3f3f46] pointer-events-none z-0" />
@@ -246,14 +249,21 @@ export default function AuditoriaPopup({
                   {/* Indicador de status alinhado à direita */}
                   <div className="shrink-0 flex items-center pl-1">
                     {status === 'pendente' && (
-                      <div title="Pendente: nenhum documento associado">
+                      <div title="Pendente: nenhum documento ou pasta associada">
                         <svg className="w-4 h-4 md:w-5 md:h-5 text-amber-500/90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                         </svg>
                       </div>
                     )}
+                    {status === 'vinculada_vazia' && (
+                      <div title="Pasta vinculada (0 documentos sincronizados na pasta)">
+                        <svg className="w-4 h-4 md:w-5 md:h-5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                        </svg>
+                      </div>
+                    )}
                     {status === 'com_documento' && (
-                      <div title={`Com documento: ${docs.length} arquivo(s) associado(s)`}>
+                      <div title={`Com documento: ${docs.length} arquivo(s) sincronizado(s)`}>
                         <svg className="w-4 h-4 md:w-5 md:h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 13l4 4L19 7" />
                         </svg>

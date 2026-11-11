@@ -1,4 +1,5 @@
 import { indexDocument } from './auditoriaIndexService.ts';
+import { getDriveFileStream } from './googleDriveService.ts';
 
 export interface WorkerLoopOptions {
   intervalMs?: number;
@@ -84,33 +85,20 @@ export class AuditoriaIndexingWorker {
         continue;
       }
 
-      // Buscar buffer de PDF via auditoria_documentos / drive_file_id
+      // 3. Download do PDF diretamente da integração oficial do Google Drive
       try {
-        const { data: parentDoc } = await supabaseAdmin
-          .from('auditoria_documentos')
-          .select('pdf_buffer_base64, drive_file_id, drive_file_name, category, condo_id')
-          .eq('id', doc.document_id)
-          .maybeSingle();
-
         let pdfBuffer: Buffer | null = null;
-        if (parentDoc?.pdf_buffer_base64) {
-          pdfBuffer = Buffer.from(parentDoc.pdf_buffer_base64, 'base64');
+
+        if (!doc.drive_file_id) {
+          throw new Error(`ID do arquivo Google Drive não encontrado para o documento ${doc.document_id}.`);
         }
 
-        if (!pdfBuffer) {
-          // Registrar erro se não houver conteúdo
-          await supabaseAdmin
-            .from('auditoria_documentos_status')
-            .update({
-              indexing_status: 'erro_extracao',
-              retry_count: (doc.retry_count || 0) + 1,
-              last_error: 'Conteúdo do PDF não encontrado para indexação.',
-              locked_at: null,
-              locked_by: null,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('document_id', doc.document_id);
-          continue;
+        const driveRes = await getDriveFileStream(doc.drive_file_id);
+        const arrayBuf = await driveRes.arrayBuffer();
+        pdfBuffer = Buffer.from(arrayBuf);
+
+        if (!pdfBuffer || pdfBuffer.length === 0) {
+          throw new Error(`Arquivo PDF vazio retornado pelo Google Drive (${doc.drive_file_name}).`);
         }
 
         const res = await indexDocument({
@@ -120,6 +108,7 @@ export class AuditoriaIndexingWorker {
           driveFileName: doc.drive_file_name,
           category: doc.category,
           pdfBuffer,
+          workerId: this.workerId,
           supabaseAdmin,
         });
 

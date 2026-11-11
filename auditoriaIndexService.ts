@@ -313,6 +313,7 @@ export async function indexDocument(params: {
   driveFileName: string;
   category: string;
   pdfBuffer: Buffer;
+  workerId?: string;
   supabaseAdmin?: any;
 }): Promise<{
   ok: boolean;
@@ -324,7 +325,7 @@ export async function indexDocument(params: {
   version: number;
   message: string;
 }> {
-  const { condoId, documentId, driveFileId, driveFileName, category, pdfBuffer, supabaseAdmin } = params;
+  const { condoId, documentId, driveFileId, driveFileName, category, pdfBuffer, workerId = `worker_${process.pid}`, supabaseAdmin } = params;
   const nowStr = new Date().toISOString();
 
   // Se não houver cliente Supabase, executa em modo de teste isolado
@@ -374,7 +375,7 @@ export async function indexDocument(params: {
     };
   }
 
-  // 2. Leitura da versão atual e bloqueio de concorrência
+  // 2. Leitura da versão atual e reserva da trava pelo workerId
   let activeVersion = 0;
   let nextVersion = 1;
 
@@ -403,7 +404,7 @@ export async function indexDocument(params: {
       nextVersion = (currentStatus.indexing_version || activeVersion) + 1;
     }
 
-    // Sinaliza início de indexação da nova versão sem derrubar a versão ativa atual
+    // Sinaliza início de indexação da nova versão registrando workerId
     await supabaseAdmin.from('auditoria_documentos_status').upsert({
       document_id: documentId,
       condo_id: condoId,
@@ -414,7 +415,7 @@ export async function indexDocument(params: {
       indexing_version: nextVersion,
       active_version: activeVersion,
       locked_at: nowStr,
-      locked_by: `worker_${process.pid}`,
+      locked_by: workerId,
       updated_at: nowStr,
     });
   } catch (e: any) {
@@ -495,33 +496,19 @@ export async function indexDocument(params: {
       }
     }
 
-    // 5. Publicação Atômica: Atualiza active_version para a nova versão e libera trava
-    await supabaseAdmin.from('auditoria_documentos_status').upsert({
-      document_id: documentId,
-      condo_id: condoId,
-      drive_file_id: driveFileId,
-      drive_file_name: driveFileName,
-      category,
-      indexing_status: 'indexed',
-      indexing_version: nextVersion,
-      active_version: nextVersion, // Publica a versão integralmente concluída
-      total_pages: extraction.totalPages,
-      total_chunks: newChunks.length,
-      total_chars: extraction.totalChars,
-      last_error: null,
-      locked_at: null,
-      locked_by: null,
-      last_indexed_at: nowStr,
-      updated_at: nowStr,
+    // 5. Publicação Atômica Estrita via Stored Procedure Segura no Supabase
+    const { error: rpcErr } = await supabaseAdmin.rpc('publish_auditoria_document_index_version', {
+      p_document_id: documentId,
+      p_condo_id: condoId,
+      p_new_version: nextVersion,
+      p_expected_chunks: newChunks.length,
+      p_expected_pages: extraction.totalPages,
+      p_expected_chars: extraction.totalChars,
+      p_worker_id: workerId,
     });
 
-    // Limpa versões obsoletas anteriores
-    if (activeVersion > 0) {
-      await supabaseAdmin
-        .from('auditoria_documentos_index')
-        .delete()
-        .eq('document_id', documentId)
-        .lt('indexing_version', nextVersion);
+    if (rpcErr) {
+      throw new Error(`Falha na publicação atômica via RPC publish_auditoria_document_index_version: ${rpcErr.message}`);
     }
 
     return {

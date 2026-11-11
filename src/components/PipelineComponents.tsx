@@ -932,25 +932,24 @@ export function PipelineColumn({
   );
 }
 
-// ==========================================
-// 5. PipelineBoard (Container Horizontal Scrollável do Board)
-// ==========================================
 export interface PipelineBoardProps {
   children: React.ReactNode;
   scrollRef?: React.Ref<HTMLDivElement>;
   onScroll?: React.UIEventHandler<HTMLDivElement>;
   onDragOver?: React.DragEventHandler<HTMLDivElement>;
+  onDrop?: React.DragEventHandler<HTMLDivElement>;
 }
 
-export function PipelineBoard({ children, scrollRef, onScroll, onDragOver }: PipelineBoardProps) {
+export function PipelineBoard({ children, scrollRef, onScroll, onDragOver, onDrop }: PipelineBoardProps) {
   return (
     <div
       ref={scrollRef}
       onScroll={onScroll}
       onDragOver={onDragOver}
+      onDrop={onDrop}
       className="w-full pb-8 pt-1 overflow-x-auto scroll-smooth select-none"
     >
-      <div className="flex flex-row items-start gap-3 sm:gap-4 lg:gap-4.5 min-w-max pb-4">
+      <div className="flex flex-row items-stretch gap-3 sm:gap-4 lg:gap-4.5 min-w-max pb-4">
         {children}
       </div>
     </div>

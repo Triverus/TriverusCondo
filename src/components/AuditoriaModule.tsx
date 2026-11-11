@@ -73,6 +73,12 @@ export const CANONICAL_CATEGORIES: CanonicalCategory[] = [
     description: 'Fornecedores vigentes no período auditado',
     aliases: ['contratos_fornecedores', 'contratos', 'contrato_fornecedores'],
   },
+  {
+    id: 'inadimplencia',
+    name: 'Inadimplência',
+    description: 'Relatórios e controle de inadimplência',
+    aliases: ['inadimplencia', 'inadimplentes', 'inadimplente', 'cobranca'],
+  },
 ];
 
 export function resolveCanonicalCategory(rawCategory?: string | null): CanonicalCategory | null {
@@ -238,7 +244,7 @@ export function normalizeString(str: string): string {
 }
 
 export function getAuditoriaProgress(completedCount: number) {
-  const total = 7;
+  const total = CANONICAL_CATEGORIES.length;
   const clamped = Math.max(0, Math.min(total, completedCount));
   const percentage = Math.round((clamped / total) * 100);
 
@@ -398,8 +404,7 @@ export default function AuditoriaModule({
       const completed: string[] = [];
       CANONICAL_CATEGORIES.forEach((cat) => {
         const docs = linkedDocuments[cat.id] || [];
-        const folder = folderLinks[cat.id];
-        if (docs.length > 0 || folder) {
+        if (docs.length > 0) {
           completed.push(cat.id);
         }
       });
@@ -560,8 +565,8 @@ export default function AuditoriaModule({
     return filtered.sort((a, b) => {
       const aCount = (condoSummaryMap[a.id] || []).length;
       const bCount = (condoSummaryMap[b.id] || []).length;
-      const aPct = Math.round((aCount / 7) * 100);
-      const bPct = Math.round((bCount / 7) * 100);
+      const aPct = Math.round((aCount / CANONICAL_CATEGORIES.length) * 100);
+      const bPct = Math.round((bCount / CANONICAL_CATEGORIES.length) * 100);
 
       if (sortOption === 'progresso_desc') {
         if (bPct !== aPct) return bPct - aPct;
@@ -1195,15 +1200,18 @@ export default function AuditoriaModule({
     onNavigate('/app/auditoria');
   };
 
-  // Determinar o status da etapa documental (pendente, com_documento ou nao_verificada)
-  const getStageStatus = (stageId: string): 'pendente' | 'com_documento' | 'nao_verificada' => {
+  // Determinar o status da etapa documental (pendente, com_documento, vinculada_vazia ou nao_verificada)
+  const getStageStatus = (stageId: string): 'pendente' | 'com_documento' | 'vinculada_vazia' | 'nao_verificada' => {
     if (isLoadingDocuments && (!linkedDocuments || Object.keys(linkedDocuments).length === 0)) {
       return 'nao_verificada';
     }
     const docs = linkedDocuments[stageId] || [];
     const folder = folderLinks[stageId];
-    if (docs.length > 0 || folder) {
+    if (docs.length > 0) {
       return 'com_documento';
+    }
+    if (folder) {
+      return 'vinculada_vazia';
     }
     return 'pendente';
   };
@@ -3538,7 +3546,7 @@ export default function AuditoriaModule({
                         </div>
                       </div>
                       <span className="text-xs text-slate-400 font-medium mt-1">
-                        {completedCount} de 7
+                        {completedCount} de {CANONICAL_CATEGORIES.length}
                       </span>
                     </div>
 

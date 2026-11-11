@@ -271,6 +271,50 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// Endpoint seguro para acionamento pontual via Cron externo (Hostinger / VPS)
+// Executa estritamente um lote controlado de tarefas e NÃO inicia loops permanentes em memória.
+app.post('/api/internal/auditoria-worker-tick', async (req, res) => {
+  const cronSecret = process.env.CRON_SECRET || process.env.WORKER_SECRET_KEY || loadedEnv.CRON_SECRET || loadedEnv.WORKER_SECRET_KEY;
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+
+  if (!cronSecret || token !== cronSecret) {
+    return res.status(401).json({
+      ok: false,
+      error: 'unauthorized',
+      message: 'Acesso negado: segredo de agendamento ausente ou inválido.',
+    });
+  }
+
+  const adminClient = getAdminSupabaseClient();
+  if (!adminClient) {
+    return res.status(503).json({
+      ok: false,
+      error: 'supabase_not_configured',
+      message: 'Supabase Admin não configurado para processar fila de indexação.',
+    });
+  }
+
+  try {
+    const { auditoriaWorker } = await import('./auditoriaWorkerService.js');
+    const batchSize = Math.min(Math.max(Number(req.query.batchSize || req.body?.batchSize || 5), 1), 20);
+    const processed = await auditoriaWorker.processPendingBatch(adminClient, batchSize);
+
+    return res.json({
+      ok: true,
+      processedCount: processed,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[AuditoriaWorker Endpoint Error]:', err && err.message ? err.message : err);
+    return res.status(500).json({
+      ok: false,
+      error: 'worker_execution_error',
+      message: (err && err.message) || 'Erro ao processar lote de indexação.',
+    });
+  }
+});
+
 // Endpoint seguro para teste de conectividade do Supabase Admin (sem expor segredos)
 app.get('/api/google/oauth/diag-supabase', async (req, res) => {
   const supabaseUrl = process.env.VITE_SUPABASE_URL || SUPABASE_URL;
@@ -2376,6 +2420,53 @@ app.get('/api/auditoria/condo/:condoId/documents', requireAuditoriaAccess('can_a
     source: 'fallback_local',
     persisted_definitively: false,
     warning: 'Banco Supabase indisponível ou tabela ainda não migrada. Exibindo acervo em contingência local temporária.',
+  });
+});
+
+function resolveCanonicalCategoryId(raw) {
+  if (!raw) return null;
+  const norm = String(raw).trim().toLowerCase();
+  if (norm === 'convencao' || norm === 'convencao_condominio') return 'convencao';
+  if (norm === 'regimento_interno' || norm === 'regimento') return 'regimento_interno';
+  if (norm === 'atas_assembleias' || norm === 'ata_assembleia' || norm === 'atas') return 'atas_assembleias';
+  if (['pastas_prestacao_contas', 'prestacao_contas', 'balancetes', 'pastas_contas', 'pasta_prestacao_contas'].includes(norm)) return 'pastas_prestacao_contas';
+  if (['extratos_bancarios', 'extratos', 'extrato_bancario', 'banco'].includes(norm)) return 'extratos_bancarios';
+  if (['previsao_orcamentaria', 'orcamento', 'previsao_orcamento'].includes(norm)) return 'previsao_orcamentaria';
+  if (['contratos_fornecedores', 'contratos', 'contrato_fornecedores'].includes(norm)) return 'contratos_fornecedores';
+  if (['inadimplencia', 'inadimplentes', 'inadimplente', 'cobranca'].includes(norm)) return 'inadimplencia';
+  return null;
+}
+
+// 2.1. Resumo em lote das etapas concluídas de auditoria para todos os condomínios
+app.get('/api/auditoria/all-summary', requireAuditoriaAccess('can_access_auditoria'), async (req, res) => {
+  const supabaseAdmin = getAdminSupabaseClient();
+  const summary = {};
+
+  const addCategory = (condoId, categoryRaw) => {
+    const canonicalId = resolveCanonicalCategoryId(categoryRaw);
+    if (!canonicalId || !condoId) return;
+    if (!summary[condoId]) summary[condoId] = [];
+    if (!summary[condoId].includes(canonicalId)) {
+      summary[condoId].push(canonicalId);
+    }
+  };
+
+  if (supabaseAdmin) {
+    try {
+      const { data: docs } = await supabaseAdmin.from('auditoria_documentos').select('condo_id, category');
+      (docs || []).forEach((d) => addCategory(d.condo_id, d.category));
+    } catch (e) {}
+  }
+
+  // Mesclar com documentos em contingência local
+  try {
+    const fallbackDocs = readFallbackDocuments();
+    fallbackDocs.forEach((d) => addCategory(d.condo_id, d.category));
+  } catch (e) {}
+
+  return res.json({
+    ok: true,
+    summary,
   });
 });
 

@@ -162,32 +162,127 @@ SELECT
 FROM public.auditoria_documentos
 ON CONFLICT (document_id) DO NOTHING;
 
--- 9. Função Stored Procedure para Publicação Atômica de Versão do Índice Documental
+-- 9. Função Stored Procedure de Publicação Atômica e Validação Estrita do Índice
+-- Segue as melhores práticas oficiais do Supabase para SECURITY DEFINER: SET search_path = ''
 CREATE OR REPLACE FUNCTION public.publish_auditoria_document_index_version(
   p_document_id UUID,
   p_condo_id UUID,
-  p_new_version INTEGER
+  p_new_version INTEGER,
+  p_expected_chunks INTEGER,
+  p_expected_pages INTEGER,
+  p_expected_chars INTEGER,
+  p_worker_id TEXT
 )
-RETURNS VOID AS $$
+RETURNS VOID
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+DECLARE
+  v_status_rec RECORD;
+  v_actual_chunks INTEGER;
+  v_distinct_pages INTEGER;
+  v_max_chunk_idx INTEGER;
 BEGIN
-  -- Atualizar a versão ativa na tabela de status
+  -- 1. Bloqueio Transacional Exclusivo na Linha do Documento (FOR UPDATE)
+  SELECT * INTO v_status_rec
+  FROM public.auditoria_documentos_status
+  WHERE document_id = p_document_id AND condo_id = p_condo_id
+  FOR UPDATE;
+
+  -- 2. Validação de Existência do Registro de Controle
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: Registro de status do documento % não localizado para o condomínio %.', p_document_id, p_condo_id;
+  END IF;
+
+  -- 3. Validação de Propriedade da Trava pelo Worker Solicitante
+  IF v_status_rec.locked_by IS NULL OR v_status_rec.locked_by <> p_worker_id THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: A trava da tarefa pertence a outro worker ou não foi adquirida. Solicitante: %, Gravado: %.', p_worker_id, COALESCE(v_status_rec.locked_by, 'NULL');
+  END IF;
+
+  -- 4. Validação da Validade Temporal da Trava (Trava expira em 10 minutos)
+  IF v_status_rec.locked_at IS NULL OR v_status_rec.locked_at < (pg_catalog.now() - INTERVAL '10 minutes') THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: A trava do worker expirou temporalmente (limite de 10 minutos). Bloqueado em: %, Atual: %.', v_status_rec.locked_at, pg_catalog.now();
+  END IF;
+
+  -- 5. Validação do Estado do Documento
+  IF v_status_rec.indexing_status <> 'indexing' THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: O documento não está em estado de indexação ativo. Estado atual: %.', v_status_rec.indexing_status;
+  END IF;
+
+  -- 6. Validação da Versão Reservada para Processamento
+  -- A nova versão deve ser exatamente igual à versão de trabalho registrada em indexing_version
+  IF p_new_version <> v_status_rec.indexing_version THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: A versão a publicar (%) diverge da versão reservada para processamento (%).', p_new_version, v_status_rec.indexing_version;
+  END IF;
+
+  -- A nova versão deve ser estritamente superior à versão ativa atualmente publicada
+  IF p_new_version <= v_status_rec.active_version THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: Versão solicitada (%) deve ser maior que a versão ativa atual (%).', p_new_version, v_status_rec.active_version;
+  END IF;
+
+  -- 7. Validação das Quantidades Mínimas (> 0)
+  IF p_expected_chunks <= 0 THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: Quantidade esperada de trechos deve ser maior que zero. Recebido: %.', p_expected_chunks;
+  END IF;
+  IF p_expected_pages <= 0 THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: Quantidade esperada de páginas deve ser maior que zero. Recebido: %.', p_expected_pages;
+  END IF;
+
+  -- 8. Validação e Auditoria da Integridade dos Dados Efetivamente Persistidos no Banco
+  -- Não confiar apenas no que o worker declara: inspecionar o banco diretamente
+  SELECT 
+    COUNT(*),
+    COUNT(DISTINCT page_number),
+    MAX(chunk_index)
+  INTO 
+    v_actual_chunks,
+    v_distinct_pages,
+    v_max_chunk_idx
+  FROM public.auditoria_documentos_index
+  WHERE document_id = p_document_id
+    AND condo_id = p_condo_id
+    AND indexing_version = p_new_version;
+
+  -- Comparação estrita de contagem total de trechos
+  IF v_actual_chunks <> p_expected_chunks THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: Divergência na contagem de trechos. Esperados: %, Encontrados no banco: %.', p_expected_chunks, v_actual_chunks;
+  END IF;
+
+  -- Validação de que todas as páginas esperadas possuem trechos indexados
+  IF v_distinct_pages < p_expected_pages THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: Páginas incompletas no índice. Esperadas: %, Páginas com trechos no banco: %.', p_expected_pages, v_distinct_pages;
+  END IF;
+
+  -- Validação de integridade do índice de chunks
+  IF v_max_chunk_idx IS NULL OR v_max_chunk_idx < 0 THEN
+    RAISE EXCEPTION 'PUBLICATION_ERROR: Falha estrutural nos índices dos trechos indexados.';
+  END IF;
+
+  -- 9. Atualização Atômica e Promoção da Versão Ativa
   UPDATE public.auditoria_documentos_status
   SET active_version = p_new_version,
+      indexing_version = p_new_version,
       indexing_status = 'indexed',
-      last_indexed_at = now(),
+      total_pages = p_expected_pages,
+      total_chunks = p_expected_chunks,
+      total_chars = p_expected_chars,
+      last_error = NULL,
       locked_at = NULL,
       locked_by = NULL,
-      updated_at = now()
+      last_indexed_at = pg_catalog.now(),
+      updated_at = pg_catalog.now()
   WHERE document_id = p_document_id AND condo_id = p_condo_id;
 
-  -- Remover versões antigas substituídas para evitar acúmulo no banco
+  -- 10. Descarte Seguro dos Trechos da Versão Antiga Substituída
   DELETE FROM public.auditoria_documentos_index
   WHERE document_id = p_document_id
     AND condo_id = p_condo_id
     AND indexing_version < p_new_version;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- 10. Restrições de Segurança e Permissões de Execução em Stored Procedures
-REVOKE EXECUTE ON FUNCTION public.publish_auditoria_document_index_version(UUID, UUID, INTEGER) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.publish_auditoria_document_index_version(UUID, UUID, INTEGER) TO service_role, postgres;
+END;
+$$;
+
+-- 10. Restrições de Segurança e Permissões Exclusivas Aplicadas Atomicamente
+REVOKE ALL ON FUNCTION public.publish_auditoria_document_index_version(UUID, UUID, INTEGER, INTEGER, INTEGER, INTEGER, TEXT) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.publish_auditoria_document_index_version(UUID, UUID, INTEGER, INTEGER, INTEGER, INTEGER, TEXT) TO service_role, postgres;
