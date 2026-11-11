@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { CircleCheck, CircleX } from 'lucide-react';
 import type { Lead, PipelineStage } from '../lib/crmStore.tsx';
 import type { UserProfile } from '../App.tsx';
@@ -867,6 +868,7 @@ export interface PipelineColumnProps {
   onDragLeave: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   children: React.ReactNode;
+  className?: string;
 }
 
 export function PipelineColumn({
@@ -880,6 +882,7 @@ export function PipelineColumn({
   onDragLeave,
   onDrop,
   children,
+  className = '',
 }: PipelineColumnProps) {
   const { theme } = useTheme();
   const isLight = theme === 'light';
@@ -899,10 +902,8 @@ export function PipelineColumn({
       }}
       onDragLeave={onDragLeave}
       onDrop={onDrop}
-      className={`w-[290px] sm:w-[305px] shrink-0 flex flex-col transition-all duration-300 rounded-2xl p-2.5 min-h-[calc(100vh-220px)] h-full ${
-        isDropTarget
-          ? isLight ? 'bg-orange-100/70 ring-2 ring-[#FF6600]' : 'bg-[#FF6600]/15 ring-2 ring-[#FF6600]/40'
-          : isHighlighted
+      className={`w-[290px] sm:w-[305px] shrink-0 flex flex-col transition-all duration-200 rounded-2xl relative min-h-[calc(100vh-220px)] self-stretch h-full ${className} ${
+        isHighlighted
           ? isLight
             ? 'bg-orange-50/90 ring-2 ring-[#FF6600] border-[#FF6600] shadow-lg shadow-[#FF6600]/15 scale-[1.008]'
             : 'bg-[#FF6600]/10 ring-2 ring-[#FF6600] border-[#FF6600] shadow-lg shadow-[#FF6600]/25 scale-[1.008]'
@@ -911,22 +912,24 @@ export function PipelineColumn({
           : 'bg-slate-900/40 border border-slate-800/60'
       }`}
     >
-      {/* Column Header: ● INÍCIO  4 */}
-      <div className="flex items-center justify-between px-2 pb-2.5 mb-2.5 pointer-events-none select-none border-b border-black/5 dark:border-white/5">
-        <div className="flex items-center gap-2">
-          <span className={`w-2.5 h-2.5 rounded-full shadow-xs ${dotClass}`} />
-          <h2 className={`font-bold text-xs uppercase tracking-wider ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
-            {label}
-          </h2>
+      <div className="p-2.5 flex flex-col flex-1 h-full min-h-full">
+        {/* Column Header: ● INÍCIO  4 */}
+        <div className="flex items-center justify-between px-2 pb-2.5 mb-2.5 pointer-events-none select-none border-b border-black/5 dark:border-white/5 shrink-0">
+          <div className="flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full shadow-xs ${dotClass}`} />
+            <h2 className={`font-bold text-xs uppercase tracking-wider ${isLight ? 'text-slate-800' : 'text-slate-200'}`}>
+              {label}
+            </h2>
+          </div>
+          <span className={`text-xs font-bold tabular-nums px-2 py-0.5 rounded-full ${isLight ? 'bg-slate-200 text-slate-700' : 'bg-slate-800 text-slate-300'}`}>
+            {leadCount}
+          </span>
         </div>
-        <span className={`text-xs font-bold tabular-nums px-2 py-0.5 rounded-full ${isLight ? 'bg-slate-200 text-slate-700' : 'bg-slate-800 text-slate-300'}`}>
-          {leadCount}
-        </span>
-      </div>
 
-      {/* Cards stack */}
-      <div className="space-y-3 flex-1 flex flex-col pb-6">
-        {children}
+        {/* Cards stack */}
+        <div className="space-y-3 flex-1 flex flex-col pb-6 min-h-[120px]">
+          {children}
+        </div>
       </div>
     </div>
   );
@@ -947,12 +950,136 @@ export function PipelineBoard({ children, scrollRef, onScroll, onDragOver, onDro
       onScroll={onScroll}
       onDragOver={onDragOver}
       onDrop={onDrop}
-      className="w-full pb-8 pt-1 overflow-x-auto scroll-smooth select-none"
+      className="w-full pb-8 pt-1 overflow-x-auto scroll-smooth select-none min-h-[calc(100vh-200px)] flex flex-col relative"
     >
-      <div className="flex flex-row items-stretch gap-3 sm:gap-4 lg:gap-4.5 min-w-max pb-4">
+      <div className="flex flex-row items-stretch gap-3 sm:gap-4 lg:gap-4.5 min-w-max pb-4 flex-1 min-h-full">
         {children}
       </div>
     </div>
+  );
+}
+
+// ==========================================
+// 5. Stage Color Config Helper
+// ==========================================
+function getStageColorConfig(stageId?: string | null, stageName?: string | null) {
+  const idStr = String(stageId || '').toLowerCase();
+  const nameStr = String(stageName || '').toLowerCase();
+
+  if (idStr === 'stg_reuniao' || nameStr.includes('reuni')) {
+    return { border: '#3B82F6', text: 'text-[#3B82F6]', bgDot: 'bg-[#3B82F6]' }; // Blue
+  }
+  if (idStr === 'stg_proposta' || nameStr.includes('proposta')) {
+    return { border: '#8B5CF6', text: 'text-[#8B5CF6]', bgDot: 'bg-[#8B5CF6]' }; // Purple
+  }
+  if (idStr === 'stg_negociacao' || nameStr.includes('negocia')) {
+    return { border: '#F59E0B', text: 'text-[#F59E0B]', bgDot: 'bg-[#F59E0B]' }; // Amber
+  }
+  if (idStr === 'stg_contrato' || nameStr.includes('contrato')) {
+    return { border: '#FF6600', text: 'text-[#FF6600]', bgDot: 'bg-[#FF6600]' }; // Orange
+  }
+  if (idStr === 'stg_cliente' || nameStr.includes('cliente')) {
+    return { border: '#16A34A', text: 'text-[#16A34A]', bgDot: 'bg-[#16A34A]' }; // Green
+  }
+  if (idStr === 'stg_perdido' || nameStr.includes('perdid')) {
+    return { border: '#DC2626', text: 'text-[#DC2626]', bgDot: 'bg-[#DC2626]' }; // Red
+  }
+  return { border: '#64748B', text: 'text-[#64748B]', bgDot: 'bg-[#64748B]' }; // Slate
+}
+
+// ==========================================
+// 6. PipelineDropIndicator (Viewport Fixed Portal Overlay)
+// ==========================================
+export interface PipelineDropIndicatorProps {
+  boardRef: React.RefObject<HTMLDivElement | null>;
+  activeStageId: string | null;
+  activeStageName?: string;
+  mousePos?: { x: number; y: number } | null;
+  isLight?: boolean;
+}
+
+export function PipelineDropIndicator({
+  boardRef,
+  activeStageId,
+  activeStageName,
+  mousePos,
+  isLight = false,
+}: PipelineDropIndicatorProps) {
+  if (!activeStageId || !boardRef.current) return null;
+
+  const boardEl = boardRef.current;
+  const colEl = boardEl.querySelector<HTMLElement>(`[data-stage-id="${activeStageId}"]`);
+  if (!colEl) return null;
+
+  const boardRect = boardEl.getBoundingClientRect();
+  const colRect = colEl.getBoundingClientRect();
+
+  const viewportHeight = typeof window !== 'undefined' ? window.innerHeight : 1000;
+  const viewportWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
+
+  // Calculate visible vertical region of board in viewport
+  const top = Math.max(0, boardRect.top);
+  const bottom = Math.min(viewportHeight, boardRect.bottom);
+  const height = Math.max(120, bottom - top);
+
+  // Horizontal position comes directly from the column's viewport X bounding box
+  const left = colRect.left;
+  const width = colRect.width;
+
+  if (width <= 0 || height <= 0) return null;
+
+  const color = getStageColorConfig(activeStageId, activeStageName);
+
+  // Floating badge position attached near the dragged card cursor position
+  const badgeX = mousePos
+    ? Math.min(Math.max(12, mousePos.x + 16), viewportWidth - 230)
+    : left + width / 2 - 80;
+  const badgeY = mousePos
+    ? Math.max(top + 8, Math.min(bottom - 45, mousePos.y - 42))
+    : top + 16;
+
+  return createPortal(
+    <>
+      {/* Discrete 1.5px dashed border Drop Lane across full visible board height (NO background fill) */}
+      <div
+        style={{
+          position: 'fixed',
+          left: `${left}px`,
+          top: `${top}px`,
+          width: `${width}px`,
+          height: `${height}px`,
+          border: `1.5px dashed ${color.border}`,
+          borderRadius: '16px',
+          pointerEvents: 'none',
+          zIndex: 99999,
+          opacity: 0.85,
+        }}
+        className="transition-all duration-75 select-none"
+      />
+
+      {/* Floating Badge attached to dragged card cursor */}
+      <div
+        style={{
+          position: 'fixed',
+          left: `${badgeX}px`,
+          top: `${badgeY}px`,
+          borderColor: color.border,
+          pointerEvents: 'none',
+          zIndex: 100000,
+        }}
+        className={`px-3 py-1 rounded-xl text-xs font-semibold shadow-md flex items-center gap-2 border select-none transition-all duration-75 ${
+          isLight
+            ? 'bg-white/95 text-slate-900 shadow-slate-300/50'
+            : 'bg-slate-900/95 text-slate-100 shadow-black/50'
+        }`}
+      >
+        <span className={`w-2 h-2 rounded-full ${color.bgDot} shrink-0 animate-pulse`} />
+        <span className="truncate max-w-[210px] text-xs">
+          Soltar em: <strong style={{ color: color.border }} className="font-bold">{activeStageName || 'Esta Etapa'}</strong>
+        </span>
+      </div>
+    </>,
+    document.body
   );
 }
 

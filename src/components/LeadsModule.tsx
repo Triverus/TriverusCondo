@@ -24,6 +24,7 @@ import {
   PipelineToolbar,
   PipelineBoard,
   PipelineColumn,
+  PipelineDropIndicator,
   LeadCard,
 } from './PipelineComponents.tsx';
 import { SkeletonPipelineColumn } from './ui/Skeleton.tsx';
@@ -47,6 +48,7 @@ import NotesTimelineModal from './NotesTimelineModal.tsx';
 import { UnifiedContactsModal } from './UnifiedContactsModal.tsx';
 import { celebrateClientConversion } from '../lib/celebration.ts';
 import { useUserPermissions } from '../lib/permissionsContext.tsx';
+import { useTheme } from '../lib/themeContext.tsx';
 import {
   syncInteractionCalendar,
   syncGoogleCalendarInteraction,
@@ -345,6 +347,9 @@ export default function LeadsModule({
   currentModule = 'pipeline',
   onSelectModule,
 }: LeadsModuleProps) {
+  const { theme } = useTheme();
+  const isLight = theme === 'light';
+
   const {
     leads,
     stages,
@@ -394,9 +399,11 @@ export default function LeadsModule({
   const [draggedLeadId, setDraggedLeadId] = useState<string | null>(null);
   const draggedLeadRef = useRef<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
 
   const boardScrollRef = useRef<HTMLDivElement>(null);
   const autoScrollRafRef = useRef<number | null>(null);
+  const isProcessingDropRef = useRef<boolean>(false);
   const isProgrammaticScrollRef = useRef<boolean>(false);
   const programmaticScrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -538,6 +545,45 @@ export default function LeadsModule({
     }
   }, []);
 
+  // Helper to resolve stage ID from horizontal cursor position across full height
+  const resolveStageFromX = useCallback((mouseX: number): string | null => {
+    if (!boardScrollRef.current) return null;
+    const colEls = Array.from(boardScrollRef.current.querySelectorAll<HTMLElement>('[data-stage-id]'));
+    if (colEls.length === 0) return null;
+
+    const columnsWithRects = colEls
+      .map((el) => ({
+        id: el.getAttribute('data-stage-id')!,
+        rect: el.getBoundingClientRect(),
+      }))
+      .filter((c) => Boolean(c.id))
+      .sort((a, b) => a.rect.left - b.rect.left);
+
+    if (columnsWithRects.length === 0) return null;
+
+    const firstLeft = columnsWithRects[0].rect.left;
+    const lastRight = columnsWithRects[columnsWithRects.length - 1].rect.right;
+
+    if (mouseX < firstLeft - 40 || mouseX > lastRight + 40) {
+      return null;
+    }
+
+    for (let i = 0; i < columnsWithRects.length; i++) {
+      const cur = columnsWithRects[i];
+      const prev = columnsWithRects[i - 1];
+      const next = columnsWithRects[i + 1];
+
+      const minX = prev ? (prev.rect.right + cur.rect.left) / 2 : cur.rect.left - 40;
+      const maxX = next ? (cur.rect.right + next.rect.left) / 2 : cur.rect.right + 40;
+
+      if (mouseX >= minX && mouseX <= maxX) {
+        return cur.id;
+      }
+    }
+
+    return null;
+  }, []);
+
   // Progressive auto-scroll and dynamic column detection during drag across full height & scrolling
   const handleBoardDragOver = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -548,7 +594,12 @@ export default function LeadsModule({
       if (!boardScrollRef.current) return;
       if (!draggedLeadRef.current && !draggedLeadId) {
         stopAutoScroll();
+        setDragPos(null);
         return;
+      }
+
+      if (e.clientX && e.clientY) {
+        setDragPos({ x: e.clientX, y: e.clientY });
       }
 
       const container = boardScrollRef.current;
@@ -557,16 +608,8 @@ export default function LeadsModule({
       const zoneWidth = 80;
 
       // Dynamic column resolution for full-height drag detection across vertical scrolling
-      const colElements = Array.from(container.querySelectorAll<HTMLElement>('[data-stage-id]'));
-      let hoveredColId: string | null = null;
-      for (const colEl of colElements) {
-        const colRect = colEl.getBoundingClientRect();
-        if (mouseX >= colRect.left && mouseX <= colRect.right) {
-          hoveredColId = colEl.getAttribute('data-stage-id');
-          break;
-        }
-      }
-      if (hoveredColId && hoveredColId !== dragOverCol) {
+      const hoveredColId = resolveStageFromX(mouseX);
+      if (hoveredColId !== dragOverCol) {
         setDragOverCol(hoveredColId);
       }
 
@@ -1121,13 +1164,18 @@ export default function LeadsModule({
     } catch {}
     draggedLeadRef.current = leadId;
     setDraggedLeadId(leadId);
+    if (e.clientX && e.clientY) {
+      setDragPos({ x: e.clientX, y: e.clientY });
+    }
   };
 
   const handleDragEnd = () => {
     stopAutoScroll();
+    isProcessingDropRef.current = false;
     draggedLeadRef.current = null;
     setDraggedLeadId(null);
     setDragOverCol(null);
+    setDragPos(null);
   };
 
   const handleDragOver = (e: React.DragEvent, colId: string) => {
@@ -1135,8 +1183,12 @@ export default function LeadsModule({
     try {
       e.dataTransfer.dropEffect = 'move';
     } catch {}
-    if (dragOverCol !== colId) {
-      setDragOverCol(colId);
+    if (e.clientX && e.clientY) {
+      setDragPos({ x: e.clientX, y: e.clientY });
+    }
+    const resolvedColId = resolveStageFromX(e.clientX) || colId;
+    if (dragOverCol !== resolvedColId) {
+      setDragOverCol(resolvedColId);
     }
   };
 
@@ -1150,48 +1202,54 @@ export default function LeadsModule({
     specificLeadId?: string
   ) => {
     e.preventDefault();
+    if (isProcessingDropRef.current) return;
+    isProcessingDropRef.current = true;
+
     stopAutoScroll();
+    const actualTargetStageId = (e.clientX ? resolveStageFromX(e.clientX) : null) || targetStageId || dragOverCol;
     setDragOverCol(null);
-    if (!canChangeStage) return;
-    let leadId = specificLeadId;
-    if (!leadId) {
-      try {
-        leadId = e.dataTransfer.getData('text/plain');
-      } catch {}
-    }
-    if (!leadId) {
-      leadId = draggedLeadRef.current || draggedLeadId || '';
-    }
-    draggedLeadRef.current = null;
-    setDraggedLeadId(null);
-    if (!leadId) return;
-
-    const lead = leads.find((l) => l.id === leadId);
-    if (!lead) return;
-    if (lead.current_stage_id === targetStageId) return;
-
-    const targetStage = stages.find((s) => s.id === targetStageId);
-    const isTargetLost = targetStage?.is_lost || targetStageId === 'stg_perdido' || targetStage?.name?.toLowerCase().includes('perdid');
-
-    if (isTargetLost) {
-      setLostReasonModal({
-        open: true,
-        leadId,
-        targetStageId,
-        reason: lead.loss_reason || '',
-        error: null,
-      });
-      return;
-    }
-
-    const wasLost = Boolean(lead.loss_reason) || lead.current_stage_id === 'stg_perdido';
-    const newLossReason = wasLost ? null : lead.loss_reason;
+    setDragPos(null);
 
     try {
+      if (!canChangeStage) return;
+      let leadId = specificLeadId;
+      if (!leadId) {
+        try {
+          leadId = e.dataTransfer.getData('text/plain');
+        } catch {}
+      }
+      if (!leadId) {
+        leadId = draggedLeadRef.current || draggedLeadId || '';
+      }
+      draggedLeadRef.current = null;
+      setDraggedLeadId(null);
+      if (!leadId || !actualTargetStageId) return;
+
+      const lead = leads.find((l) => l.id === leadId);
+      if (!lead) return;
+      if (lead.current_stage_id === actualTargetStageId) return;
+
+      const targetStage = stages.find((s) => s.id === actualTargetStageId);
+      const isTargetLost = targetStage?.is_lost || actualTargetStageId === 'stg_perdido' || targetStage?.name?.toLowerCase().includes('perdid');
+
+      if (isTargetLost) {
+        setLostReasonModal({
+          open: true,
+          leadId,
+          targetStageId: actualTargetStageId,
+          reason: lead.loss_reason || '',
+          error: null,
+        });
+        return;
+      }
+
+      const wasLost = Boolean(lead.loss_reason) || lead.current_stage_id === 'stg_perdido';
+      const newLossReason = wasLost ? null : lead.loss_reason;
+
       const { data: updatedData, error: stageErr } = await supabase
         .from('leads')
         .update({
-          current_stage_id: targetStageId,
+          current_stage_id: actualTargetStageId,
           loss_reason: newLossReason,
         })
         .eq('id', leadId)
@@ -1202,14 +1260,14 @@ export default function LeadsModule({
 
       const updatedLead: Lead = updatedData || {
         ...lead,
-        current_stage_id: targetStageId,
+        current_stage_id: actualTargetStageId,
         loss_reason: newLossReason,
       };
 
-      saveLeadStageOverride(leadId, targetStageId, newLossReason);
+      saveLeadStageOverride(leadId, actualTargetStageId, newLossReason);
       upsertLeadLocally(updatedLead);
 
-      const isTargetClient = targetStage?.is_won || targetStageId === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
+      const isTargetClient = targetStage?.is_won || actualTargetStageId === 'stg_cliente' || targetStage?.name?.toLowerCase().includes('cliente');
       const prevStageObj = stages.find((s) => s.id === lead.current_stage_id);
       const wasClient = prevStageObj?.is_won || lead.current_stage_id === 'stg_cliente' || prevStageObj?.name?.toLowerCase().includes('cliente');
 
@@ -1220,8 +1278,13 @@ export default function LeadsModule({
       setStatusFeedback({ type: 'success', message: `Condomínio movido para ${targetStage?.name || 'novo estágio'}!` });
     } catch (err: any) {
       console.error('Erro ao persistir mudança de estágio:', err);
-      upsertLeadLocally(lead);
+      if (specificLeadId || draggedLeadId) {
+        const lead = leads.find((l) => l.id === (specificLeadId || draggedLeadId));
+        if (lead) upsertLeadLocally(lead);
+      }
       setStatusFeedback({ type: 'error', message: 'Erro ao persistir mudança de estágio no banco de dados.' });
+    } finally {
+      isProcessingDropRef.current = false;
     }
   };
 
@@ -1313,23 +1376,55 @@ export default function LeadsModule({
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       stopAutoScroll();
-      if (!boardScrollRef.current) return;
-      const mouseX = e.clientX;
-      const colElements = Array.from(boardScrollRef.current.querySelectorAll<HTMLElement>('[data-stage-id]'));
-      for (const colEl of colElements) {
-        const colRect = colEl.getBoundingClientRect();
-        if (mouseX >= colRect.left && mouseX <= colRect.right) {
-          const stageId = colEl.getAttribute('data-stage-id');
-          if (stageId) {
-            handleDrop(e, stageId);
-            return;
-          }
-        }
+      const targetStageId = resolveStageFromX(e.clientX) || dragOverCol;
+      if (targetStageId) {
+        handleDrop(e, targetStageId);
+      } else {
+        setDragOverCol(null);
+        setDragPos(null);
       }
-      setDragOverCol(null);
     },
-    [handleDrop, stopAutoScroll]
+    [resolveStageFromX, dragOverCol, handleDrop, stopAutoScroll]
   );
+
+  // Capture-phase global dragover & drop window listeners while drag is active
+  useEffect(() => {
+    if (!draggedLeadId) return;
+
+    const onGlobalDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) {
+        e.dataTransfer.dropEffect = 'move';
+      }
+      if (e.clientX && e.clientY) {
+        setDragPos({ x: e.clientX, y: e.clientY });
+      }
+      const targetStageId = resolveStageFromX(e.clientX);
+      if (targetStageId !== dragOverCol) {
+        setDragOverCol(targetStageId);
+      }
+    };
+
+    const onGlobalDrop = (e: DragEvent) => {
+      e.preventDefault();
+      stopAutoScroll();
+      const targetStageId = resolveStageFromX(e.clientX) || dragOverCol;
+      if (targetStageId) {
+        handleDrop(e as unknown as React.DragEvent, targetStageId);
+      } else {
+        setDragOverCol(null);
+        setDragPos(null);
+      }
+    };
+
+    window.addEventListener('dragover', onGlobalDragOver, { capture: true });
+    window.addEventListener('drop', onGlobalDrop, { capture: true });
+
+    return () => {
+      window.removeEventListener('dragover', onGlobalDragOver, { capture: true });
+      window.removeEventListener('drop', onGlobalDrop, { capture: true });
+    };
+  }, [draggedLeadId, dragOverCol, resolveStageFromX, handleDrop, stopAutoScroll]);
 
   // Inline quick update handler for LeadCard shortcuts
   const handleQuickUpdateLead = async (
@@ -2624,96 +2719,102 @@ export default function LeadsModule({
             const isDropTarget = dragOverCol === col.id;
 
             return (
-              <div
+              <PipelineColumn
                 key={col.id}
-                className={`h-full flex flex-col ${isColHiddenOnMobile ? 'hidden md:flex' : 'flex'}`}
+                id={col.id}
+                label={col.label}
+                leadCount={col.leads.length}
+                dotClass={col.dotClass}
+                isDropTarget={isDropTarget}
+                isHighlighted={highlightedStageId === col.id}
+                onDragOver={(e) => handleDragOver(e, col.id)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, col.id)}
+                className={isColHiddenOnMobile ? 'hidden md:flex' : 'flex'}
               >
-                <PipelineColumn
-                  id={col.id}
-                  label={col.label}
-                  leadCount={col.leads.length}
-                  dotClass={col.dotClass}
-                  isDropTarget={isDropTarget}
-                  isHighlighted={highlightedStageId === col.id}
-                  onDragOver={(e) => handleDragOver(e, col.id)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, col.id)}
-                >
-                  {col.leads.length === 0 ? (
-                    <div className="py-6 px-3 text-center text-xs text-slate-500 rounded-lg select-none">
-                      Arraste um condomínio para cá
-                    </div>
-                  ) : (
-                    col.leads.map((lead) => {
-                      const stageName = lead.current_stage_id
-                        ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
-                        : 'Estágio inicial';
-                      const responsibleName = lead.responsible_user_id
-                        ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
-                        : 'Não atribuído';
-                      const leadInteractions = getInteractionsForLead(lead.id);
-                      const leadContacts = getContactsForLead(lead.id);
-                      const waContactsCount = leadContacts.filter((c) => c.phone).length;
-                      const emContactsCount = leadContacts.filter((c) => c.email).length;
-                      const contactsCount = leadContacts.length;
-                      const notesCount = leadInteractions.length;
-                      const activeInteraction = getActiveFollowUpInteraction(leadInteractions);
-                      const activeFollowUpDate = activeInteraction?.next_follow_up_at || activeInteraction?.next_follow_up_date || null;
-                      const followUpInfo = getFollowUpDisplay(
-                        activeFollowUpDate,
-                        activeInteraction?.id,
-                        lead.id
-                      );
+                {col.leads.length === 0 ? (
+                  <div className="py-6 px-3 text-center text-xs text-slate-500 rounded-lg select-none">
+                    Arraste um condomínio para cá
+                  </div>
+                ) : (
+                  col.leads.map((lead) => {
+                    const stageName = lead.current_stage_id
+                      ? stageMap.get(lead.current_stage_id) || 'Estágio inicial'
+                      : 'Estágio inicial';
+                    const responsibleName = lead.responsible_user_id
+                      ? profileMap.get(lead.responsible_user_id) || 'Não atribuído'
+                      : 'Não atribuído';
+                    const leadInteractions = getInteractionsForLead(lead.id);
+                    const leadContacts = getContactsForLead(lead.id);
+                    const waContactsCount = leadContacts.filter((c) => c.phone).length;
+                    const emContactsCount = leadContacts.filter((c) => c.email).length;
+                    const contactsCount = leadContacts.length;
+                    const notesCount = leadInteractions.length;
+                    const activeInteraction = getActiveFollowUpInteraction(leadInteractions);
+                    const activeFollowUpDate = activeInteraction?.next_follow_up_at || activeInteraction?.next_follow_up_date || null;
+                    const followUpInfo = getFollowUpDisplay(
+                      activeFollowUpDate,
+                      activeInteraction?.id,
+                      lead.id
+                    );
 
-                      return (
-                        <LeadCard
-                          key={lead.id}
-                          lead={lead}
-                          stageName={stageName}
-                          responsibleName={responsibleName}
-                          followUpInfo={followUpInfo}
-                          contactsCount={contactsCount}
-                          waCount={waContactsCount}
-                          emCount={emContactsCount}
-                          notesCount={notesCount}
-                          hasFolderLink={Boolean(getLeadFolderLink(lead.id))}
-                          viewConfig={viewConfig}
-                          stages={stages}
-                          profiles={profiles}
-                          onQuickUpdate={handleQuickUpdateLead}
-                          isMenuOpen={activeMenuLeadId === lead.id}
-                          isDragging={draggedLeadId === lead.id}
-                          onToggleMenu={() => setActiveMenuLeadId(activeMenuLeadId === lead.id ? null : lead.id)}
-                          onCloseMenu={() => setActiveMenuLeadId(null)}
-                          onDragStart={(e) => handleDragStart(e, lead.id)}
-                          onDragEnd={handleDragEnd}
-                          onDropOnCard={(e) => handleDropOnCard(e, lead.id, col.id)}
-                          onOpenView={() => handleOpenView(lead)}
-                          onOpenEdit={() => handleOpenEdit(lead)}
-                          onOpenTimeline={() => setTimelineLead(lead)}
-                          onOpenNotes={() => handleOpenNotesPopover(lead, { initialStep: 1 })}
-                          onOpenFollowUp={() => {
-                            if (activeInteraction?.id) {
-                              handleOpenEditNotesPopover(lead, activeInteraction.id, 'followup');
-                            } else {
-                              handleOpenNotesPopover(lead, { initialStep: 'followup' });
-                            }
-                          }}
-                          onOpenFolder={() => handleOpenFolderPopover(lead)}
-                          onOpenContacts={() => handleOpenContactsModal(lead)}
-                          onOpenWhatsApp={() => handleOpenContactsModal(lead)}
-                          onOpenEmail={() => handleOpenContactsModal(lead)}
-                          onRequestDelete={() => handleRequestDeleteLead(lead)}
-                        />
-                      );
-                    })
-                  )}
-                </PipelineColumn>
-              </div>
+                    return (
+                      <LeadCard
+                        key={lead.id}
+                        lead={lead}
+                        stageName={stageName}
+                        responsibleName={responsibleName}
+                        followUpInfo={followUpInfo}
+                        contactsCount={contactsCount}
+                        waCount={waContactsCount}
+                        emCount={emContactsCount}
+                        notesCount={notesCount}
+                        hasFolderLink={Boolean(getLeadFolderLink(lead.id))}
+                        viewConfig={viewConfig}
+                        stages={stages}
+                        profiles={profiles}
+                        onQuickUpdate={handleQuickUpdateLead}
+                        isMenuOpen={activeMenuLeadId === lead.id}
+                        isDragging={draggedLeadId === lead.id}
+                        onToggleMenu={() => setActiveMenuLeadId(activeMenuLeadId === lead.id ? null : lead.id)}
+                        onCloseMenu={() => setActiveMenuLeadId(null)}
+                        onDragStart={(e) => handleDragStart(e, lead.id)}
+                        onDragEnd={handleDragEnd}
+                        onDropOnCard={(e) => handleDropOnCard(e, lead.id, col.id)}
+                        onOpenView={() => handleOpenView(lead)}
+                        onOpenEdit={() => handleOpenEdit(lead)}
+                        onOpenTimeline={() => setTimelineLead(lead)}
+                        onOpenNotes={() => handleOpenNotesPopover(lead, { initialStep: 1 })}
+                        onOpenFollowUp={() => {
+                          if (activeInteraction?.id) {
+                            handleOpenEditNotesPopover(lead, activeInteraction.id, 'followup');
+                          } else {
+                            handleOpenNotesPopover(lead, { initialStep: 'followup' });
+                          }
+                        }}
+                        onOpenFolder={() => handleOpenFolderPopover(lead)}
+                        onOpenContacts={() => handleOpenContactsModal(lead)}
+                        onOpenWhatsApp={() => handleOpenContactsModal(lead)}
+                        onOpenEmail={() => handleOpenContactsModal(lead)}
+                        onRequestDelete={() => handleRequestDeleteLead(lead)}
+                      />
+                    );
+                  })
+                )}
+              </PipelineColumn>
             );
           })}
         </PipelineBoard>
       )}
+
+      {/* VIEWPORT FIXED DROP OVERLAY & FLOATING BADGE (React Portal) */}
+      <PipelineDropIndicator
+        boardRef={boardScrollRef}
+        activeStageId={draggedLeadId ? dragOverCol : null}
+        activeStageName={dragOverCol ? stageMap.get(dragOverCol) : undefined}
+        mousePos={dragPos}
+        isLight={isLight}
+      />
 
       {/* UNIFIED CONTACTS MODAL (WhatsApp & E-mail em janela única) */}
       <UnifiedContactsModal
